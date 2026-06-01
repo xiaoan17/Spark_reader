@@ -1,0 +1,25 @@
+packages:
+  - .
+  - agent-host
+
+allowBuilds:
+  esbuild: true
+  msgpackr-extract: false
+  opencode-ai: true
+minimumReleaseAgeExclude:
+  - pdfjs-dist@6.0.227
+  - '@opencode-ai/plugin@1.15.13'
+  - '@opencode-ai/sdk@1.15.13'
+  - opencode-ai@1.15.13
+  - opencode-darwin-arm64@1.15.13
+  - opencode-darwin-x64-baseline@1.15.13
+  - opencode-darwin-x64@1.15.13
+  - opencode-linux-arm64-musl@1.15.13
+  - opencode-linux-arm64@1.15.13
+  - opencode-linux-x64-baseline-musl@1.15.13
+  - opencode-linux-x64-baseline@1.15.13
+  - opencode-linux-x64-musl@1.15.13
+  - opencode-linux-x64@1.15.13
+  - opencode-windows-arm64@1.15.13
+  - opencode-windows-x64-baseline@1.15.13
+  - opencode-windows-x64@1.15.13

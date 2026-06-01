@@ -1,0 +1,55 @@
+# 环境变量(真实密钥,绝不提交)
+.env
+.env.*
+!.env.example
+.env.local
+.env.*.local
+*.pem
+*.key
+*.p12
+*.pfx
+
+# 依赖
+node_modules/
+target/
+dist/
+.DS_Store
+releases/
+
+# Tauri
+src-tauri/target/
+
+# Python sidecar
+__pycache__/
+*.pyc
+.venv/
+
+# 本地数据/索引/缓存(可能包含书籍内容、解析结果、向量索引或保存的 API key)
+*.db
+*.sqlite
+*.sqlite3
+data/
+cache/
+**/llm-settings.json
+agent-host/.state/
+agent-host/dist/
+
+# 本地测试书籍/版权材料
+0_book/
+*.pdf
+*.epub
+*.mobi
+
+# 第三方参考项目副本(含各自的嵌套 .git,非本产品代码)
+1_reference/
+
+# Storybook
+storybook-static/
+
+# 测试/覆盖率/日志
+coverage/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*

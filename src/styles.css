@@ -1,0 +1,103 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 42 32% 96%;
+    --foreground: 220 18% 12%;
+    --card: 40 33% 98%;
+    --card-foreground: 220 18% 12%;
+    --muted: 36 18% 89%;
+    --muted-foreground: 218 9% 42%;
+    --accent: 170 18% 88%;
+    --accent-foreground: 178 26% 16%;
+    --primary: 178 42% 28%;
+    --primary-foreground: 0 0% 100%;
+    --border: 36 16% 82%;
+    --input: 36 16% 82%;
+    --ring: 178 42% 28%;
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    --background: 220 16% 10%;
+    --foreground: 42 18% 91%;
+    --card: 220 14% 13%;
+    --card-foreground: 42 18% 91%;
+    --muted: 220 12% 20%;
+    --muted-foreground: 42 9% 64%;
+    --accent: 178 18% 19%;
+    --accent-foreground: 42 18% 91%;
+    --primary: 174 42% 42%;
+    --primary-foreground: 220 18% 10%;
+    --border: 220 10% 26%;
+    --input: 220 10% 26%;
+    --ring: 174 42% 42%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html,
+  body,
+  #root {
+    min-height: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: theme("fontFamily.ui");
+  }
+}
+
+@layer components {
+  .textLayer {
+    color-scheme: only light;
+    position: absolute;
+    inset: 0;
+    overflow: clip;
+    opacity: 1;
+    line-height: 1;
+    letter-spacing: normal;
+    word-spacing: normal;
+    text-align: initial;
+    text-size-adjust: none;
+    transform-origin: 0 0;
+    caret-color: CanvasText;
+    z-index: 1;
+  }
+
+  .textLayer :is(span, br) {
+    color: transparent;
+    position: absolute;
+    white-space: pre;
+    cursor: text;
+    transform-origin: 0% 0%;
+    user-select: text;
+  }
+
+  .textLayer > :not(.markedContent),
+  .textLayer .markedContent span:not(.markedContent) {
+    z-index: 1;
+    --font-height: 0;
+    font-size: calc(var(--text-scale-factor, 1) * var(--font-height));
+    --scale-x: 1;
+    --rotate: 0deg;
+    transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv, 1));
+  }
+
+  .textLayer .markedContent {
+    display: contents;
+  }
+
+  .textLayer .endOfContent {
+    display: block;
+    position: absolute;
+    inset: 100% 0 0;
+    z-index: 0;
+    cursor: default;
+    user-select: none;
+  }
+}

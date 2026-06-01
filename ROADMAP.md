@@ -1,0 +1,145 @@
+# 框选精读 · 可执行路线图(ROADMAP)
+
+> 配套文档:`PLANNING.md`(产品+技术架构)、`UI-UX.md`(设计语言+前端工程约定)、`AGENTS.md`(多 agent 协作规则)。
+> 方法论吸收自 Lody 作者的 AI 前端重构经验(见 `UI-UX.md` §0)。
+
+---
+
+## 当前实现状态(2026-06-01)
+
+代码已经从规划阶段进入可运行产品原型:
+
+- ✅ Tauri v2 + React/TS/Vite + Tailwind/shadcn + Storybook 已建成。
+- ✅ PDF 导入后会转换为 TXT/Markdown/chunks；浏览器预览走 IndexedDB，桌面端走 MinerU + SQLite + 本地资产文件。
+- ✅ MinerU 客户端、批量 `page_ranges`、zip 安全解压、`layout.json/middle.json` 切块、结构化进度事件已有后端实现和测试；长 PDF 分批会向前端回传第几批/总批数/页码范围；`angle` 非 0 的块会标记为近似坐标，真实云端 E2E 仍需用当前 token 再验收。
+- ✅ SQLite FTS5 文本索引已可用；embedding 只走外部 OpenAI-compatible provider，已预置 SiliconFlow `Qwen/Qwen3-Embedding-4B`/2560 维，已用本地假 provider 验证写入向量、向量召回、provider/model/dim 不匹配时禁止混用；provider 请求有超时，失败后保留 FTS 并跳过向量增强。
+- ✅ LLM 多 provider 后端抽象已落地，DeepSeek/OpenAI 走 OpenAI-compatible，Anthropic 独立翻译 tool_use/tool_result；默认模型为 `deepseek-v4-flash`。
+- ✅ agentic RAG 后端循环已有:选中段落钉死焦点、`search_book/get_chunk/get_neighbors/list_structure` 工具、2–4 轮检索、统一 `[chunk_id]` 引用后处理。
+- ✅ 阅读器 UI 已有导入、转换稿视图、PDF 校对视图、搜索、chunk 点击解读、追问、引用跳转、高亮保存/删除/文本优先打开、解读历史、模型/embedding 设置页；右侧解读卡片会明确提示浏览器预览/桌面端后端能力差异。
+- ✅ 产品自检入口已接入设置页和打包后端 CLI:`focused-reading --product-self-check` 会用临时转换稿/临时 SQLite 验收 TXT/MD/chunks、FTS 搜索、离线解读引用、追问继承锚点、高亮和历史持久化；自检不消耗 MinerU/LLM/embedding provider 配额，入口有前端交互测试和稳定 `data-testid` 便于窗口级 E2E。
+- ✅ 当前验证:新增 `pnpm health` / `pnpm health:bundle` 一键健康检查；Rust lib、前端测试、`pnpm build`、`pnpm secret-scan` 均通过；`pnpm health:bundle` 可生成 debug `.app` 包，并直接调用包内 `Contents/MacOS/focused-reading --product-self-check` 验证打包资源和核心读书链路。
+
+还不能宣称“全部完成”的缺口:
+
+- ❗真实 Tauri 窗口手工/自动 E2E 还要跑:导入真实 PDF → 转 TXT/MD → 搜索/索引 → 框选/点击 chunk → 深度解读/追问 → 引用跳转 → 保存/重开恢复。后端级闭环和设置页产品自检已有，仍需窗口级真实 PDF 验收。
+- ❗MinerU 云端当前 token 的真实 E2E、旋转页/CropBox 的 MinerU 坐标回投仍未重新验收。
+- ❗500+ 页大 PDF 真实样本性能/内存压测、签名/公证/DMG 分发和设备矩阵未完成；长书分批进度 UI 已有，但仍需真实长 PDF 验收。当前 `.app` 可打包，DMG 在本机卡在 create-dmg 的 Finder/AppleScript 布局阶段，需要发布阶段单独处理。
+- ❗Storybook/空态/错误态还要按组件补齐到发布质量。
+
+---
+
+## 0. 工作方法(贯穿所有阶段)
+
+1. **异构 multi-agent 分工**:
+   - **Codex(GPT)** 负责:架构梳理、复杂解析/RAG 逻辑、找 bug 真实原因、坐标转换这类"不能遗漏细节"的硬骨头。
+   - **Claude Code(Opus)** 负责:写前端组件/交互、写文档、中小任务、磨 UI。
+2. **文档/Spec 先行**:每阶段先产出实现方案文档,对齐后再写代码。
+3. **逐阶段推进**:前一阶段跑通并自测,再开下一阶段。
+4. **组件名描述交互**:统一用 shadcn/ui 组件名沟通(见 `UI-UX.md`)。
+5. **Storybook 兜底**:每个新组件必须有枚举全状态的 story(见 `AGENTS.md`)。
+
+---
+
+## Phase 0 · 地基与决策固化(0.5–1 周)
+
+**目标:能跑起来一个空壳,所有技术选型在真机上验证可行。**
+
+- [ ] 初始化 Tauri v2 项目(`pnpm create tauri-app`,React + TS + Vite)
+- [ ] 接入 shadcn/ui(`shadcn init`)+ Tailwind + Storybook
+- [ ] **坐标系统 spike(关键)**:写一个最小 demo——pdf.js 渲染一页 → 框选 → `getClientRects` → 转归一化页坐标 → 画回高亮。验证缩放/旋转下不漂移。
+- [ ] **sqlite-vec spike**:Rust 侧 `rusqlite` + sqlite-vec 锁版本,插入 1 万随机向量,验证暴力 KNN 亚毫秒、能正常加载扩展。
+- [x] **MinerU 端到端 spike(主解析路径)** ✅ 已通过(2026-05-31,`财富公式.pdf` 163页/124秒)。脚本 `scripts/mineru_e2e.py`。
+- [x] **坐标回投 spike(头号风险)** ✅ 实测原点为左上角、y 不翻转,与 pdf.js 天然对齐(见 `docs/mineru-integration.md` §4)。待补:旋转页/CropBox 边缘情况。
+- [ ] **Claude API spike**:跑通一次带 tool use + Citations + prompt caching 的最小请求,确认 `cached`/`tool_use` 流程。
+- [ ] 写下 `docs/coordinate-spec.md`:钉死唯一规范坐标空间 + 各引擎转换公式(头号 bug 来源,必须先固化)。
+
+**出口标准**:5 个 spike 全绿,坐标 spec 落地。任何一个 spike 红灯都要在这里解决,不带病进 Phase 1。
+
+---
+
+## Phase 1 · 阅读 + 框选锚点(1–2 周)
+
+**目标:能导入 PDF、像微信读书一样读、框选段落并持久化高亮。还没有 AI。**
+
+- [ ] PDF 导入 + 渲染(`react-pdf-highlighter-extended`)
+- [ ] 阅读 UI:分页/连续滚动、目录侧栏、阅读进度(见 `UI-UX.md` 阅读器布局)
+- [ ] 框选 → 浮出操作条(shadcn `Popover` / 自定义 floating toolbar)
+- [ ] **耐久锚点**(`PLANNING.md` §7):
+  - [ ] 捕获 `ScaledPosition`(几何,真相)
+  - [ ] 生成 `TextQuoteSelector`(exact + 前后 32 字,`apache-annotator`)
+  - [ ] 存 `TextPositionSelector`(仅提示)
+  - [ ] 重锚:位置提示 → 引用断言 → `diff-match-patch` 模糊匹配 → 几何回退
+- [ ] 高亮持久化(SQLite 表:book / highlight / anchor),重开仍在原位
+- [ ] 高亮管理:列表、删除、跳转
+
+**出口标准**:导入名著 PDF,框选十处,关闭重开后全部精确还原。
+
+---
+
+## Phase 2 · 解析管线 + 本地索引(1–2 周,可与 Phase 1 并行)
+
+**目标:把书解析、切块、建好本地全文索引;配置外部 embedding provider 后补建向量索引,为 RAG 备料。Codex 主导。**
+
+- [ ] **MinerU 解析客户端**(Rust 后端):`file-urls/batch` → PUT 上传 → 轮询 → 下载解压 zip。token 经 `.env` 读取(`docs/mineru-integration.md`)。
+- [ ] 解析路由:桌面端统一走 MinerU。文本层探测器(字符数+U+FFFD 率)只用于决定 `is_ocr`。
+- [ ] 解析结果一次性缓存到本地 SQLite(重开不重解析);长书 `page_ranges` 分批 + 进度回传前端。
+- [ ] 从 MinerU `middle.json` 切块:按 Level2 块/Line 粒度,**每块带 `page_idx` + 换算后的归一化 bbox**;章节归属。
+- [ ] Embedding 只走外部 provider:`EMBEDDING_PROVIDER/API_KEY/BASE_URL/MODEL`,DB 存 provider/model+维度,切换即重嵌
+- [ ] 索引:FTS5(BM25)+ provider 向量混合检索函数;未配置 embedding 时必须可退化为纯文本检索
+- [ ] 索引版本号(每版书),解析引擎/参数随锚点存
+
+**出口标准**:对一本书一键解析+建索引(MinerU 论文 / 本地名著两条路都通),`search_book("某概念")` 返回带坐标的相关块,框选能映射到块。
+
+---
+
+## Phase 3 · agentic 解读循环(2–3 周,核心卖点)
+
+**目标:框选 → AI 规划 → 全书检索 → 带引用的深度解读。Codex 写循环逻辑,Opus 写卡片 UI。**
+
+- [ ] **多 provider LLM 抽象层**(见 `docs/llm-provider.md`):`LlmProvider` trait + `OpenAiCompatProvider`(DeepSeek 默认 + OpenAI 共用)+ `AnthropicProvider`;按 `LLM_PROVIDER` 实例化
+- [ ] 工具定义:`search_book` / `get_chunk` / `get_neighbors` / `list_structure`
+- [ ] agentic 循环(`PLANNING.md` §5):Plan → Retrieve → Iterate(封顶 2–4 轮)→ Synthesize
+- [ ] 系统提示钉死逐字选中段落 + 位置
+- [ ] **统一 chunk_id 引用**:证据带 `[chunk_id]` → 模型标注 → 后处理成可点击引用 → 跳回高亮
+- [ ] Prompt caching:静态前缀(DeepSeek/OpenAI 自动,Anthropic 显式三断点)
+- [ ] 设置 UI:provider 选择 + key 输入 + 连通测试
+- [ ] 解读卡片 UI:停靠选区旁、流式输出、引用点击跳转高亮(见 `UI-UX.md`)
+- [ ] 解读持久化 + 历史
+
+**出口标准**:框选名著一段,得到带 3+ 条可点击引用的解读,引用能跳回书中确切位置;成本可观测(cache 命中率)。
+
+---
+
+## Phase 4 · 打磨与发布(1–2 周)
+
+- [ ] 错误态/空态/加载态全覆盖(Storybook 走查)
+- [ ] 性能:大 PDF(>500 页)流畅度、索引耗时、内存
+- [ ] 可访问性 + 字体/字号偏好
+- [ ] 设备矩阵测试(多 macOS 版本)
+- [ ] 打包签名分发(macOS 优先,Windows 次之):debug `.app` 已可由 `pnpm health:bundle` 生成；DMG/签名/公证待发布阶段处理
+- [ ] 渐进发布:先给自己和朋友用(你和最初提出痛点的那位)
+
+**出口标准**:你自己能用它重读一本名著,且"如果有 AI 帮我解读会很不一样"的体验真实成立。
+
+---
+
+## V2 及以后(里程碑级,不排期)
+
+- 复杂论文增强(marker/MinerU,公式表格)— 服务端 GPU 微服务
+- 古诗词典故外部检索 `search_external`
+- 云端 OCR 兜底(Mistral OCR)
+- 重排版双视图
+- **移动端**:Rust 核心经 FFI 复用 + React Native/Expo 薄壳(或 Tauri v2 移动端,先真机 spike)
+- 短书"整本缓存单次解读"模式
+- 跨页选区、结构化解读卡片
+
+---
+
+## 关键里程碑温度计
+
+| 里程碑 | 验证的核心假设 |
+|---|---|
+| Phase 0 出口 | 技术栈在真机上全部可行(坐标/向量/解析/API) |
+| Phase 1 出口 | **框选锚点耐久**(全产品最难点,最先验证) |
+| Phase 3 出口 | **agentic 深度解读体验成立**(护城河) |
+| Phase 4 出口 | **你自己愿意用它重读一本书**(PMF 的第一个信号) |
