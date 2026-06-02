@@ -13,6 +13,7 @@
     "test": "vitest run",
     "eval:rag": "node scripts/rag_eval.mjs",
     "secret-scan": "scripts/secret_scan.sh",
+    "release:dmg": "scripts/release_dmg.sh",
     "health": "scripts/product_health_check.sh",
     "health:bundle": "PRODUCT_HEALTH_BUILD_TAURI=1 scripts/product_health_check.sh"
   },
