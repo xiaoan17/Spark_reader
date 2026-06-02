@@ -12,6 +12,10 @@ export function makeChunkId(bookSeed: string, pageIndex: number, chunkIndex: num
   return `${namespace}-p${pageIndex + 1}-c${chunkIndex + 1}-${hashString(normalizeForHash(text))}`
 }
 
+export function chunkContentHash(text: string) {
+  return hashString(normalizeForHash(text))
+}
+
 export function isNamespacedChunkId(value: string) {
   return namespacedChunkIdPattern.test(value)
 }

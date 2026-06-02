@@ -228,15 +228,17 @@ mod tests {
 
     #[test]
     fn converts_mineru_top_left_points() {
-        let rect = mineru_bbox_to_normalized(
-            0,
-            [67.0, 63.0, 359.0, 80.0],
-            PageSize {
-                width: 595.0,
-                height: 841.0,
-            },
-        )
-        .unwrap();
+        let rect = expect_ok(
+            mineru_bbox_to_normalized(
+                0,
+                [67.0, 63.0, 359.0, 80.0],
+                PageSize {
+                    width: 595.0,
+                    height: 841.0,
+                },
+            ),
+            "MinerU top-left bbox should normalize",
+        );
 
         assert_eq!(
             rect,
@@ -252,15 +254,17 @@ mod tests {
 
     #[test]
     fn flips_bottom_left_points() {
-        let rect = pdf_bottom_left_points_to_normalized(
-            0,
-            [10.0, 20.0, 110.0, 120.0],
-            PageSize {
-                width: 200.0,
-                height: 400.0,
-            },
-        )
-        .unwrap();
+        let rect = expect_ok(
+            pdf_bottom_left_points_to_normalized(
+                0,
+                [10.0, 20.0, 110.0, 120.0],
+                PageSize {
+                    width: 200.0,
+                    height: 400.0,
+                },
+            ),
+            "bottom-left PDF points should normalize",
+        );
 
         assert_eq!(
             rect,
@@ -276,15 +280,17 @@ mod tests {
 
     #[test]
     fn rejects_empty_rectangles() {
-        let err = mineru_bbox_to_normalized(
-            0,
-            [100.0, 100.0, 100.0, 200.0],
-            PageSize {
-                width: 595.0,
-                height: 841.0,
-            },
-        )
-        .unwrap_err();
+        let err = expect_err(
+            mineru_bbox_to_normalized(
+                0,
+                [100.0, 100.0, 100.0, 200.0],
+                PageSize {
+                    width: 595.0,
+                    height: 841.0,
+                },
+            ),
+            "zero-width bbox should be rejected",
+        );
 
         assert_eq!(err, CoordinateError::EmptyRect);
     }
@@ -298,7 +304,10 @@ mod tests {
         let bbox = [10.0, 20.0, 110.0, 120.0];
 
         assert_eq!(
-            top_left_points_to_normalized_with_rotation(0, bbox, page_size, 90).unwrap(),
+            expect_ok(
+                top_left_points_to_normalized_with_rotation(0, bbox, page_size, 90),
+                "90 degree rotation should normalize",
+            ),
             NormalizedPageRect {
                 page_index: 0,
                 x0: 280.0 / 400.0,
@@ -308,7 +317,10 @@ mod tests {
             }
         );
         assert_eq!(
-            top_left_points_to_normalized_with_rotation(0, bbox, page_size, 180).unwrap(),
+            expect_ok(
+                top_left_points_to_normalized_with_rotation(0, bbox, page_size, 180),
+                "180 degree rotation should normalize",
+            ),
             NormalizedPageRect {
                 page_index: 0,
                 x0: 90.0 / 200.0,
@@ -318,7 +330,10 @@ mod tests {
             }
         );
         assert_eq!(
-            top_left_points_to_normalized_with_rotation(0, bbox, page_size, 270).unwrap(),
+            expect_ok(
+                top_left_points_to_normalized_with_rotation(0, bbox, page_size, 270),
+                "270 degree rotation should normalize",
+            ),
             NormalizedPageRect {
                 page_index: 0,
                 x0: 20.0 / 400.0,
@@ -331,12 +346,14 @@ mod tests {
 
     #[test]
     fn normalizes_top_left_points_inside_crop_box() {
-        let rect = top_left_points_in_crop_box_to_normalized(
-            0,
-            [60.0, 120.0, 160.0, 220.0],
-            [50.0, 100.0, 250.0, 500.0],
-        )
-        .unwrap();
+        let rect = expect_ok(
+            top_left_points_in_crop_box_to_normalized(
+                0,
+                [60.0, 120.0, 160.0, 220.0],
+                [50.0, 100.0, 250.0, 500.0],
+            ),
+            "top-left points inside crop box should normalize",
+        );
 
         assert_eq!(
             rect,
@@ -352,17 +369,71 @@ mod tests {
 
     #[test]
     fn rejects_non_right_angle_rotation() {
-        let err = top_left_points_to_normalized_with_rotation(
-            0,
-            [10.0, 20.0, 110.0, 120.0],
-            PageSize {
-                width: 200.0,
-                height: 400.0,
-            },
-            45,
-        )
-        .unwrap_err();
+        let err = expect_err(
+            top_left_points_to_normalized_with_rotation(
+                0,
+                [10.0, 20.0, 110.0, 120.0],
+                PageSize {
+                    width: 200.0,
+                    height: 400.0,
+                },
+                45,
+            ),
+            "non-right-angle rotation should be rejected",
+        );
 
         assert_eq!(err, CoordinateError::UnsupportedRotation(45));
+    }
+
+    #[test]
+    fn rejects_non_finite_bbox_values() {
+        let err = expect_err(
+            top_left_points_to_normalized(
+                0,
+                [10.0, f64::NAN, 110.0, 120.0],
+                PageSize {
+                    width: 200.0,
+                    height: 400.0,
+                },
+            ),
+            "non-finite bbox values should be rejected",
+        );
+
+        assert_eq!(err, CoordinateError::NotFinite);
+    }
+
+    #[test]
+    fn rejects_invalid_page_size() {
+        let err = expect_err(
+            mineru_bbox_to_normalized(
+                0,
+                [10.0, 20.0, 110.0, 120.0],
+                PageSize {
+                    width: 0.0,
+                    height: 400.0,
+                },
+            ),
+            "zero-width page size should be rejected",
+        );
+
+        assert_eq!(err, CoordinateError::InvalidPageSize);
+    }
+
+    fn expect_ok<T: std::fmt::Debug, E: std::fmt::Debug>(result: Result<T, E>, context: &str) -> T {
+        assert!(result.is_ok(), "{context}: {result:?}");
+        result.unwrap_or_else(|_| unreachable!("asserted result is ok"))
+    }
+
+    fn expect_err<T: std::fmt::Debug, E: std::fmt::Debug>(
+        result: Result<T, E>,
+        context: &str,
+    ) -> E {
+        assert!(
+            result.is_err(),
+            "{context}: unexpectedly succeeded with {result:?}"
+        );
+        result
+            .err()
+            .unwrap_or_else(|| unreachable!("asserted result is err"))
     }
 }

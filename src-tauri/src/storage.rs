@@ -169,6 +169,14 @@ pub struct StoredBookSummary {
     #[serde(rename = "coordinateMode")]
     pub coordinate_mode: String,
     pub quality: Option<TextQuality>,
+    #[serde(rename = "tldrText")]
+    pub tldr_text: Option<String>,
+    #[serde(rename = "tldrGeneratedAt")]
+    pub tldr_generated_at: Option<String>,
+    #[serde(rename = "tldrModel")]
+    pub tldr_model: Option<String>,
+    #[serde(rename = "tldrSourceVersion")]
+    pub tldr_source_version: Option<u32>,
     #[serde(rename = "createdAt")]
     pub created_at: String,
 }
@@ -189,8 +197,41 @@ pub struct StoredBookAsset {
     pub parser_engine: String,
     pub coordinate_mode: String,
     pub quality: Option<TextQuality>,
+    pub tldr_text: Option<String>,
+    pub tldr_generated_at: Option<String>,
+    pub tldr_model: Option<String>,
+    pub tldr_source_version: Option<u32>,
     pub pages: Vec<ParsedPageInput>,
     pub chunks: Vec<ParsedChunkInput>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentTldr {
+    pub book_id: String,
+    pub text: String,
+    pub generated_at: String,
+    pub model: String,
+    pub source_version: u32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredBookPageWindow {
+    pub book_id: String,
+    pub start_page: u32,
+    pub end_page: u32,
+    pub total_pages: u32,
+    pub text: String,
+    pub markdown: String,
+    pub pages: Vec<ParsedPageInput>,
+    pub chunks: Vec<ParsedChunkInput>,
+}
+
+#[derive(Debug)]
+pub struct StoredBookPageSourceWindow {
+    pub end_page: u32,
+    pub pages: Vec<ParsedPageInput>,
 }
 
 #[derive(Debug, Serialize)]
@@ -276,6 +317,10 @@ pub struct SaveInterpretationRequest {
     pub answer: String,
     #[serde(default = "default_answer_source")]
     pub answer_source: AnswerSource,
+    #[serde(default)]
+    pub kind: Option<InterpretationKind>,
+    #[serde(default)]
+    pub evidence_chunk_snapshots: Vec<EvidenceChunkSnapshot>,
 }
 
 #[derive(Debug, Serialize)]
@@ -296,7 +341,19 @@ pub struct SavedInterpretation {
     pub question: Option<String>,
     pub answer: String,
     pub answer_source: AnswerSource,
+    pub kind: InterpretationKind,
+    pub evidence_chunk_snapshots: Vec<EvidenceChunkSnapshot>,
     pub created_at: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub struct EvidenceChunkSnapshot {
+    pub chunk_id: String,
+    #[serde(default)]
+    pub chunk_id_version: u32,
+    #[serde(default)]
+    pub content_hash: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Hash)]
@@ -304,6 +361,14 @@ pub struct SavedInterpretation {
 pub enum AnswerSource {
     Llm,
     LocalFallback,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum InterpretationKind {
+    Interpretation,
+    Spark,
+    Note,
 }
 
 fn default_answer_source() -> AnswerSource {
@@ -325,6 +390,30 @@ impl AnswerSource {
         }
     }
 }
+
+impl InterpretationKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            InterpretationKind::Interpretation => "interpretation",
+            InterpretationKind::Spark => "spark",
+            InterpretationKind::Note => "note",
+        }
+    }
+
+    fn from_db(value: &str) -> Self {
+        match value {
+            "spark" => InterpretationKind::Spark,
+            "note" => InterpretationKind::Note,
+            _ => InterpretationKind::Interpretation,
+        }
+    }
+}
+
+fn normalized_interpretation_kind(request: &SaveInterpretationRequest) -> InterpretationKind {
+    request.kind.unwrap_or(InterpretationKind::Interpretation)
+}
+
+pub const TLDR_SOURCE_VERSION: u32 = 2;
 
 pub fn default_db_path(app_data_dir: Option<PathBuf>) -> Result<PathBuf> {
     let base_dir = match app_data_dir {
@@ -415,7 +504,11 @@ pub fn save_book_with_options(
            total_pages = excluded.total_pages,
            parser_engine = excluded.parser_engine,
            coordinate_mode = excluded.coordinate_mode,
-           quality_json = excluded.quality_json",
+           quality_json = excluded.quality_json,
+           tldr_text = NULL,
+           tldr_generated_at = NULL,
+           tldr_model = NULL,
+           tldr_source_version = NULL",
         params![
             book_id,
             request.title.trim(),
@@ -536,9 +629,11 @@ pub fn save_book_with_options(
                 .execute(params![book_id, legacy_chunk_id, chunk_id])
                 .with_context(|| format!("failed to insert chunk id alias {legacy_chunk_id}"))?;
         }
-        for (legacy_chunk_id, chunk_id) in
-            rebind_existing_chunk_aliases(&existing_chunk_aliases, &request.chunks)
-        {
+        for (legacy_chunk_id, chunk_id) in rebind_existing_chunk_aliases(
+            &existing_chunk_aliases,
+            &request.chunks,
+            |legacy_chunk_id| !aliases.iter().any(|(alias, _)| alias == legacy_chunk_id),
+        ) {
             alias_stmt
                 .execute(params![book_id, legacy_chunk_id, chunk_id])
                 .with_context(|| format!("failed to rebind chunk id alias {legacy_chunk_id}"))?;
@@ -546,9 +641,11 @@ pub fn save_book_with_options(
     }
 
     tx.commit().context("failed to commit parsed book")?;
+    normalize_interpretation_evidence_ids(&conn, &book_id)
+        .context("failed to rebind saved interpretation evidence ids")?;
     rebuild_fts(&conn, &book_id).context("failed to rebuild text search index")?;
     if !options.skip_embedding_rebuild {
-        if let Err(err) = rebuild_embeddings(&conn, &book_id) {
+        if let Err(err) = rebuild_embeddings(&mut conn, &book_id) {
             record_embedding_error(&conn, &book_id, &format!("{err:#}"))?;
             eprintln!("failed to rebuild provider embedding index for {book_id}: {err:#}");
         }
@@ -628,31 +725,33 @@ pub fn search_book(
 
     if has_fts_table(&conn)? {
         let fts_query = to_fts_query(trimmed_query);
-        let mut stmt = conn
-            .prepare(
-                "SELECT c.chunk_id,
-                        c.page_index,
-                        c.text,
-                        c.markdown,
-                        c.rects_json,
-                        c.coordinate_version,
-                        snippet(chunks_fts, 2, '<mark>', '</mark>', '...', 12) AS snippet,
-                        bm25(chunks_fts) AS score
-                 FROM chunks_fts
-                 JOIN chunks c ON c.id = chunks_fts.rowid
-                 WHERE chunks_fts MATCH ?1 AND c.book_id = ?2
-                 ORDER BY score
-                 LIMIT ?3",
-            )
-            .context("failed to prepare FTS search")?;
+        if !fts_query.is_empty() {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT c.chunk_id,
+                            c.page_index,
+                            c.text,
+                            c.markdown,
+                            c.rects_json,
+                            c.coordinate_version,
+                            snippet(chunks_fts, 2, '<mark>', '</mark>', '...', 12) AS snippet,
+                            bm25(chunks_fts) AS score
+                     FROM chunks_fts
+                     JOIN chunks c ON c.id = chunks_fts.rowid
+                     WHERE chunks_fts MATCH ?1 AND c.book_id = ?2
+                     ORDER BY score
+                     LIMIT ?3",
+                )
+                .context("failed to prepare FTS search")?;
 
-        let hits = stmt
-            .query_map(params![fts_query, book_id, limit.max(1)], row_to_search_hit)?
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .context("failed to map FTS search hits")?;
+            let hits = stmt
+                .query_map(params![fts_query, book_id, limit.max(1)], row_to_search_hit)?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .context("failed to map FTS search hits")?;
 
-        if !hits.is_empty() {
-            return Ok(hits);
+            if !hits.is_empty() {
+                return Ok(hits);
+            }
         }
     }
 
@@ -665,26 +764,38 @@ pub fn hybrid_search_book(
     query: &str,
     limit: u32,
 ) -> Result<Vec<SearchHit>> {
-    let conn = open_database(db_path)?;
     let trimmed_query = query.trim();
     if trimmed_query.is_empty() {
         return Ok(Vec::new());
     }
 
     let limit = limit.max(1);
-    let fts_hits = search_book(db_path, book_id, trimmed_query, limit.saturating_mul(2))?;
-    let vector_hits =
-        vector_search(&conn, book_id, trimmed_query, limit.saturating_mul(2)).unwrap_or_default();
+    let search_limit = limit.saturating_mul(2);
+    let (fts_result, vector_hits) = std::thread::scope(|scope| {
+        let vector_handle = scope.spawn(|| {
+            let conn = open_database(db_path)?;
+            vector_search(&conn, book_id, trimmed_query, search_limit)
+        });
+        let fts_result = search_book(db_path, book_id, trimmed_query, search_limit);
+        let vector_hits = vector_handle
+            .join()
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or_default();
+        (fts_result, vector_hits)
+    });
+    let fts_hits = fts_result?;
     Ok(fuse_search_hits(fts_hits, vector_hits, limit))
 }
 
 pub fn rebuild_search_index(db_path: &Path, book_id: &str) -> Result<SearchIndexSummary> {
-    let conn = open_database(db_path)?;
+    let mut conn = open_database(db_path)?;
     rebuild_fts(&conn, book_id)?;
-    if let Err(err) = rebuild_embeddings(&conn, book_id) {
+    if let Err(err) = rebuild_embeddings(&mut conn, book_id) {
         record_embedding_error(&conn, book_id, &format!("{err:#}"))?;
         eprintln!("failed to rebuild provider embedding index for {book_id}: {err:#}");
     }
+    clear_book_tldr_with_conn(&conn, book_id)?;
     search_index_summary(db_path, book_id)
 }
 
@@ -976,7 +1087,7 @@ pub fn list_books(db_path: &Path) -> Result<Vec<StoredBookSummary>> {
             "SELECT b.id,
                     b.title,
                     b.total_pages,
-                    COUNT(DISTINCT c.id) AS chunk_count,
+                    COALESCE(chunk_counts.chunk_count, 0) AS chunk_count,
                     COALESCE(LENGTH(a.text), 0) AS text_char_count,
                     COALESCE(LENGTH(a.markdown), 0) AS markdown_char_count,
                     a.text_path,
@@ -987,22 +1098,18 @@ pub fn list_books(db_path: &Path) -> Result<Vec<StoredBookSummary>> {
                     b.parser_engine,
                     b.coordinate_mode,
                     b.quality_json,
+                    b.tldr_text,
+                    strftime('%Y-%m-%dT%H:%M:%SZ', b.tldr_generated_at) AS tldr_generated_at,
+                    b.tldr_model,
+                    b.tldr_source_version,
                     strftime('%Y-%m-%dT%H:%M:%SZ', b.created_at) AS created_at
              FROM books b
              LEFT JOIN book_assets a ON a.book_id = b.id
-             LEFT JOIN chunks c ON c.book_id = b.id
-             GROUP BY b.id,
-                      b.title,
-                      b.total_pages,
-                      b.parser_engine,
-                      b.coordinate_mode,
-                      b.created_at,
-                      b.quality_json,
-                      a.text_path,
-                      a.markdown_path,
-                      a.original_pdf_path,
-                      a.source_pdf_path,
-                      a.source_pdf_fingerprint
+             LEFT JOIN (
+               SELECT book_id, COUNT(*) AS chunk_count
+               FROM chunks
+               GROUP BY book_id
+             ) chunk_counts ON chunk_counts.book_id = b.id
              ORDER BY b.created_at DESC",
         )
         .context("failed to prepare book list")?;
@@ -1030,12 +1137,83 @@ pub fn list_books(db_path: &Path) -> Result<Vec<StoredBookSummary>> {
                         Box::new(err),
                     )
                 })?,
-                created_at: row.get(14)?,
+                tldr_text: row.get(14)?,
+                tldr_generated_at: row.get(15)?,
+                tldr_model: row.get(16)?,
+                tldr_source_version: row.get(17)?,
+                created_at: row.get(18)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()
         .context("failed to map stored books")?;
     Ok(books)
+}
+
+pub fn get_converted_book_manifest(db_path: &Path, book_id: &str) -> Result<StoredBookSummary> {
+    let conn = open_database(db_path)?;
+    conn.query_row(
+        "SELECT b.id,
+                b.title,
+                b.total_pages,
+                COALESCE(chunk_counts.chunk_count, 0) AS chunk_count,
+                COALESCE(LENGTH(a.text), 0) AS text_char_count,
+                COALESCE(LENGTH(a.markdown), 0) AS markdown_char_count,
+                a.text_path,
+                a.markdown_path,
+                a.original_pdf_path,
+                a.source_pdf_path,
+                a.source_pdf_fingerprint,
+                b.parser_engine,
+                b.coordinate_mode,
+                b.quality_json,
+                b.tldr_text,
+                strftime('%Y-%m-%dT%H:%M:%SZ', b.tldr_generated_at) AS tldr_generated_at,
+                b.tldr_model,
+                b.tldr_source_version,
+                strftime('%Y-%m-%dT%H:%M:%SZ', b.created_at) AS created_at
+         FROM books b
+         LEFT JOIN book_assets a ON a.book_id = b.id
+         LEFT JOIN (
+           SELECT book_id, COUNT(*) AS chunk_count
+           FROM chunks
+           WHERE book_id = ?1
+           GROUP BY book_id
+         ) chunk_counts ON chunk_counts.book_id = b.id
+         WHERE b.id = ?1",
+        params![book_id],
+        |row| {
+            Ok(StoredBookSummary {
+                book_id: row.get(0)?,
+                title: row.get(1)?,
+                total_pages: row.get(2)?,
+                chunk_count: row.get(3)?,
+                text_char_count: row.get(4)?,
+                markdown_char_count: row.get(5)?,
+                text_path: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
+                markdown_path: row.get::<_, Option<String>>(7)?.unwrap_or_default(),
+                original_pdf_path: row.get::<_, Option<String>>(8)?.unwrap_or_default(),
+                source_pdf_path: row.get::<_, Option<String>>(9)?.unwrap_or_default(),
+                source_pdf_fingerprint: row.get::<_, Option<String>>(10)?.unwrap_or_default(),
+                parser_engine: row.get(11)?,
+                coordinate_mode: row.get(12)?,
+                quality: parse_quality(row.get(13)?).map_err(|err| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        13,
+                        rusqlite::types::Type::Text,
+                        Box::new(err),
+                    )
+                })?,
+                tldr_text: row.get(14)?,
+                tldr_generated_at: row.get(15)?,
+                tldr_model: row.get(16)?,
+                tldr_source_version: row.get(17)?,
+                created_at: row.get(18)?,
+            })
+        },
+    )
+    .optional()
+    .context("failed to fetch converted book manifest")?
+    .ok_or_else(|| anyhow::anyhow!("book not found: {book_id}"))
 }
 
 pub fn get_converted_book(db_path: &Path, book_id: &str) -> Result<StoredBookAsset> {
@@ -1046,6 +1224,10 @@ pub fn get_converted_book(db_path: &Path, book_id: &str) -> Result<StoredBookAss
         parser_engine,
         coordinate_mode,
         quality,
+        tldr_text,
+        tldr_generated_at,
+        tldr_model,
+        tldr_source_version,
         asset_text,
         asset_markdown,
         asset_text_path,
@@ -1060,6 +1242,10 @@ pub fn get_converted_book(db_path: &Path, book_id: &str) -> Result<StoredBookAss
                     b.parser_engine,
                     b.coordinate_mode,
                     b.quality_json,
+                    b.tldr_text,
+                    strftime('%Y-%m-%dT%H:%M:%SZ', b.tldr_generated_at) AS tldr_generated_at,
+                    b.tldr_model,
+                    b.tldr_source_version,
                     a.text,
                     a.markdown,
                     a.text_path,
@@ -1087,10 +1273,14 @@ pub fn get_converted_book(db_path: &Path, book_id: &str) -> Result<StoredBookAss
                     row.get::<_, Option<String>>(5)?,
                     row.get::<_, Option<String>>(6)?,
                     row.get::<_, Option<String>>(7)?,
-                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, Option<u32>>(8)?,
                     row.get::<_, Option<String>>(9)?,
                     row.get::<_, Option<String>>(10)?,
                     row.get::<_, Option<String>>(11)?,
+                    row.get::<_, Option<String>>(12)?,
+                    row.get::<_, Option<String>>(13)?,
+                    row.get::<_, Option<String>>(14)?,
+                    row.get::<_, Option<String>>(15)?,
                 ))
             },
         )
@@ -1129,14 +1319,117 @@ pub fn get_converted_book(db_path: &Path, book_id: &str) -> Result<StoredBookAss
         parser_engine,
         coordinate_mode,
         quality,
+        tldr_text,
+        tldr_generated_at,
+        tldr_model,
+        tldr_source_version,
         pages,
         chunks,
     })
 }
 
+pub const MAX_CONVERTED_BOOK_PAGE_WINDOW: u32 = 128;
+
+fn bounded_page_window(total_pages: u32, start_page: u32, page_count: u32) -> (u32, u32) {
+    let count = page_count.min(MAX_CONVERTED_BOOK_PAGE_WINDOW);
+    let safe_start = if total_pages == 0 {
+        0
+    } else {
+        start_page.min(total_pages.saturating_sub(1))
+    };
+    let end_page = safe_start.saturating_add(count).min(total_pages);
+    (safe_start, end_page)
+}
+
+pub fn get_converted_book_pages(
+    db_path: &Path,
+    book_id: &str,
+    start_page: u32,
+    page_count: u32,
+) -> Result<StoredBookPageWindow> {
+    let conn = open_database(db_path)?;
+    let total_pages = conn
+        .query_row(
+            "SELECT total_pages FROM books WHERE id = ?1",
+            params![book_id],
+            |row| row.get::<_, u32>(0),
+        )
+        .optional()
+        .context("failed to fetch converted book page count")?
+        .ok_or_else(|| anyhow::anyhow!("book not found: {book_id}"))?;
+
+    let (safe_start, end_page) = bounded_page_window(total_pages, start_page, page_count);
+    let pages = if safe_start < end_page {
+        fetch_pages_range(&conn, book_id, safe_start, end_page)?
+    } else {
+        Vec::new()
+    };
+    let chunks = if safe_start < end_page {
+        fetch_chunks_range(&conn, book_id, safe_start, end_page)?
+    } else {
+        Vec::new()
+    };
+    let text = pages
+        .iter()
+        .map(|page| page.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let markdown = pages
+        .iter()
+        .map(|page| page.markdown.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    Ok(StoredBookPageWindow {
+        book_id: book_id.to_string(),
+        start_page: safe_start,
+        end_page,
+        total_pages,
+        text,
+        markdown,
+        pages,
+        chunks,
+    })
+}
+
+pub fn get_converted_book_page_sources(
+    db_path: &Path,
+    book_id: &str,
+    start_page: u32,
+    page_count: u32,
+) -> Result<StoredBookPageSourceWindow> {
+    let conn = open_database(db_path)?;
+    let total_pages = conn
+        .query_row(
+            "SELECT total_pages FROM books WHERE id = ?1",
+            params![book_id],
+            |row| row.get::<_, u32>(0),
+        )
+        .optional()
+        .context("failed to fetch converted book page count")?
+        .ok_or_else(|| anyhow::anyhow!("book not found: {book_id}"))?;
+
+    let (safe_start, end_page) = bounded_page_window(total_pages, start_page, page_count);
+    let pages = if safe_start < end_page {
+        fetch_pages_range(&conn, book_id, safe_start, end_page)?
+    } else {
+        Vec::new()
+    };
+
+    Ok(StoredBookPageSourceWindow { end_page, pages })
+}
+
 pub fn find_book_by_source_pdf(
     db_path: &Path,
     source_pdf_path: &Path,
+) -> Result<Option<StoredBookSummary>> {
+    find_book_by_source_pdf_with_engine(db_path, source_pdf_path, |_| true)
+}
+
+pub fn find_book_by_source_pdf_with_engine(
+    db_path: &Path,
+    source_pdf_path: &Path,
+    accept_engine: impl Fn(&str) -> bool,
 ) -> Result<Option<StoredBookSummary>> {
     let Some(source) = source_pdf_metadata_for_path(source_pdf_path)? else {
         return Ok(None);
@@ -1144,6 +1437,9 @@ pub fn find_book_by_source_pdf(
 
     let books = list_books(db_path)?;
     for book in books {
+        if !accept_engine(&book.parser_engine) {
+            continue;
+        }
         if !book.source_pdf_fingerprint.is_empty()
             && (book.source_pdf_fingerprint == source.fingerprint
                 || book.source_pdf_fingerprint == source.legacy_fingerprint)
@@ -1264,12 +1560,19 @@ pub fn save_interpretation(
     mut request: SaveInterpretationRequest,
 ) -> Result<SavedInterpretation> {
     let conn = open_database(db_path)?;
-    request.evidence_chunk_ids = request
-        .evidence_chunk_ids
+    let requested_evidence_chunk_ids = request.evidence_chunk_ids.clone();
+    request.evidence_chunk_ids = requested_evidence_chunk_ids
         .iter()
         .map(|chunk_id| resolve_chunk_id(&conn, &request.book_id, chunk_id))
         .collect::<Result<Vec<_>>>()
         .context("failed to normalize interpretation evidence chunk ids")?;
+    request.evidence_chunk_snapshots = evidence_chunk_snapshots(
+        &conn,
+        &request.book_id,
+        &requested_evidence_chunk_ids,
+        &request.evidence_chunk_ids,
+        &request.evidence_chunk_snapshots,
+    )?;
     let id = stable_interpretation_id(&request);
     let session_id = request
         .session_id
@@ -1292,6 +1595,9 @@ pub fn save_interpretation(
         serde_json::to_string(&request.page_indexes).context("failed to serialize page indexes")?;
     let evidence_json = serde_json::to_string(&request.evidence_chunk_ids)
         .context("failed to serialize evidence chunk ids")?;
+    let evidence_snapshot_json = serde_json::to_string(&request.evidence_chunk_snapshots)
+        .context("failed to serialize evidence chunk snapshots")?;
+    let kind = normalized_interpretation_kind(&request);
 
     conn.execute(
         "INSERT INTO interpretations(
@@ -1310,9 +1616,11 @@ pub fn save_interpretation(
            question,
            answer,
            answer_source,
+           kind,
+           evidence_chunk_snapshots_json,
            created_at
          )
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, datetime('now'))",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, datetime('now'))",
         params![
             id,
             request.book_id,
@@ -1328,7 +1636,9 @@ pub fn save_interpretation(
             evidence_json,
             request.question,
             request.answer,
-            request.answer_source.as_str()
+            request.answer_source.as_str(),
+            kind.as_str(),
+            evidence_snapshot_json
         ],
     )
     .context("failed to save interpretation")?;
@@ -1355,6 +1665,8 @@ pub fn list_interpretations(db_path: &Path, book_id: &str) -> Result<Vec<SavedIn
                     question,
                     answer,
                     answer_source,
+                    kind,
+                    evidence_chunk_snapshots_json,
                     created_at
              FROM interpretations
              WHERE book_id = ?1
@@ -1394,6 +1706,83 @@ pub fn delete_interpretation(db_path: &Path, interpretation_id: &str) -> Result<
     Ok(())
 }
 
+pub fn get_book_tldr(db_path: &Path, book_id: &str) -> Result<Option<DocumentTldr>> {
+    let conn = open_database(db_path)?;
+    get_book_tldr_with_conn(&conn, book_id)
+}
+
+pub fn save_book_tldr(
+    db_path: &Path,
+    book_id: &str,
+    text: &str,
+    model: &str,
+    source_version: u32,
+) -> Result<DocumentTldr> {
+    let conn = open_database(db_path)?;
+    conn.execute(
+        "UPDATE books
+         SET tldr_text = ?2,
+             tldr_generated_at = datetime('now'),
+             tldr_model = ?3,
+             tldr_source_version = ?4
+         WHERE id = ?1",
+        params![book_id, text, model, source_version],
+    )
+    .context("failed to save book TLDR")?;
+    get_book_tldr_with_conn(&conn, book_id)?
+        .ok_or_else(|| anyhow::anyhow!("book TLDR was not saved: {book_id}"))
+}
+
+fn get_book_tldr_with_conn(conn: &Connection, book_id: &str) -> Result<Option<DocumentTldr>> {
+    conn.query_row(
+        "SELECT id,
+                tldr_text,
+                strftime('%Y-%m-%dT%H:%M:%SZ', tldr_generated_at) AS tldr_generated_at,
+                tldr_model,
+                tldr_source_version
+         FROM books
+         WHERE id = ?1",
+        params![book_id],
+        |row| {
+            let text = row.get::<_, Option<String>>(1)?;
+            let generated_at = row.get::<_, Option<String>>(2)?;
+            let model = row.get::<_, Option<String>>(3)?;
+            let source_version = row.get::<_, Option<u32>>(4)?;
+            Ok(match (text, generated_at, model, source_version) {
+                (Some(text), Some(generated_at), Some(model), Some(source_version))
+                    if !text.trim().is_empty() =>
+                {
+                    Some(DocumentTldr {
+                        book_id: row.get(0)?,
+                        text,
+                        generated_at,
+                        model,
+                        source_version,
+                    })
+                }
+                _ => None,
+            })
+        },
+    )
+    .optional()
+    .context("failed to fetch book TLDR")
+    .map(Option::flatten)
+}
+
+fn clear_book_tldr_with_conn(conn: &Connection, book_id: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE books
+         SET tldr_text = NULL,
+             tldr_generated_at = NULL,
+             tldr_model = NULL,
+             tldr_source_version = NULL
+         WHERE id = ?1",
+        params![book_id],
+    )
+    .context("failed to clear book TLDR")?;
+    Ok(())
+}
+
 fn open_database(path: &Path) -> Result<Connection> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
@@ -1414,6 +1803,10 @@ fn open_database(path: &Path) -> Result<Connection> {
           parser_engine TEXT NOT NULL DEFAULT 'unknown',
           coordinate_mode TEXT NOT NULL DEFAULT 'text-only',
           quality_json TEXT,
+          tldr_text TEXT,
+          tldr_generated_at TEXT,
+          tldr_model TEXT,
+          tldr_source_version INTEGER,
           created_at TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS pages (
@@ -1495,6 +1888,8 @@ fn open_database(path: &Path) -> Result<Connection> {
           question TEXT,
           answer TEXT NOT NULL,
           answer_source TEXT NOT NULL DEFAULT 'llm',
+          kind TEXT NOT NULL DEFAULT 'interpretation',
+          evidence_chunk_snapshots_json TEXT NOT NULL DEFAULT '[]',
           created_at TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS chunk_id_aliases (
@@ -1507,6 +1902,14 @@ fn open_database(path: &Path) -> Result<Connection> {
         );
         CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts
         USING fts5(chunk_id, book_id UNINDEXED, text, markdown);
+        CREATE INDEX IF NOT EXISTS idx_chunks_book_page_id
+          ON chunks(book_id, page_index, id);
+        CREATE INDEX IF NOT EXISTS idx_chunk_embeddings_book_provider_model
+          ON chunk_embeddings(book_id, provider, base_url, model, dimension);
+        CREATE INDEX IF NOT EXISTS idx_highlights_book_page_created
+          ON highlights(book_id, page_index, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_interpretations_book_session_turn
+          ON interpretations(book_id, session_id, turn_index);
         ",
     )
     .context("failed to initialize library schema")?;
@@ -1545,6 +1948,30 @@ fn open_database(path: &Path) -> Result<Connection> {
         "books",
         "quality_json",
         "ALTER TABLE books ADD COLUMN quality_json TEXT",
+    )?;
+    ensure_column(
+        &conn,
+        "books",
+        "tldr_text",
+        "ALTER TABLE books ADD COLUMN tldr_text TEXT",
+    )?;
+    ensure_column(
+        &conn,
+        "books",
+        "tldr_generated_at",
+        "ALTER TABLE books ADD COLUMN tldr_generated_at TEXT",
+    )?;
+    ensure_column(
+        &conn,
+        "books",
+        "tldr_model",
+        "ALTER TABLE books ADD COLUMN tldr_model TEXT",
+    )?;
+    ensure_column(
+        &conn,
+        "books",
+        "tldr_source_version",
+        "ALTER TABLE books ADD COLUMN tldr_source_version INTEGER",
     )?;
     ensure_column(
         &conn,
@@ -1676,6 +2103,18 @@ fn open_database(path: &Path) -> Result<Connection> {
         "interpretations",
         "answer_source",
         "ALTER TABLE interpretations ADD COLUMN answer_source TEXT NOT NULL DEFAULT 'llm'",
+    )?;
+    ensure_column(
+        &conn,
+        "interpretations",
+        "kind",
+        "ALTER TABLE interpretations ADD COLUMN kind TEXT NOT NULL DEFAULT 'interpretation'",
+    )?;
+    ensure_column(
+        &conn,
+        "interpretations",
+        "evidence_chunk_snapshots_json",
+        "ALTER TABLE interpretations ADD COLUMN evidence_chunk_snapshots_json TEXT NOT NULL DEFAULT '[]'",
     )?;
     apply_schema_migrations(&conn)?;
 
@@ -1992,6 +2431,80 @@ fn normalize_interpretation_evidence_ids(conn: &Connection, book_id: &str) -> Re
     Ok(())
 }
 
+fn evidence_chunk_snapshots(
+    conn: &Connection,
+    book_id: &str,
+    original_ids: &[String],
+    resolved_ids: &[String],
+    supplied_snapshots: &[EvidenceChunkSnapshot],
+) -> Result<Vec<EvidenceChunkSnapshot>> {
+    let supplied_by_resolved_id = supplied_snapshots
+        .iter()
+        .filter(|snapshot| snapshot.content_hash.is_some() || snapshot.chunk_id_version > 0)
+        .map(|snapshot| (snapshot.chunk_id.as_str(), snapshot))
+        .collect::<HashMap<_, _>>();
+    let mut snapshots = Vec::new();
+    for (index, resolved_id) in resolved_ids.iter().enumerate() {
+        let supplied_snapshot = supplied_by_resolved_id
+            .get(resolved_id.as_str())
+            .or_else(|| {
+                original_ids
+                    .get(index)
+                    .and_then(|id| supplied_by_resolved_id.get(id.as_str()))
+            });
+        let mut snapshot = evidence_chunk_snapshot(
+            conn,
+            book_id,
+            original_ids
+                .get(index)
+                .map(String::as_str)
+                .unwrap_or(resolved_id),
+            resolved_id,
+        )?;
+        if let Some(supplied) = supplied_snapshot {
+            if supplied.content_hash.is_some() {
+                snapshot.content_hash = supplied.content_hash.clone();
+            }
+        }
+        snapshots.push(snapshot);
+    }
+    Ok(snapshots)
+}
+
+fn evidence_chunk_snapshot(
+    conn: &Connection,
+    book_id: &str,
+    original_id: &str,
+    resolved_id: &str,
+) -> Result<EvidenceChunkSnapshot> {
+    let stored_text = conn
+        .query_row(
+            "SELECT text FROM chunks WHERE book_id = ?1 AND chunk_id = ?2",
+            params![book_id, resolved_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .context("failed to load evidence chunk text for audit snapshot")?;
+    let locator = chunk_id::locator_from_chunk_id(original_id)
+        .or_else(|| chunk_id::locator_from_chunk_id(resolved_id));
+    let chunk_id_version = if chunk_id::is_namespaced_chunk_id(resolved_id) {
+        chunk_id::NAMESPACED_CHUNK_ID_VERSION
+    } else if chunk_id::is_legacy_chunk_id(resolved_id) || chunk_id::is_legacy_chunk_id(original_id)
+    {
+        chunk_id::LEGACY_CHUNK_ID_VERSION
+    } else {
+        0
+    };
+    let content_hash = locator
+        .and_then(|locator| locator.content_hash)
+        .or_else(|| stored_text.as_deref().map(chunk_id::content_hash));
+    Ok(EvidenceChunkSnapshot {
+        chunk_id: resolved_id.to_string(),
+        chunk_id_version,
+        content_hash,
+    })
+}
+
 fn normalize_book_chunk_ids(
     mut request: SaveBookRequest,
     book_id: &str,
@@ -2038,10 +2551,14 @@ fn existing_chunk_id_aliases(conn: &Connection, book_id: &str) -> Result<Vec<(St
 fn rebind_existing_chunk_aliases(
     existing_aliases: &[(String, String)],
     chunks: &[ParsedChunkInput],
+    should_rebind: impl Fn(&str) -> bool,
 ) -> Vec<(String, String)> {
     existing_aliases
         .iter()
         .filter_map(|(old_chunk_id, legacy_chunk_id)| {
+            if !should_rebind(legacy_chunk_id) {
+                return None;
+            }
             resolve_chunk_id_from_inputs(chunks, old_chunk_id)
                 .filter(|chunk_id| chunk_id != old_chunk_id)
                 .map(|chunk_id| (legacy_chunk_id.clone(), chunk_id))
@@ -2146,6 +2663,11 @@ fn resolve_chunk_id(conn: &Connection, book_id: &str, chunk_id: &str) -> Result<
     if let Some(resolved) = resolve_chunk_id_by_locator(conn, book_id, chunk_id)? {
         return Ok(resolved);
     }
+    if chunk_id::locator_from_chunk_id(chunk_id).is_some() {
+        eprintln!(
+            "warning: unresolved chunk_id locator for book {book_id}: {chunk_id}; preserving original id"
+        );
+    }
     Ok(chunk_id.to_string())
 }
 
@@ -2215,11 +2737,12 @@ fn write_book_assets(
             markdown_path.display()
         )
     })?;
+    let namespace_asset_dirs = source_asset_dirs.len() > 1;
     for source_asset_dir in source_asset_dirs
         .iter()
         .filter(|path| path.exists() && path.is_dir())
     {
-        copy_mineru_asset_resources(source_asset_dir, &asset_dir)?;
+        copy_mineru_asset_resources(source_asset_dir, &asset_dir, namespace_asset_dirs)?;
     }
     let original_pdf_path = source_pdf_path
         .filter(|path| !path.trim().is_empty())
@@ -2246,7 +2769,19 @@ fn write_book_assets(
     })
 }
 
-fn copy_mineru_asset_resources(source_dir: &Path, asset_dir: &Path) -> Result<()> {
+fn copy_mineru_asset_resources(
+    source_dir: &Path,
+    asset_dir: &Path,
+    namespace_asset_dir: bool,
+) -> Result<()> {
+    let target_root = if namespace_asset_dir {
+        source_dir
+            .file_name()
+            .map(|name| asset_dir.join(name))
+            .unwrap_or_else(|| asset_dir.to_path_buf())
+    } else {
+        asset_dir.to_path_buf()
+    };
     for entry in fs::read_dir(source_dir).with_context(|| {
         format!(
             "failed to read MinerU asset directory {}",
@@ -2266,7 +2801,7 @@ fn copy_mineru_asset_resources(source_dir: &Path, asset_dir: &Path) -> Result<()
         if matches!(file_name, "layout.json" | "full.md" | "origin.pdf") {
             continue;
         }
-        let target = asset_dir.join(file_name);
+        let target = target_root.join(file_name);
         copy_asset_entry(&path, &target)?;
     }
     Ok(())
@@ -2325,6 +2860,7 @@ fn rewrite_markdown_asset_paths(
     source_asset_dirs: &[PathBuf],
     asset_dir: &Path,
 ) -> String {
+    let markdown = rewrite_html_image_src_paths(markdown, source_asset_dirs, asset_dir);
     let mut output = String::with_capacity(markdown.len());
     let mut cursor = 0;
     while let Some(relative_start) = markdown[cursor..].find("](") {
@@ -2349,6 +2885,103 @@ fn rewrite_markdown_asset_paths(
     output
 }
 
+fn rewrite_html_image_src_paths(
+    markdown: &str,
+    source_asset_dirs: &[PathBuf],
+    asset_dir: &Path,
+) -> String {
+    let mut output = String::with_capacity(markdown.len());
+    let mut cursor = 0;
+    while let Some(tag_start_relative) = find_ascii_case_insensitive(&markdown[cursor..], "<img") {
+        let tag_start = cursor + tag_start_relative;
+        output.push_str(&markdown[cursor..tag_start]);
+        let Some(tag_end_relative) = markdown[tag_start..].find('>') else {
+            output.push_str(&markdown[tag_start..]);
+            return output;
+        };
+        let tag_end = tag_start + tag_end_relative + 1;
+        output.push_str(&rewrite_html_image_tag_src(
+            &markdown[tag_start..tag_end],
+            source_asset_dirs,
+            asset_dir,
+        ));
+        cursor = tag_end;
+    }
+    output.push_str(&markdown[cursor..]);
+    output
+}
+
+fn rewrite_html_image_tag_src(
+    tag: &str,
+    source_asset_dirs: &[PathBuf],
+    asset_dir: &Path,
+) -> String {
+    let Some((src_start, value_start, value_end)) = find_html_src_attribute(tag) else {
+        return tag.to_string();
+    };
+    let raw_path = &tag[value_start..value_end];
+    let rewritten = rewrite_markdown_link_path(raw_path, source_asset_dirs, asset_dir);
+    if rewritten == raw_path {
+        return tag.to_string();
+    }
+    format!("{}{}{}", &tag[..src_start], &rewritten, &tag[value_end..])
+}
+
+fn find_html_src_attribute(tag: &str) -> Option<(usize, usize, usize)> {
+    let mut search_start = 0;
+    while let Some(src_relative) = find_ascii_case_insensitive(&tag[search_start..], "src") {
+        let src_start = search_start + src_relative;
+        let before = tag[..src_start].chars().next_back();
+        if before.is_some_and(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_')) {
+            search_start = src_start + 3;
+            continue;
+        }
+        let mut cursor = src_start + 3;
+        cursor = skip_ascii_whitespace(tag, cursor);
+        if tag.as_bytes().get(cursor) != Some(&b'=') {
+            search_start = src_start + 3;
+            continue;
+        }
+        cursor += 1;
+        cursor = skip_ascii_whitespace(tag, cursor);
+        let quote = *tag.as_bytes().get(cursor)?;
+        if quote == b'"' || quote == b'\'' {
+            let value_start = cursor + 1;
+            let value_end = tag[value_start..].find(quote as char)? + value_start;
+            return Some((value_start, value_start, value_end));
+        }
+        let value_start = cursor;
+        let value_end = tag[value_start..]
+            .find(|ch: char| ch.is_ascii_whitespace() || ch == '>')
+            .map(|offset| value_start + offset)
+            .unwrap_or(tag.len());
+        return Some((value_start, value_start, value_end));
+    }
+    None
+}
+
+fn skip_ascii_whitespace(value: &str, mut cursor: usize) -> usize {
+    while value
+        .as_bytes()
+        .get(cursor)
+        .is_some_and(|byte| byte.is_ascii_whitespace())
+    {
+        cursor += 1;
+    }
+    cursor
+}
+
+fn find_ascii_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
+    let needle = needle.as_bytes();
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return None;
+    }
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .position(|window| window.eq_ignore_ascii_case(needle))
+}
+
 fn rewrite_markdown_link_path(
     raw_path: &str,
     source_asset_dirs: &[PathBuf],
@@ -2364,7 +2997,7 @@ fn rewrite_markdown_link_path(
     {
         return raw_path.to_string();
     }
-    let path_without_title = trimmed.split_whitespace().next().unwrap_or(trimmed);
+    let path_without_title = markdown_link_path_without_title(trimmed);
     let Some(relative_path) = safe_relative_markdown_path(path_without_title) else {
         return raw_path.to_string();
     };
@@ -2378,6 +3011,22 @@ fn rewrite_markdown_link_path(
         return raw_path.to_string();
     };
     path_to_file_url(&display_path)
+}
+
+fn markdown_link_path_without_title(value: &str) -> &str {
+    let trimmed = value.trim();
+    if let Some(stripped) = trimmed.strip_prefix('<') {
+        if let Some(end) = stripped.find('>') {
+            return &stripped[..end];
+        }
+    }
+    if let Some((path, _title)) = trimmed.split_once(" \"") {
+        return path.trim_end();
+    }
+    if let Some((path, _title)) = trimmed.split_once(" '") {
+        return path.trim_end();
+    }
+    trimmed
 }
 
 fn normalized_source_asset_dirs(request: &SaveBookRequest) -> Vec<PathBuf> {
@@ -2539,49 +3188,117 @@ fn safe_asset_name(title: &str) -> String {
 }
 
 fn fetch_pages(conn: &Connection, book_id: &str) -> Result<Vec<ParsedPageInput>> {
+    fetch_pages_with_query(
+        conn,
+        book_id,
+        "SELECT page_index, text, markdown
+         FROM pages
+         WHERE book_id = ?1
+         ORDER BY page_index",
+        None,
+    )
+}
+
+fn fetch_pages_range(
+    conn: &Connection,
+    book_id: &str,
+    start_page: u32,
+    end_page: u32,
+) -> Result<Vec<ParsedPageInput>> {
+    fetch_pages_with_query(
+        conn,
+        book_id,
+        "SELECT page_index, text, markdown
+         FROM pages
+         WHERE book_id = ?1 AND page_index >= ?2 AND page_index < ?3
+         ORDER BY page_index",
+        Some((start_page, end_page)),
+    )
+}
+
+fn fetch_pages_with_query(
+    conn: &Connection,
+    book_id: &str,
+    query: &str,
+    range: Option<(u32, u32)>,
+) -> Result<Vec<ParsedPageInput>> {
     let mut stmt = conn
-        .prepare(
-            "SELECT page_index, text, markdown
-             FROM pages
-             WHERE book_id = ?1
-             ORDER BY page_index",
-        )
+        .prepare(query)
         .context("failed to prepare converted pages query")?;
-    let pages = stmt
-        .query_map(params![book_id], |row| {
-            Ok(ParsedPageInput {
-                page_index: row.get(0)?,
-                text: row.get(1)?,
-                markdown: row.get(2)?,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .context("failed to map converted pages")?;
+    let map_page = |row: &rusqlite::Row<'_>| {
+        Ok(ParsedPageInput {
+            page_index: row.get(0)?,
+            text: row.get(1)?,
+            markdown: row.get(2)?,
+        })
+    };
+    let pages = match range {
+        Some((start_page, end_page)) => {
+            stmt.query_map(params![book_id, start_page, end_page], map_page)?
+        }
+        None => stmt.query_map(params![book_id], map_page)?,
+    }
+    .collect::<rusqlite::Result<Vec<_>>>()
+    .context("failed to map converted pages")?;
     Ok(pages)
 }
 
 fn fetch_chunks(conn: &Connection, book_id: &str) -> Result<Vec<ParsedChunkInput>> {
+    fetch_chunks_with_query(
+        conn,
+        book_id,
+        "SELECT chunk_id, page_index, text, markdown, rects_json, coordinate_version
+         FROM chunks
+         WHERE book_id = ?1
+         ORDER BY page_index, id",
+        None,
+    )
+}
+
+fn fetch_chunks_range(
+    conn: &Connection,
+    book_id: &str,
+    start_page: u32,
+    end_page: u32,
+) -> Result<Vec<ParsedChunkInput>> {
+    fetch_chunks_with_query(
+        conn,
+        book_id,
+        "SELECT chunk_id, page_index, text, markdown, rects_json, coordinate_version
+         FROM chunks
+         WHERE book_id = ?1 AND page_index >= ?2 AND page_index < ?3
+         ORDER BY page_index, id",
+        Some((start_page, end_page)),
+    )
+}
+
+fn fetch_chunks_with_query(
+    conn: &Connection,
+    book_id: &str,
+    query: &str,
+    range: Option<(u32, u32)>,
+) -> Result<Vec<ParsedChunkInput>> {
     let mut stmt = conn
-        .prepare(
-            "SELECT chunk_id, page_index, text, markdown, rects_json, coordinate_version
-             FROM chunks
-             WHERE book_id = ?1
-             ORDER BY page_index, id",
-        )
+        .prepare(query)
         .context("failed to prepare converted chunks query")?;
-    let chunks = stmt
-        .query_map(params![book_id], |row| {
-            Ok(ParsedChunkInput {
-                chunk_id: row.get(0)?,
-                page_index: row.get(1)?,
-                text: row.get(2)?,
-                markdown: row.get(3)?,
-                rects: parse_rects_for_row(row.get(4)?, 4)?,
-                coordinate_version: row.get(5)?,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .context("failed to map converted chunks")?;
+    let map_chunk = |row: &rusqlite::Row<'_>| {
+        Ok(ParsedChunkInput {
+            chunk_id: row.get(0)?,
+            page_index: row.get(1)?,
+            text: row.get(2)?,
+            markdown: row.get(3)?,
+            rects: parse_rects_for_row(row.get(4)?, 4)?,
+            coordinate_version: row.get(5)?,
+        })
+    };
+    let chunks = match range {
+        Some((start_page, end_page)) => {
+            stmt.query_map(params![book_id, start_page, end_page], map_chunk)?
+        }
+        None => stmt.query_map(params![book_id], map_chunk)?,
+    }
+    .collect::<rusqlite::Result<Vec<_>>>()
+    .context("failed to map converted chunks")?;
     Ok(chunks)
 }
 
@@ -2602,7 +3319,7 @@ fn rebuild_fts(conn: &Connection, book_id: &str) -> Result<()> {
     Ok(())
 }
 
-fn rebuild_embeddings(conn: &Connection, book_id: &str) -> Result<()> {
+fn rebuild_embeddings(conn: &mut Connection, book_id: &str) -> Result<()> {
     conn.execute(
         "DELETE FROM chunk_embeddings WHERE book_id = ?1",
         params![book_id],
@@ -2651,7 +3368,10 @@ fn rebuild_embeddings(conn: &Connection, book_id: &str) -> Result<()> {
     )
     .context("failed to upsert embedding index metadata")?;
 
-    let mut stmt = conn
+    let tx = conn
+        .transaction()
+        .context("failed to start embedding insert transaction")?;
+    let mut stmt = tx
         .prepare(
             "INSERT INTO chunk_embeddings(book_id, chunk_id, provider, base_url, model, dimension, embedding_json)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -2671,6 +3391,9 @@ fn rebuild_embeddings(conn: &Connection, book_id: &str) -> Result<()> {
         ])
         .with_context(|| format!("failed to insert embedding for {}", chunk.chunk_id))?;
     }
+    drop(stmt);
+    tx.commit()
+        .context("failed to commit embedding insert transaction")?;
 
     Ok(())
 }
@@ -2742,11 +3465,7 @@ fn fallback_search(
     query: &str,
     limit: u32,
 ) -> Result<Vec<SearchHit>> {
-    let terms: Vec<String> = query
-        .split_whitespace()
-        .map(|term| term.to_lowercase())
-        .filter(|term| !term.is_empty())
-        .collect();
+    let terms = fallback_query_terms(query);
 
     if terms.is_empty() {
         return Ok(Vec::new());
@@ -2796,6 +3515,34 @@ fn fallback_search(
     });
     hits.truncate(limit.max(1) as usize);
     Ok(hits)
+}
+
+fn fallback_query_terms(query: &str) -> Vec<String> {
+    let compact = query.to_lowercase();
+    let mut terms = compact
+        .split_whitespace()
+        .map(str::trim)
+        .filter(|term| !term.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let cjk_chars = compact
+        .chars()
+        .filter(|ch| contains_cjk_char(*ch))
+        .collect::<Vec<_>>();
+    for size in [2, 3, 4] {
+        for window in cjk_chars.windows(size).take(80) {
+            terms.push(window.iter().collect());
+        }
+    }
+    terms.sort();
+    terms.dedup();
+    terms
+}
+
+fn contains_cjk_char(ch: char) -> bool {
+    ('\u{4e00}'..='\u{9fff}').contains(&ch)
+        || ('\u{3400}'..='\u{4dbf}').contains(&ch)
+        || ('\u{f900}'..='\u{faff}').contains(&ch)
 }
 
 fn vector_search(
@@ -3008,6 +3755,8 @@ fn stable_interpretation_id(request: &SaveInterpretationRequest) -> String {
     request.question.hash(&mut hasher);
     request.answer.hash(&mut hasher);
     request.answer_source.hash(&mut hasher);
+    normalized_interpretation_kind(request).hash(&mut hasher);
+    request.evidence_chunk_snapshots.hash(&mut hasher);
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
@@ -3075,6 +3824,8 @@ fn get_interpretation(conn: &Connection, interpretation_id: &str) -> Result<Save
                 question,
                 answer,
                 answer_source,
+                kind,
+                evidence_chunk_snapshots_json,
                 created_at
          FROM interpretations
          WHERE id = ?1",
@@ -3087,6 +3838,7 @@ fn get_interpretation(conn: &Connection, interpretation_id: &str) -> Result<Save
 fn row_to_interpretation(row: &rusqlite::Row<'_>) -> rusqlite::Result<SavedInterpretation> {
     let page_indexes_json: String = row.get(10)?;
     let evidence_json: String = row.get(11)?;
+    let evidence_snapshots_json: String = row.get(16)?;
     let page_indexes = serde_json::from_str::<Vec<u32>>(&page_indexes_json).map_err(|err| {
         rusqlite::Error::FromSqlConversionFailure(10, rusqlite::types::Type::Text, Box::new(err))
     })?;
@@ -3098,6 +3850,12 @@ fn row_to_interpretation(row: &rusqlite::Row<'_>) -> rusqlite::Result<SavedInter
                 Box::new(err),
             )
         })?;
+    let evidence_chunk_snapshots = serde_json::from_str::<Vec<EvidenceChunkSnapshot>>(
+        &evidence_snapshots_json,
+    )
+    .map_err(|err| {
+        rusqlite::Error::FromSqlConversionFailure(16, rusqlite::types::Type::Text, Box::new(err))
+    })?;
 
     Ok(SavedInterpretation {
         id: row.get(0)?,
@@ -3115,7 +3873,9 @@ fn row_to_interpretation(row: &rusqlite::Row<'_>) -> rusqlite::Result<SavedInter
         question: row.get(12)?,
         answer: row.get(13)?,
         answer_source: AnswerSource::from_db(&row.get::<_, String>(14)?),
-        created_at: row.get(15)?,
+        kind: InterpretationKind::from_db(&row.get::<_, String>(15)?),
+        evidence_chunk_snapshots,
+        created_at: row.get(17)?,
     })
 }
 
@@ -3328,6 +4088,10 @@ mod tests {
         assert_eq!(hits[0].coordinate_version, COORDINATE_VERSION);
         assert_eq!(hits[0].rects.len(), 1);
         assert_eq!(hits[0].rects[0].x0, 0.1);
+        let cjk_hits = hybrid_search_book(&path, &saved.book_id, "风险控制决定", 5)
+            .expect("continuous CJK query should fall back to lexical windows");
+        assert_eq!(cjk_hits.len(), 1);
+        assert!(cjk_hits[0].chunk_id.contains("-p2-c1-"));
         let asset = get_converted_book(&path, &saved.book_id).expect("asset should load");
         assert!(asset.text.contains("复利来自时间和耐心"));
         assert!(asset.markdown.contains("## Page 1"));
@@ -3345,7 +4109,113 @@ mod tests {
         assert!(Path::new(&saved.markdown_path).exists());
         assert!(Path::new(&asset.text_path).exists());
         assert!(Path::new(&asset.markdown_path).exists());
+        for index_name in [
+            "idx_chunks_book_page_id",
+            "idx_chunk_embeddings_book_provider_model",
+            "idx_highlights_book_page_created",
+            "idx_interpretations_book_session_turn",
+        ] {
+            assert!(
+                sqlite_index_exists(&path, index_name),
+                "{index_name} should exist"
+            );
+        }
+        let manifest =
+            get_converted_book_manifest(&path, &saved.book_id).expect("manifest should load");
+        assert_eq!(manifest.book_id, saved.book_id);
+        assert_eq!(manifest.total_pages, 2);
+        assert_eq!(manifest.chunk_count, 2);
+        assert_eq!(manifest.text_char_count, saved.text_char_count as u32);
+        let window =
+            get_converted_book_pages(&path, &saved.book_id, 1, 1).expect("page window should load");
+        assert_eq!(window.start_page, 1);
+        assert_eq!(window.end_page, 2);
+        assert_eq!(window.total_pages, 2);
+        assert_eq!(window.pages.len(), 1);
+        assert_eq!(window.pages[0].page_index, 1);
+        assert_eq!(window.chunks.len(), 1);
+        assert!(window.text.contains("风险控制决定长期收益"));
+        assert!(!window.text.contains("复利来自时间和耐心"));
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn rewrites_mineru_markdown_and_html_image_assets() {
+        let _guard = crate::TEST_ENV_LOCK.lock().expect("env lock");
+        let path = temp_db("mineru-assets");
+        let _ = fs::remove_file(&path);
+        let source_root = std::env::temp_dir().join(format!(
+            "focused-reading-mineru-assets-{}",
+            std::process::id()
+        ));
+        let batch_a = source_root.join("batch-a");
+        let batch_b = source_root.join("batch-b");
+        let _ = fs::remove_dir_all(&source_root);
+        fs::create_dir_all(batch_a.join("images")).expect("batch a images should create");
+        fs::create_dir_all(batch_b.join("images")).expect("batch b images should create");
+        fs::write(batch_a.join("images/chart one.png"), b"chart")
+            .expect("chart image should write");
+        fs::write(batch_b.join("images/table cell.png"), b"table")
+            .expect("table image should write");
+
+        let saved = save_book(
+            &path,
+            SaveBookRequest {
+                title: "MinerU 图片资源测试".to_string(),
+                total_pages: 1,
+                parser_engine: "mineru-content-list-batched".to_string(),
+                coordinate_mode: "text-only".to_string(),
+                quality: None,
+                source_pdf_path: None,
+                source_asset_dir: None,
+                source_asset_dirs: vec![
+                    batch_a.to_string_lossy().to_string(),
+                    batch_b.to_string_lossy().to_string(),
+                ],
+                pages: vec![ParsedPageInput {
+                    page_index: 0,
+                    text: "图表页".to_string(),
+                    markdown: "![chart](batch-a/images/chart one.png)\n\n<table><tr><td rowspan=\"2\"><img src=\"batch-b/images/table cell.png\"/></td></tr></table>\n\n[外链](https://example.com)".to_string(),
+                }],
+                chunks: vec![ParsedChunkInput {
+                    chunk_id: "p1-c1".to_string(),
+                    page_index: 0,
+                    text: "图表页".to_string(),
+                    markdown: "![chart](batch-a/images/chart one.png)\n\n<table><tr><td><img src=\"batch-b/images/table cell.png\"/></td></tr></table>".to_string(),
+                    rects: Vec::new(),
+                    coordinate_version: COORDINATE_VERSION,
+                }],
+            },
+        )
+        .expect("book should save");
+
+        let asset_dir = converted_book_asset_dir(&path, &saved.book_id);
+        assert!(asset_dir.join("batch-a/images/chart one.png").exists());
+        assert!(asset_dir.join("batch-b/images/table cell.png").exists());
+        let asset = get_converted_book(&path, &saved.book_id).expect("asset should load");
+        assert!(asset.markdown.contains("file://"));
+        assert!(asset.markdown.contains("chart%20one.png"));
+        assert!(asset.markdown.contains("table%20cell.png"));
+        assert!(asset.markdown.contains("<td rowspan=\"2\">"));
+        assert!(asset.markdown.contains("[外链](https://example.com)"));
+        assert!(!asset.markdown.contains("batch-a/images/chart one.png"));
+        assert!(!asset.markdown.contains("batch-b/images/table cell.png"));
+
+        let _ = fs::remove_dir_all(&source_root);
+        let _ = fs::remove_dir_all(asset_dir);
+        let _ = fs::remove_file(&path);
+    }
+
+    fn sqlite_index_exists(path: &Path, index_name: &str) -> bool {
+        let conn = open_database(path).expect("database should open");
+        conn.query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?1",
+            params![index_name],
+            |_| Ok(true),
+        )
+        .optional()
+        .expect("index lookup should run")
+        .unwrap_or(false)
     }
 
     #[test]
@@ -4438,6 +5308,8 @@ mod tests {
                 question: Some("为什么是时间？".to_string()),
                 answer: "因为复利依赖长期积累。[p1-c1]".to_string(),
                 answer_source: AnswerSource::Llm,
+                kind: None,
+                evidence_chunk_snapshots: Vec::new(),
             },
         )
         .expect("interpretation should save");
@@ -4454,11 +5326,88 @@ mod tests {
         assert_eq!(rows[0].position_end, Some(6));
         assert_eq!(rows[0].page_indexes, vec![0]);
         assert_eq!(rows[0].evidence_chunk_ids, vec![saved_chunk_id]);
+        assert_eq!(rows[0].evidence_chunk_snapshots.len(), 1);
+        assert_eq!(
+            rows[0].evidence_chunk_snapshots[0].chunk_id,
+            rows[0].evidence_chunk_ids[0]
+        );
+        assert_eq!(
+            rows[0].evidence_chunk_snapshots[0].chunk_id_version,
+            chunk_id::NAMESPACED_CHUNK_ID_VERSION
+        );
+        assert!(rows[0].evidence_chunk_snapshots[0]
+            .content_hash
+            .as_deref()
+            .is_some_and(|hash| hash.len() == 8));
         assert_eq!(rows[0].question.as_deref(), Some("为什么是时间？"));
+        assert_eq!(rows[0].kind, InterpretationKind::Interpretation);
 
         delete_interpretation(&path, &saved.id).expect("interpretation should delete");
         let rows = list_interpretations(&path, &saved_book.book_id).expect("history should list");
         assert!(rows.is_empty());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn saves_reads_and_clears_book_tldr_cache() {
+        let _guard = crate::TEST_ENV_LOCK.lock().expect("env lock");
+        let path = temp_db("book-tldr");
+        let _ = fs::remove_file(&path);
+        let saved_book = save_book(
+            &path,
+            SaveBookRequest {
+                title: "TLDR 测试".to_string(),
+                total_pages: 1,
+                parser_engine: "test".to_string(),
+                coordinate_mode: "text-only".to_string(),
+                quality: None,
+                source_pdf_path: None,
+                source_asset_dir: None,
+                source_asset_dirs: Vec::new(),
+                pages: vec![ParsedPageInput {
+                    page_index: 0,
+                    text: "复利来自时间。".to_string(),
+                    markdown: "## Page 1\n\n复利来自时间。".to_string(),
+                }],
+                chunks: vec![ParsedChunkInput {
+                    chunk_id: "p1-c1".to_string(),
+                    page_index: 0,
+                    text: "复利来自时间。".to_string(),
+                    markdown: "### [p1-c1] Page 1\n\n复利来自时间。".to_string(),
+                    rects: Vec::new(),
+                    coordinate_version: COORDINATE_VERSION,
+                }],
+            },
+        )
+        .expect("book should save");
+
+        assert!(get_book_tldr(&path, &saved_book.book_id)
+            .expect("TLDR should read")
+            .is_none());
+        let saved_tldr = save_book_tldr(
+            &path,
+            &saved_book.book_id,
+            "这本书解释复利为何依赖时间、纪律和风险控制。",
+            "test/model",
+            TLDR_SOURCE_VERSION,
+        )
+        .expect("TLDR should save");
+        assert_eq!(saved_tldr.book_id, saved_book.book_id);
+        assert_eq!(saved_tldr.model, "test/model");
+        assert_eq!(saved_tldr.source_version, TLDR_SOURCE_VERSION);
+
+        let manifest =
+            get_converted_book_manifest(&path, &saved_book.book_id).expect("manifest should load");
+        assert_eq!(
+            manifest.tldr_text.as_deref(),
+            Some(saved_tldr.text.as_str())
+        );
+        assert_eq!(manifest.tldr_model.as_deref(), Some("test/model"));
+
+        rebuild_search_index(&path, &saved_book.book_id).expect("index should rebuild");
+        assert!(get_book_tldr(&path, &saved_book.book_id)
+            .expect("TLDR should read after rebuild")
+            .is_none());
         let _ = fs::remove_file(&path);
     }
 
@@ -4533,6 +5482,8 @@ mod tests {
                 question: None,
                 answer: "初始解读。[b503f19a9-p1-c1-deadbeef]".to_string(),
                 answer_source: AnswerSource::Llm,
+                kind: None,
+                evidence_chunk_snapshots: Vec::new(),
             },
         )
         .expect("interpretation should save");
@@ -4540,6 +5491,182 @@ mod tests {
         let rows = list_interpretations(&path, &saved_book.book_id).expect("history should list");
         assert_eq!(rows[0].id, saved.id);
         assert_eq!(rows[0].evidence_chunk_ids, vec![saved_chunk_id]);
+        assert_eq!(
+            rows[0].evidence_chunk_snapshots[0].content_hash.as_deref(),
+            Some("deadbeef")
+        );
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn rebinding_legacy_interpretation_ids_keeps_chunk_id_snapshots_auditable() {
+        let _guard = crate::TEST_ENV_LOCK.lock().expect("env lock");
+        let path = temp_db("interpretation-snapshot-reparse");
+        let _ = fs::remove_file(&path);
+        let first_book = save_book(
+            &path,
+            SaveBookRequest {
+                title: "重解析审计测试".to_string(),
+                total_pages: 1,
+                parser_engine: "test".to_string(),
+                coordinate_mode: "text-only".to_string(),
+                quality: None,
+                source_pdf_path: None,
+                source_asset_dir: None,
+                source_asset_dirs: Vec::new(),
+                pages: vec![ParsedPageInput {
+                    page_index: 0,
+                    text: "甲段。乙段。".to_string(),
+                    markdown: "## Page 1\n\n甲段。乙段。".to_string(),
+                }],
+                chunks: vec![
+                    ParsedChunkInput {
+                        chunk_id: "p1-c1".to_string(),
+                        page_index: 0,
+                        text: "甲段。".to_string(),
+                        markdown: "### [p1-c1] Page 1\n\n甲段。".to_string(),
+                        rects: Vec::new(),
+                        coordinate_version: COORDINATE_VERSION,
+                    },
+                    ParsedChunkInput {
+                        chunk_id: "p1-c2".to_string(),
+                        page_index: 0,
+                        text: "乙段。".to_string(),
+                        markdown: "### [p1-c2] Page 1\n\n乙段。".to_string(),
+                        rects: Vec::new(),
+                        coordinate_version: COORDINATE_VERSION,
+                    },
+                ],
+            },
+        )
+        .expect("first parse should save");
+        let first_chunk_id = get_chunk(&path, &first_book.book_id, "p1-c2")
+            .expect("legacy alias should resolve")
+            .expect("chunk should exist")
+            .chunk_id;
+        let saved = save_interpretation(
+            &path,
+            SaveInterpretationRequest {
+                book_id: first_book.book_id.clone(),
+                selection_text: "乙段".to_string(),
+                session_id: Some("snapshot-session".to_string()),
+                turn_index: Some(0),
+                prefix: "甲段。".to_string(),
+                suffix: "".to_string(),
+                page_index: Some(0),
+                position_start: Some(3),
+                position_end: Some(5),
+                page_indexes: vec![0],
+                evidence_chunk_ids: vec!["p1-c2".to_string()],
+                question: None,
+                answer: "乙段需要核对。[p1-c2]".to_string(),
+                answer_source: AnswerSource::Llm,
+                kind: None,
+                evidence_chunk_snapshots: Vec::new(),
+            },
+        )
+        .expect("interpretation should save");
+        assert_eq!(saved.evidence_chunk_ids, vec![first_chunk_id.clone()]);
+
+        let reparsed_book = save_book(
+            &path,
+            SaveBookRequest {
+                title: "重解析审计测试".to_string(),
+                total_pages: 1,
+                parser_engine: "test".to_string(),
+                coordinate_mode: "text-only".to_string(),
+                quality: None,
+                source_pdf_path: None,
+                source_asset_dir: None,
+                source_asset_dirs: Vec::new(),
+                pages: vec![ParsedPageInput {
+                    page_index: 0,
+                    text: "甲段。乙段。".to_string(),
+                    markdown: "## Page 1\n\n甲段。乙段。".to_string(),
+                }],
+                chunks: vec![
+                    ParsedChunkInput {
+                        chunk_id: "p1-c1".to_string(),
+                        page_index: 0,
+                        text: "甲段。".to_string(),
+                        markdown: "### [p1-c1] Page 1\n\n甲段。".to_string(),
+                        rects: Vec::new(),
+                        coordinate_version: COORDINATE_VERSION,
+                    },
+                    ParsedChunkInput {
+                        chunk_id: "p1-c2".to_string(),
+                        page_index: 0,
+                        text: "乙段更新。".to_string(),
+                        markdown: "### [p1-c2] Page 1\n\n乙段更新。".to_string(),
+                        rects: Vec::new(),
+                        coordinate_version: COORDINATE_VERSION,
+                    },
+                ],
+            },
+        )
+        .expect("reparse should save");
+        assert_eq!(reparsed_book.book_id, first_book.book_id);
+
+        let rows = list_interpretations(&path, &first_book.book_id).expect("history should list");
+        let rebound_chunk_id = get_chunk(&path, &first_book.book_id, "p1-c2")
+            .expect("legacy alias should resolve after reparse")
+            .expect("chunk should exist")
+            .chunk_id;
+        assert_ne!(rebound_chunk_id, first_chunk_id);
+        assert_eq!(rows[0].id, saved.id);
+        assert_eq!(rows[0].evidence_chunk_ids, vec![rebound_chunk_id]);
+        let first_content_hash = chunk_id::locator_from_chunk_id(&first_chunk_id)
+            .and_then(|locator| locator.content_hash);
+        assert_eq!(
+            rows[0].evidence_chunk_snapshots[0].content_hash.as_deref(),
+            first_content_hash.as_deref()
+        );
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn preserves_unresolved_locator_chunk_id() {
+        let _guard = crate::TEST_ENV_LOCK.lock().expect("env lock");
+        let path = temp_db("unresolved-chunk-id-locator");
+        let _ = fs::remove_file(&path);
+        let saved_book = save_book(
+            &path,
+            SaveBookRequest {
+                title: "无法解析 chunk id".to_string(),
+                total_pages: 1,
+                parser_engine: "test".to_string(),
+                coordinate_mode: "text-only".to_string(),
+                quality: Some(TextQuality {
+                    char_count: 6,
+                    replacement_char_ratio: 0.0,
+                    control_char_ratio: 0.0,
+                    looks_usable: true,
+                }),
+                source_pdf_path: None,
+                source_asset_dir: None,
+                source_asset_dirs: Vec::new(),
+                pages: vec![ParsedPageInput {
+                    page_index: 0,
+                    text: "只有一段。".to_string(),
+                    markdown: "## Page 1\n\n只有一段。".to_string(),
+                }],
+                chunks: vec![ParsedChunkInput {
+                    chunk_id: "p1-c1".to_string(),
+                    page_index: 0,
+                    text: "只有一段。".to_string(),
+                    markdown: "### [p1-c1] Page 1\n\n只有一段。".to_string(),
+                    rects: Vec::new(),
+                    coordinate_version: COORDINATE_VERSION,
+                }],
+            },
+        )
+        .expect("book should save");
+        let conn = open_database(&path).expect("db should open");
+
+        let unresolved = resolve_chunk_id(&conn, &saved_book.book_id, "p9-c9")
+            .expect("unresolved locator should preserve original id");
+
+        assert_eq!(unresolved, "p9-c9");
         let _ = fs::remove_file(&path);
     }
 
@@ -4598,6 +5725,8 @@ mod tests {
                 question: None,
                 answer: "初始解读。[p1-c1]".to_string(),
                 answer_source: AnswerSource::Llm,
+                kind: None,
+                evidence_chunk_snapshots: Vec::new(),
             },
         )
         .expect("first turn should save");
@@ -4619,6 +5748,8 @@ mod tests {
                 question: Some("为什么？".to_string()),
                 answer: "因为时间是变量。[p1-c1]".to_string(),
                 answer_source: AnswerSource::LocalFallback,
+                kind: None,
+                evidence_chunk_snapshots: Vec::new(),
             },
         )
         .expect("follow-up should save");

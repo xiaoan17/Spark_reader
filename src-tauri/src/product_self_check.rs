@@ -209,11 +209,13 @@ async fn run_product_self_check_in_dir(
             book_id: saved.book_id.clone(),
             selection_text: "unique sentinel risk".to_string(),
             page_indexes: vec![0],
+            selection_rects: Vec::new(),
             focus_chunk_ids: vec![focus_chunk_id.clone()],
             question: None,
             prior_answer: None,
             prior_evidence_chunk_ids: Vec::new(),
             follow_up_history: Vec::new(),
+            lightweight: false,
             mode: InterpretMode::Deep,
         },
     )?;
@@ -253,6 +255,7 @@ async fn run_product_self_check_in_dir(
             book_id: saved.book_id.clone(),
             selection_text: "unique sentinel risk".to_string(),
             page_indexes: vec![0],
+            selection_rects: Vec::new(),
             focus_chunk_ids: vec![focus_chunk_id.clone()],
             question: Some("How does the follow-up keep the same anchor?".to_string()),
             prior_answer: Some(interpretation.answer.clone()),
@@ -265,6 +268,7 @@ async fn run_product_self_check_in_dir(
                 question: "What is the key claim?".to_string(),
                 answer: interpretation.answer.clone(),
             }],
+            lightweight: false,
             mode: InterpretMode::Deep,
         },
     )?;
@@ -299,6 +303,8 @@ async fn run_product_self_check_in_dir(
             question: None,
             answer: interpretation.answer.clone(),
             answer_source: interpretation.answer_source.into(),
+            kind: None,
+            evidence_chunk_snapshots: Vec::new(),
         },
     )?;
     let saved_follow_up = storage::save_interpretation(
@@ -322,6 +328,8 @@ async fn run_product_self_check_in_dir(
             question: Some("How does the follow-up keep the same anchor?".to_string()),
             answer: follow_up.answer.clone(),
             answer_source: follow_up.answer_source.into(),
+            kind: None,
+            evidence_chunk_snapshots: Vec::new(),
         },
     )?;
     let history = storage::list_interpretations(&db_path, &saved.book_id)?;

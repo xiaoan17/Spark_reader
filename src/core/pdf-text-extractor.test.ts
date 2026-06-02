@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import {
   buildChunks,
+  extractPdfText,
   pageToMarkdown,
   textContentToBlocks,
   textContentToPlainText,
@@ -134,5 +135,57 @@ describe("pdf text extraction helpers", () => {
         y1: 20 / 200,
       },
     ])
+  })
+
+  it("reports extraction progress after each PDF page", async () => {
+    const makePage = (text: string) => ({
+      getViewport: () => ({
+        width: 200,
+        height: 200,
+        convertToViewportRectangle: ([x0, y0, x1, y1]: [number, number, number, number]) => [
+          x0,
+          200 - y0,
+          x1,
+          200 - y1,
+        ],
+      }),
+      getTextContent: async () =>
+        ({
+          items: [
+            {
+              str: text,
+              width: 40,
+              height: 10,
+              transform: [10, 0, 0, 10, 10, 180],
+              dir: "ltr",
+              fontName: "g_test",
+              hasEOL: true,
+            },
+          ],
+          styles: {},
+        }) as unknown as TextContent,
+    })
+    const pdf = {
+      numPages: 2,
+      getPage: vi.fn(async (pageNumber: number) =>
+        makePage(pageNumber === 1 ? "第一页" : "第二页"),
+      ),
+    }
+    const onProgress = vi.fn()
+
+    const parsed = await extractPdfText(pdf as never, { onProgress })
+
+    expect(parsed.pages).toHaveLength(2)
+    expect(onProgress).toHaveBeenCalledTimes(2)
+    expect(onProgress).toHaveBeenNthCalledWith(1, {
+      pageNumber: 1,
+      totalPages: 2,
+      percent: 50,
+    })
+    expect(onProgress).toHaveBeenNthCalledWith(2, {
+      pageNumber: 2,
+      totalPages: 2,
+      percent: 100,
+    })
   })
 })

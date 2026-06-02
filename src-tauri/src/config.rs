@@ -3,6 +3,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -599,7 +602,19 @@ fn save_secret_to_dotenv(name: &'static str, value: &str) -> Result<(), ConfigEr
     let mut output = lines.join("\n");
     output.push('\n');
     fs::write(&path, output).map_err(|err| ConfigError::WriteSettings(err.to_string()))?;
+    restrict_secret_file_permissions(&path)?;
     env::set_var(name, value);
+    Ok(())
+}
+
+#[cfg(unix)]
+fn restrict_secret_file_permissions(path: &Path) -> Result<(), ConfigError> {
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        .map_err(|err| ConfigError::WriteSettings(err.to_string()))
+}
+
+#[cfg(not(unix))]
+fn restrict_secret_file_permissions(_path: &Path) -> Result<(), ConfigError> {
     Ok(())
 }
 
@@ -754,6 +769,7 @@ mod tests {
         assert!(fs::read_to_string(&env_path)
             .expect("dotenv should exist")
             .contains("EMBEDDING_API_KEY=test-key"));
+        assert_dotenv_permissions_are_private(&env_path);
         assert!(
             !fs::read_to_string(dir.join("llm-settings.json"))
                 .expect("settings should exist")
@@ -945,6 +961,7 @@ mod tests {
 
         let dotenv = fs::read_to_string(&env_path).expect("dotenv should exist");
         assert!(dotenv.contains("DEEPSEEK_API_KEY=deepseek-test-key"));
+        assert_dotenv_permissions_are_private(&env_path);
         let json = fs::read_to_string(dir.join("llm-settings.json")).expect("settings JSON");
         assert!(!json.contains("deepseek-test-key"));
         assert!(json.contains("deepseek-v4-flash"));
@@ -979,6 +996,7 @@ mod tests {
         assert!(saved.api_token_configured);
         let dotenv = fs::read_to_string(&env_path).expect("dotenv should exist");
         assert!(dotenv.contains("MINERU_API_TOKEN=mineru-test-token"));
+        assert_dotenv_permissions_are_private(&env_path);
         let json = fs::read_to_string(dir.join("llm-settings.json")).expect("settings JSON");
         assert!(json.contains("https://mineru.net"));
         assert!(!json.contains("mineru-test-token"));
@@ -1020,6 +1038,7 @@ mod tests {
         let dotenv = fs::read_to_string(&env_path).expect("dotenv should exist");
         assert!(dotenv.contains("DEEPSEEK_API_KEY=legacy-deepseek-key"));
         assert!(dotenv.contains("EMBEDDING_API_KEY=legacy-embedding-key"));
+        assert_dotenv_permissions_are_private(&env_path);
         let json = fs::read_to_string(dir.join("llm-settings.json")).expect("settings JSON");
         assert!(!json.contains("legacy-deepseek-key"));
         assert!(!json.contains("legacy-embedding-key"));
@@ -1030,4 +1049,19 @@ mod tests {
         env::remove_var("DEEPSEEK_API_KEY");
         env::remove_var("EMBEDDING_API_KEY");
     }
+
+    #[cfg(unix)]
+    fn assert_dotenv_permissions_are_private(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mode = fs::metadata(path)
+            .expect("dotenv metadata should exist")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    #[cfg(not(unix))]
+    fn assert_dotenv_permissions_are_private(_path: &Path) {}
 }

@@ -21,6 +21,10 @@ export type TextAssetMetadata = {
   originalPdfPath?: string
   sourcePdfPath?: string
   sourcePdfFingerprint?: string
+  tldrText?: string | null
+  tldrGeneratedAt?: string | null
+  tldrModel?: string | null
+  tldrSourceVersion?: number | null
 }
 
 export type EvidencePreview = {
@@ -42,7 +46,23 @@ export type FollowUpTurn = {
   answer: string
 }
 
+export type SparkMode = "spark" | "note"
+
 export type AnswerSource = "llm" | "local_fallback"
+export type InterpretationKind = "interpretation" | "spark" | "note"
+
+export type DocumentTldrState = {
+  text: string
+  generatedAt: string
+  model: string
+  sourceVersion: number
+}
+
+export type EvidenceChunkSnapshot = {
+  chunkId: string
+  chunkIdVersion: number
+  contentHash?: string | null
+}
 
 export type SavedInterpretation = {
   id: string
@@ -60,6 +80,8 @@ export type SavedInterpretation = {
   question?: string | null
   answer: string
   answerSource?: AnswerSource
+  kind?: InterpretationKind
+  evidenceChunkSnapshots?: EvidenceChunkSnapshot[]
   createdAt: string
 }
 
@@ -82,6 +104,7 @@ export type ParsedPage = {
   pageIndex: number
   text: string
   markdown: string
+  loaded?: boolean
 }
 
 export type ParsedChunk = {
@@ -120,6 +143,16 @@ type ReaderState = {
   interpretationSessionId: string
   highlights: SavedHighlight[]
   interpretationHistory: SavedInterpretation[]
+  tldr: DocumentTldrState | null
+  tldrLoading: boolean
+  tldrError: string
+  tldrDismissed: boolean
+  tldrLlmReady: boolean
+  activeSparkSessionId: string
+  sparkMode: SparkMode
+  sparkDraft: string
+  sparkQuestion: string
+  sparkError: string
   parsedPages: ParsedPage[]
   parsedChunks: ParsedChunk[]
   parsedText: string
@@ -137,6 +170,12 @@ type ReaderState = {
     text: string,
     markdown: string,
     metadata?: TextAssetMetadata | null,
+  ) => void
+  mergeParsedDocumentWindow: (
+    pages: ParsedPage[],
+    chunks: ParsedChunk[],
+    text?: string,
+    markdown?: string,
   ) => void
   setCurrentPage: (page: number) => void
   setVisiblePage: (page: number) => void
@@ -158,6 +197,16 @@ type ReaderState = {
   setInterpretationSessionId: (sessionId: string) => void
   setHighlights: (highlights: SavedHighlight[]) => void
   setInterpretationHistory: (history: SavedInterpretation[]) => void
+  setTldr: (tldr: DocumentTldrState | null) => void
+  setTldrLoading: (loading: boolean) => void
+  setTldrError: (message: string) => void
+  setTldrDismissed: (dismissed: boolean) => void
+  setTldrLlmReady: (ready: boolean) => void
+  setActiveSparkSessionId: (sessionId: string) => void
+  setSparkMode: (mode: SparkMode) => void
+  setSparkDraft: (draft: string) => void
+  setSparkQuestion: (question: string) => void
+  setSparkError: (message: string) => void
   setFollowUps: (followUps: FollowUpTurn[]) => void
   addInterpretationHistory: (item: SavedInterpretation) => void
   addHighlight: (highlight: SavedHighlight) => void
@@ -189,6 +238,16 @@ export const useReaderStore = create<ReaderState>((set) => ({
   interpretationSessionId: "",
   highlights: [],
   interpretationHistory: [],
+  tldr: null,
+  tldrLoading: false,
+  tldrError: "",
+  tldrDismissed: false,
+  tldrLlmReady: true,
+  activeSparkSessionId: "",
+  sparkMode: "spark",
+  sparkDraft: "",
+  sparkQuestion: "",
+  sparkError: "",
   parsedPages: [],
   parsedChunks: [],
   parsedText: "",
@@ -219,6 +278,16 @@ export const useReaderStore = create<ReaderState>((set) => ({
       interpretationSessionId: "",
       highlights: [],
       interpretationHistory: [],
+      tldr: null,
+      tldrLoading: false,
+      tldrError: "",
+      tldrDismissed: false,
+      tldrLlmReady: true,
+      activeSparkSessionId: "",
+      sparkMode: "spark",
+      sparkDraft: "",
+      sparkQuestion: "",
+      sparkError: "",
       parsedPages: [],
       parsedChunks: [],
       parsedText: "",
@@ -244,6 +313,37 @@ export const useReaderStore = create<ReaderState>((set) => ({
       coordinateMode: metadata?.coordinateMode ?? "text-only",
       activeChunkId: "",
       textQuality: metadata?.quality ?? null,
+      tldr: metadata?.tldrText?.trim()
+        ? {
+            text: metadata.tldrText,
+            generatedAt: metadata.tldrGeneratedAt ?? "",
+            model: metadata.tldrModel ?? "",
+            sourceVersion: metadata.tldrSourceVersion ?? 0,
+          }
+        : null,
+      tldrLoading: false,
+      tldrError: "",
+      tldrDismissed: false,
+    }),
+  mergeParsedDocumentWindow: (pages, chunks, text = "", markdown = "") =>
+    set((state) => {
+      const pageMap = new Map(state.parsedPages.map((page) => [page.pageIndex, page]))
+      for (const page of pages) {
+        pageMap.set(page.pageIndex, { ...page, loaded: page.loaded ?? true })
+      }
+      const chunkMap = new Map(state.parsedChunks.map((chunk) => [chunk.chunkId, chunk]))
+      for (const chunk of chunks) {
+        chunkMap.set(chunk.chunkId, chunk)
+      }
+      const nextPages = [...pageMap.values()].sort((left, right) => left.pageIndex - right.pageIndex)
+      return {
+        parsedPages: nextPages,
+        parsedChunks: [...chunkMap.values()].sort(
+          (left, right) => left.pageIndex - right.pageIndex || left.chunkId.localeCompare(right.chunkId),
+        ),
+        parsedText: buildLoadedPagesText(nextPages, "text"),
+        parsedMarkdown: buildLoadedPagesText(nextPages, "markdown"),
+      }
     }),
   setCurrentPage: (currentPage) =>
     set({
@@ -259,6 +359,10 @@ export const useReaderStore = create<ReaderState>((set) => ({
       followUps: [],
       interpretationSessionId: "",
       activeChunkId: "",
+      activeSparkSessionId: "",
+      sparkDraft: "",
+      sparkQuestion: "",
+      sparkError: "",
       phase: "reading",
     }),
   setVisiblePage: (currentPage) => set({ currentPage }),
@@ -276,6 +380,10 @@ export const useReaderStore = create<ReaderState>((set) => ({
       followUps: [],
       interpretationSessionId: "",
       activeChunkId: "",
+      activeSparkSessionId: "",
+      sparkDraft: "",
+      sparkQuestion: "",
+      sparkError: "",
       phase: "reading",
     }),
   setActiveChunk: (activeChunkId) => set({ activeChunkId }),
@@ -307,12 +415,30 @@ export const useReaderStore = create<ReaderState>((set) => ({
     }),
   setEvidence: (evidence) => set({ evidence }),
   setAgentTrace: (agentTrace) => set({ agentTrace }),
-  setInterpretation: (interpretation) => set({ interpretation, interpretationError: "" }),
-  setAnswerSource: (answerSource) => set({ answerSource }),
+  setInterpretation: (interpretation) =>
+    set((state) => ({
+      interpretation,
+      interpretationError: state.answerSource === "local_fallback" ? state.interpretationError : "",
+    })),
+  setAnswerSource: (answerSource) =>
+    set((state) => ({
+      answerSource,
+      interpretationError: answerSource === "llm" ? "" : state.interpretationError,
+    })),
   setInterpretationError: (interpretationError) => set({ interpretationError }),
   setInterpretationSessionId: (interpretationSessionId) => set({ interpretationSessionId }),
   setHighlights: (highlights) => set({ highlights }),
   setInterpretationHistory: (interpretationHistory) => set({ interpretationHistory }),
+  setTldr: (tldr) => set({ tldr, tldrError: "", tldrLoading: false, tldrDismissed: false }),
+  setTldrLoading: (tldrLoading) => set({ tldrLoading }),
+  setTldrError: (tldrError) => set({ tldrError, tldrLoading: false }),
+  setTldrDismissed: (tldrDismissed) => set({ tldrDismissed }),
+  setTldrLlmReady: (tldrLlmReady) => set({ tldrLlmReady }),
+  setActiveSparkSessionId: (activeSparkSessionId) => set({ activeSparkSessionId }),
+  setSparkMode: (sparkMode) => set({ sparkMode }),
+  setSparkDraft: (sparkDraft) => set({ sparkDraft }),
+  setSparkQuestion: (sparkQuestion) => set({ sparkQuestion }),
+  setSparkError: (sparkError) => set({ sparkError }),
   setFollowUps: (followUps) => set({ followUps }),
   addInterpretationHistory: (item) =>
     set((state) => ({
@@ -357,6 +483,10 @@ export const useReaderStore = create<ReaderState>((set) => ({
       followUps: [],
       interpretationSessionId: "",
       activeChunkId: "",
+      activeSparkSessionId: "",
+      sparkDraft: "",
+      sparkQuestion: "",
+      sparkError: "",
       phase: "reading",
     }),
   clearSelection: () =>
@@ -372,6 +502,17 @@ export const useReaderStore = create<ReaderState>((set) => ({
       followUps: [],
       interpretationSessionId: "",
       activeChunkId: "",
+      activeSparkSessionId: "",
+      sparkDraft: "",
+      sparkQuestion: "",
+      sparkError: "",
       phase: "reading",
     }),
 }))
+
+function buildLoadedPagesText(pages: ParsedPage[], key: "text" | "markdown") {
+  return pages
+    .filter((page) => page.loaded !== false && page[key].trim())
+    .map((page) => page[key])
+    .join("\n\n")
+}

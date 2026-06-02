@@ -59,7 +59,24 @@ describe("local interpreter citations", () => {
     )
 
     expect(answer).toContain("[p1-c1]")
+    expect(answer).toContain("浏览器内存文本检索")
     expect(answer).not.toContain("[local-p1-1]")
+    expect(answer).not.toContain("后端")
+  })
+
+  it("describes indexed follow-up fallback in product language", () => {
+    const answer = makeLocalFollowUpAnswer(
+      "为什么强调长期？",
+      "复利来自长期坚持",
+      pages,
+      [],
+      chunks,
+      true,
+      0,
+    )
+
+    expect(answer).toContain("桌面书库索引")
+    expect(answer).not.toContain("后端")
   })
 
   it("falls back to local page citation only when no chunk exists", () => {

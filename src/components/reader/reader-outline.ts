@@ -10,6 +10,7 @@ export type ReaderOutlineEntry = {
   preview: string
   firstChunkId?: string
   sectionNumber?: string
+  anchorText?: string
 }
 
 export function buildReaderOutline(
@@ -27,12 +28,16 @@ export function buildReaderOutline(
   const chunkCounts = new Map<number, number>()
   const firstChunkIds = new Map<number, string>()
   const firstChunkText = new Map<number, string>()
+  const chunksByPage = new Map<number, ParsedChunk[]>()
   for (const chunk of chunks) {
     chunkCounts.set(chunk.pageIndex, (chunkCounts.get(chunk.pageIndex) ?? 0) + 1)
     if (!firstChunkIds.has(chunk.pageIndex)) {
       firstChunkIds.set(chunk.pageIndex, chunk.chunkId)
       firstChunkText.set(chunk.pageIndex, chunk.text)
     }
+    const pageChunks = chunksByPage.get(chunk.pageIndex) ?? []
+    pageChunks.push(chunk)
+    chunksByPage.set(chunk.pageIndex, pageChunks)
   }
   const pageMap = new Map(pages.map((page) => [page.pageIndex, page]))
 
@@ -41,12 +46,17 @@ export function buildReaderOutline(
     .map((entry) => {
       const page = pageMap.get(entry.pageIndex)
       const preview = entry.preview || compactPreview(page?.text ?? firstChunkText.get(entry.pageIndex) ?? "")
+      const anchorText = entry.anchorText ?? anchorTextForHeading(entry, chunksByPage)
       return {
         ...entry,
         level: clampOutlineLevel(entry.level),
         chunkCount: chunkCounts.get(entry.pageIndex) ?? entry.chunkCount ?? 0,
         preview,
-        firstChunkId: entry.firstChunkId ?? firstChunkIds.get(entry.pageIndex),
+        anchorText,
+        firstChunkId:
+          entry.firstChunkId ??
+          firstChunkIdForHeading({ ...entry, anchorText }, chunksByPage) ??
+          firstChunkIds.get(entry.pageIndex),
       }
     })
 }
@@ -76,6 +86,7 @@ export async function buildPdfOutlineEntries(pdf: PDFDocumentProxy): Promise<Rea
             ? sectionLevel(parsedTitle.sectionNumber)
             : clampOutlineLevel(level),
           sectionNumber: parsedTitle.sectionNumber,
+          anchorText: cleanOutlineLine(item.title),
           chunkCount: 0,
           preview: "",
         })
@@ -163,6 +174,7 @@ function outlineEntriesFromMarkdown(markdown: string, pageIndex: number) {
             ? sectionLevel(parsed.sectionNumber)
             : clampOutlineLevel(headingMatch[1].length),
           sectionNumber: parsed.sectionNumber,
+          anchorText: cleanOutlineLine(headingMatch[2]),
           chunkCount: 0,
           preview: "",
         })
@@ -179,6 +191,7 @@ function outlineEntriesFromMarkdown(markdown: string, pageIndex: number) {
         title: numberedHeading.title,
         level: sectionLevel(numberedHeading.sectionNumber),
         sectionNumber: numberedHeading.sectionNumber,
+        anchorText: cleanOutlineLine(rawLine),
         chunkCount: 0,
         preview: "",
       })
@@ -202,6 +215,7 @@ function outlineEntriesFromText(text: string, pageIndex: number, source = "text"
       title: parsed.title,
       level: sectionLevel(parsed.sectionNumber),
       sectionNumber: parsed.sectionNumber,
+      anchorText: cleanOutlineLine(line),
       chunkCount: 0,
       preview: "",
     })
@@ -230,16 +244,50 @@ function firstChunkIdForHeading(
 ) {
   const chunks = chunksByPage.get(entry.pageIndex) ?? []
   const headingNeedles = [
+    entry.anchorText ?? "",
     entry.sectionNumber ? `${entry.sectionNumber} ${entry.title}` : "",
     entry.title,
   ]
-    .map(normalizeKey)
+    .map(normalizeHeadingKey)
     .filter(Boolean)
   return (
     chunks.find((chunk) => {
-      const haystack = normalizeKey(`${chunk.markdown}\n${chunk.text}`)
+      const haystack = normalizeHeadingKey(`${chunk.markdown}\n${chunk.text}`)
       return headingNeedles.some((needle) => haystack.includes(needle))
     })?.chunkId ?? chunks[0]?.chunkId
+  )
+}
+
+function anchorTextForHeading(
+  entry: ReaderOutlineEntry,
+  chunksByPage: Map<number, ParsedChunk[]>,
+) {
+  const chunks = chunksByPage.get(entry.pageIndex) ?? []
+  for (const chunk of chunks) {
+    for (const line of `${chunk.text}\n${chunk.markdown}`.split(/\r?\n/)) {
+      const cleaned = cleanOutlineLine(line)
+      const parsed = parseOutlineHeading(cleaned)
+      if (!parsed || !outlineHeadingMatches(entry, parsed)) {
+        continue
+      }
+      return cleaned
+    }
+  }
+  return undefined
+}
+
+function outlineHeadingMatches(entry: ReaderOutlineEntry, parsed: ParsedOutlineHeading) {
+  const entryTitle = normalizeHeadingKey(entry.title)
+  const parsedTitle = normalizeHeadingKey(parsed.title)
+  if (!entryTitle || entryTitle !== parsedTitle) {
+    return false
+  }
+  if (!entry.sectionNumber) {
+    return true
+  }
+  return (
+    !parsed.sectionNumber ||
+    normalizeHeadingKey(entry.sectionNumber) === normalizeHeadingKey(parsed.sectionNumber)
   )
 }
 
@@ -311,7 +359,7 @@ function splitSectionNumber(value: string): ParsedOutlineHeading {
       title: decimalMatch[2].trim(),
     }
   }
-  const singleNumberMatch = normalized.match(/^(\d+)(?:\s+|[、:：-]+)(\S.*)$/)
+  const singleNumberMatch = normalized.match(/^(\d+)(?:\.\s+|\s+|[、:：-]+)(\S.*)$/)
   if (singleNumberMatch) {
     return {
       sectionNumber: singleNumberMatch[1],
@@ -375,6 +423,12 @@ function looksLikeHeading(value: string) {
 
 function normalizeKey(value: string) {
   return value.replace(/\s+/g, "").toLowerCase()
+}
+
+function normalizeHeadingKey(value: string) {
+  return value
+    .replace(/[\s.#*_`~:：、，,;；\-–—()[\]{}]+/g, "")
+    .toLowerCase()
 }
 
 function clampOutlineLevel(level: number) {

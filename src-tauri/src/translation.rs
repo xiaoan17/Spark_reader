@@ -81,18 +81,60 @@ async fn run_translation_job(
     request: StartTranslationRequest,
     token: Arc<AtomicBool>,
 ) -> Result<()> {
-    let book = storage::get_converted_book(db_path, &request.book_id)?;
+    let book = storage::get_converted_book_manifest(db_path, &request.book_id)?;
     let config = config::llm_config()?;
     let provider = provider_label(config.provider).to_string();
     let model = config.model.clone();
-    let source_fingerprint = translation_source_fingerprint(&book);
+    let source_fingerprint = translation_source_fingerprint(db_path, &book)?;
 
-    for page in &book.pages {
-        if token.load(Ordering::SeqCst) {
+    let mut start_page = 0;
+    while start_page < book.total_pages {
+        let window = storage::get_converted_book_page_sources(
+            db_path,
+            &book.book_id,
+            start_page,
+            storage::MAX_CONVERTED_BOOK_PAGE_WINDOW,
+        )?;
+        if window.end_page <= start_page {
             break;
         }
-        let source = translation_source_markdown(page);
-        if source.is_empty() && page.text.trim().is_empty() {
+        for page in &window.pages {
+            if token.load(Ordering::SeqCst) {
+                break;
+            }
+            let source = translation_source_markdown(page);
+            if source.is_empty() && page.text.trim().is_empty() {
+                save_translation_page(
+                    db_path,
+                    TranslationPageRecord {
+                        book_id: &book.book_id,
+                        page_index: page.page_index,
+                        source_fingerprint: &source_fingerprint,
+                        provider: &provider,
+                        model: &model,
+                        source_markdown: &page.markdown,
+                        translated_markdown: "",
+                        status: TranslationPageStatus::Done,
+                        error: "",
+                    },
+                )?;
+                continue;
+            }
+            let existing = get_cached_page(
+                db_path,
+                &book.book_id,
+                page.page_index,
+                &source_fingerprint,
+                &provider,
+                &model,
+            )?;
+            if !request.force
+                && existing
+                    .as_ref()
+                    .is_some_and(|page| page.status == TranslationPageStatus::Done)
+            {
+                continue;
+            }
             save_translation_page(
                 db_path,
                 TranslationPageRecord {
@@ -102,90 +144,64 @@ async fn run_translation_job(
                     provider: &provider,
                     model: &model,
                     source_markdown: &page.markdown,
-                    translated_markdown: "",
-                    status: TranslationPageStatus::Done,
+                    translated_markdown: existing
+                        .as_ref()
+                        .map(|page| page.translated_markdown.as_str())
+                        .unwrap_or_default(),
+                    status: TranslationPageStatus::Translating,
                     error: "",
                 },
             )?;
-            continue;
-        }
-        let existing = get_cached_page(
-            db_path,
-            &book.book_id,
-            page.page_index,
-            &source_fingerprint,
-            &provider,
-            &model,
-        )?;
-        if !request.force
-            && existing
-                .as_ref()
-                .is_some_and(|page| page.status == TranslationPageStatus::Done)
-        {
-            continue;
-        }
-        save_translation_page(
-            db_path,
-            TranslationPageRecord {
-                book_id: &book.book_id,
-                page_index: page.page_index,
-                source_fingerprint: &source_fingerprint,
-                provider: &provider,
-                model: &model,
-                source_markdown: &page.markdown,
-                translated_markdown: existing
-                    .as_ref()
-                    .map(|page| page.translated_markdown.as_str())
-                    .unwrap_or_default(),
-                status: TranslationPageStatus::Translating,
-                error: "",
-            },
-        )?;
 
-        let messages = build_translation_messages(page.page_index, &source, &page.text);
-        match llm::chat(messages, translation_max_tokens(&source, &page.text)).await {
-            Ok(answer) => {
-                save_translation_page(
-                    db_path,
-                    TranslationPageRecord {
-                        book_id: &book.book_id,
-                        page_index: page.page_index,
-                        source_fingerprint: &source_fingerprint,
-                        provider: &provider,
-                        model: &model,
-                        source_markdown: &page.markdown,
-                        translated_markdown: answer.trim(),
-                        status: TranslationPageStatus::Done,
-                        error: "",
-                    },
-                )?;
-            }
-            Err(error) => {
-                save_translation_page(
-                    db_path,
-                    TranslationPageRecord {
-                        book_id: &book.book_id,
-                        page_index: page.page_index,
-                        source_fingerprint: &source_fingerprint,
-                        provider: &provider,
-                        model: &model,
-                        source_markdown: &page.markdown,
-                        translated_markdown: existing
-                            .as_ref()
-                            .map(|page| page.translated_markdown.as_str())
-                            .unwrap_or_default(),
-                        status: TranslationPageStatus::Failed,
-                        error: &error.to_string(),
-                    },
-                )?;
+            let messages = build_translation_messages(page.page_index, &source, &page.text);
+            match llm::chat(messages, translation_max_tokens(&source, &page.text)).await {
+                Ok(answer) => {
+                    save_translation_page(
+                        db_path,
+                        TranslationPageRecord {
+                            book_id: &book.book_id,
+                            page_index: page.page_index,
+                            source_fingerprint: &source_fingerprint,
+                            provider: &provider,
+                            model: &model,
+                            source_markdown: &page.markdown,
+                            translated_markdown: answer.trim(),
+                            status: TranslationPageStatus::Done,
+                            error: "",
+                        },
+                    )?;
+                }
+                Err(error) => {
+                    save_translation_page(
+                        db_path,
+                        TranslationPageRecord {
+                            book_id: &book.book_id,
+                            page_index: page.page_index,
+                            source_fingerprint: &source_fingerprint,
+                            provider: &provider,
+                            model: &model,
+                            source_markdown: &page.markdown,
+                            translated_markdown: existing
+                                .as_ref()
+                                .map(|page| page.translated_markdown.as_str())
+                                .unwrap_or_default(),
+                            status: TranslationPageStatus::Failed,
+                            error: &error.to_string(),
+                        },
+                    )?;
+                }
             }
         }
+        if token.load(Ordering::SeqCst) {
+            break;
+        }
+        start_page = window.end_page;
     }
     Ok(())
 }
 
 pub fn translation_status(db_path: &std::path::Path, book_id: &str) -> Result<TranslationStatus> {
-    let book = storage::get_converted_book(db_path, book_id)?;
+    let book = storage::get_converted_book_manifest(db_path, book_id)?;
     let config = config::llm_config().ok();
     let provider = config
         .as_ref()
@@ -196,37 +212,17 @@ pub fn translation_status(db_path: &std::path::Path, book_id: &str) -> Result<Tr
         .map(|config| config.model.clone())
         .unwrap_or_default();
     ensure_translation_schema(db_path)?;
-    let source_fingerprint = translation_source_fingerprint(&book);
-    let cached = list_cached_pages(
+    let source_fingerprint = translation_source_fingerprint(db_path, &book)?;
+    let pages = list_cached_pages(
         db_path,
         &book.book_id,
         &source_fingerprint,
         &provider,
         &model,
-    )?;
-    let by_page = cached
-        .into_iter()
-        .map(|page| (page.page_index, page))
-        .collect::<HashMap<_, _>>();
-    let pages = book
-        .pages
-        .iter()
-        .map(|page| {
-            by_page
-                .get(&page.page_index)
-                .cloned()
-                .unwrap_or_else(|| TranslationPage {
-                    page_index: page.page_index,
-                    source_markdown: page.markdown.clone(),
-                    translated_markdown: String::new(),
-                    status: TranslationPageStatus::Pending,
-                    error: String::new(),
-                    provider: provider.clone(),
-                    model: model.clone(),
-                    updated_at: String::new(),
-                })
-        })
-        .collect::<Vec<_>>();
+    )?
+    .into_iter()
+    .filter(|page| page.page_index < book.total_pages)
+    .collect::<Vec<_>>();
     let completed_pages = pages
         .iter()
         .filter(|page| page.status == TranslationPageStatus::Done)
@@ -538,24 +534,40 @@ fn provider_label(provider: config::LlmProviderKind) -> &'static str {
     }
 }
 
-fn translation_source_fingerprint(book: &storage::StoredBookAsset) -> String {
+fn translation_source_fingerprint(
+    db_path: &std::path::Path,
+    book: &storage::StoredBookSummary,
+) -> Result<String> {
     if !book.source_pdf_fingerprint.trim().is_empty() {
-        return format!(
+        return Ok(format!(
             "{}:{}",
             TRANSLATION_PROTOCOL_VERSION,
             book.source_pdf_fingerprint.trim()
-        );
+        ));
     }
     let mut hasher = DefaultHasher::new();
     TRANSLATION_PROTOCOL_VERSION.hash(&mut hasher);
     book.book_id.hash(&mut hasher);
     book.total_pages.hash(&mut hasher);
-    for page in &book.pages {
-        page.page_index.hash(&mut hasher);
-        page.markdown.hash(&mut hasher);
-        page.text.hash(&mut hasher);
+    let mut start_page = 0;
+    while start_page < book.total_pages {
+        let window = storage::get_converted_book_page_sources(
+            db_path,
+            &book.book_id,
+            start_page,
+            storage::MAX_CONVERTED_BOOK_PAGE_WINDOW,
+        )?;
+        if window.end_page <= start_page {
+            break;
+        }
+        for page in &window.pages {
+            page.page_index.hash(&mut hasher);
+            page.markdown.hash(&mut hasher);
+            page.text.hash(&mut hasher);
+        }
+        start_page = window.end_page;
     }
-    format!("book-source-{:016x}", hasher.finish())
+    Ok(format!("book-source-{:016x}", hasher.finish()))
 }
 
 fn active_translations() -> &'static Mutex<HashMap<String, Arc<AtomicBool>>> {
@@ -658,21 +670,25 @@ mod tests {
     }
 
     #[test]
-    fn translation_status_returns_pending_and_cached_pages() {
+    fn translation_status_returns_sparse_cached_pages() {
         let _guard = crate::TEST_ENV_LOCK.lock().expect("env lock");
         let _config_dir = isolate_config("status");
         let db_path = temp_db("status");
         let _ = std::fs::remove_file(&db_path);
         let saved = save_translation_fixture(&db_path);
-        let asset =
-            storage::get_converted_book(&db_path, &saved.book_id).expect("asset should load");
-        let source_fingerprint = translation_source_fingerprint(&asset);
+        let manifest = storage::get_converted_book_manifest(&db_path, &saved.book_id)
+            .expect("asset should load");
+        let source_fingerprint =
+            translation_source_fingerprint(&db_path, &manifest).expect("fingerprint should build");
 
         let pending =
             translation_status(&db_path, &saved.book_id).expect("translation status should load");
         assert_eq!(pending.total_pages, 1);
         assert_eq!(pending.completed_pages, 0);
-        assert_eq!(pending.pages[0].status, TranslationPageStatus::Pending);
+        assert!(
+            pending.pages.is_empty(),
+            "status polling should not return synthetic pending pages with full source markdown"
+        );
 
         ensure_translation_schema(&db_path).expect("schema should initialize");
         save_translation_page(
@@ -722,11 +738,13 @@ mod tests {
         let db_path = temp_db("fingerprint");
         let _ = std::fs::remove_file(&db_path);
         let saved = save_translation_fixture(&db_path);
-        let mut asset =
-            storage::get_converted_book(&db_path, &saved.book_id).expect("asset should load");
-        asset.source_pdf_fingerprint = "pdf-fingerprint".to_string();
+        let mut manifest = storage::get_converted_book_manifest(&db_path, &saved.book_id)
+            .expect("manifest should load");
+        manifest.source_pdf_fingerprint = "pdf-fingerprint".to_string();
         assert!(
-            translation_source_fingerprint(&asset).starts_with("block-v2:pdf-fingerprint"),
+            translation_source_fingerprint(&db_path, &manifest)
+                .expect("fingerprint should build")
+                .starts_with("block-v2:pdf-fingerprint"),
             "translation cache key must invalidate pre-block-alignment cache entries"
         );
         let _ = std::fs::remove_file(&db_path);

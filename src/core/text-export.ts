@@ -59,6 +59,5 @@ function markdownForPage(page: TextAssetPage, fallbackIndex: number) {
     return ""
   }
 
-  const pageNumber = (page.pageIndex ?? fallbackIndex) + 1
-  return `## 第 ${pageNumber} 页\n\n${text}`
+  return text
 }

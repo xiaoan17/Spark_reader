@@ -3,9 +3,12 @@ import { ReaderShell } from "@/components/reader/ReaderShell"
 import { useReaderStore } from "@/stores/reader-store"
 import {
   cancelInterpretation,
+  normalizeCommandError,
   deleteHighlight,
   deleteInterpretation,
+  getDocumentTldr,
   getChunk,
+  getLlmSettings,
   interpretSelection,
   isTauriRuntime,
   listenInterpretationStream,
@@ -15,6 +18,7 @@ import {
   saveInterpretation,
   searchBook,
   searchHitToChunk,
+  regenerateDocumentTldr,
   type InterpretEvidenceItem,
   type AnswerSource,
   type SearchBookHit,
@@ -41,16 +45,21 @@ import { inferTextSelectionAnchor } from "@/core/selection-anchor"
 import { pageTextByIndex } from "@/core/page-lookup"
 import {
   restoreTargetForSavedInterpretation,
-  summarizeInterpretationSessions,
 } from "@/core/interpretation-history"
 import { restoreTargetForSavedHighlight } from "@/core/highlight-restore"
+import {
+  chunkContentHash,
+  isLegacyChunkId,
+  isNamespacedChunkId,
+} from "@/core/chunk-id"
 import {
   makeInterpretationSessionId,
   planInterpretationTurn,
 } from "@/core/interpretation-session"
-import { shouldUseBackendInterpretation } from "@/core/interpretation-runtime"
+import { llmKeyReadiness, shouldUseBackendInterpretation } from "@/core/interpretation-runtime"
 import { orderLocalFallbackChunks } from "@/core/local-fallback-chunks"
 import { resolveCitationTarget } from "@/core/citation-target"
+import { createSampleBook } from "@/core/sample-book"
 import type {
   EvidencePreview,
   ParsedChunk,
@@ -58,11 +67,31 @@ import type {
   TextSelectionAnchor,
 } from "@/stores/reader-store"
 
+function localFallbackNotice(error?: unknown, action: "解读" | "追问" = "解读") {
+  if (!error) {
+    return "当前环境暂时不能使用完整 LLM 解读，已改用本地转换稿生成可核对回答；配置 LLM API Key 并确认网络后可恢复完整能力。"
+  }
+  const commandError = normalizeCommandError(error)
+  const suggestion =
+    commandError.suggestion ||
+    "请在设置中检查 LLM API Key、Base URL 和网络连接；本地兜底仍会保留选区、证据和引用回跳。"
+  switch (commandError.code) {
+    case "authentication":
+      return `完整 LLM ${action}需要有效的 API Key，当前已改用本地兜底。${suggestion}`
+    case "network":
+    case "timeout":
+      return `完整 LLM ${action}暂时连接不上云端服务，当前已改用本地兜底。${suggestion}`
+    default:
+      return `完整 LLM ${action}暂时不可用，当前已改用本地兜底。${suggestion}`
+  }
+}
+
 export function App() {
   const timers = useRef<number[]>([])
   const requestGuard = useRef(createRequestGuard())
   const streamUnlisten = useRef<(() => void) | null>(null)
   const activeInterpretationRequestId = useRef<string>("")
+  const tldrRequestBookId = useRef("")
   const {
     phase,
     bookId,
@@ -80,6 +109,15 @@ export function App() {
     answerSource,
     interpretationError,
     followUps,
+    tldr,
+    tldrLoading,
+    tldrError,
+    tldrLlmReady,
+    activeSparkSessionId,
+    sparkMode,
+    sparkDraft,
+    sparkQuestion,
+    sparkError,
     highlights,
     interpretationHistory,
     parsedPages,
@@ -104,6 +142,15 @@ export function App() {
     setInterpretationSessionId,
     setHighlights,
     setInterpretationHistory,
+    setTldr,
+    setTldrLoading,
+    setTldrError,
+    setTldrLlmReady,
+    setActiveSparkSessionId,
+    setSparkMode,
+    setSparkDraft,
+    setSparkQuestion,
+    setSparkError,
     setFollowUps,
     addHighlight,
     addInterpretationHistory,
@@ -115,6 +162,7 @@ export function App() {
     setActiveChunk,
     focusChunk,
     setParsedDocument,
+    mergeParsedDocumentWindow,
   } = useReaderStore()
 
   function clearTimers() {
@@ -308,6 +356,185 @@ export function App() {
     void answerFollowUp(question, version)
   }
 
+  function handleOpenSpark() {
+    if (!selectionText.trim()) {
+      setSparkError("请先框选一段文字")
+      return
+    }
+    const existingThread = findSparkThreadForSelection()
+    setSparkError("")
+    setSparkMode("spark")
+    if (existingThread) {
+      handleOpenSparkInterpretation(existingThread)
+      if (sparkSessionHasAiTurn(existingThread.sessionId || existingThread.id)) {
+        setSparkMode("spark")
+      }
+      return
+    }
+    if (!activeSparkSessionId) {
+      setActiveSparkSessionId(makeInterpretationSessionId())
+    }
+  }
+
+  function handleCloseSpark() {
+    setActiveSparkSessionId("")
+    setSparkQuestion("")
+    setSparkDraft("")
+    setSparkError("")
+  }
+
+  async function handleSparkAsk() {
+    if (!selectionText.trim()) {
+      setSparkError("请先框选一段文字")
+      return
+    }
+    const trimmedQuestion = sparkQuestion.trim()
+    const version = startRequest()
+    clearTimers()
+    setSparkError("")
+    if (interpretation.trim() || followUps.length > 0) {
+      await answerSparkFollowUp(trimmedQuestion || "请继续围绕这段选区解释。", version)
+    } else {
+      await runSparkInitial(trimmedQuestion || "请用轻量 Spark 方式解释这段选区，并保留必要引用。", version)
+    }
+    if (isCurrentRequest(version)) {
+      setSparkQuestion("")
+    }
+  }
+
+  async function runSparkInitial(question: string, version: number) {
+    if (!isCurrentRequest(version)) {
+      return
+    }
+    setPhase("planning")
+    if (!shouldUseBackendInterpretation({ bookId, libraryStatus, tauriRuntime: isTauriRuntime() })) {
+      await runFallbackSparkInitial(question, version)
+      return
+    }
+    try {
+      const readiness = await backendLlmReadiness("解读")
+      if (!isCurrentRequest(version)) {
+        return
+      }
+      if (!readiness.ready) {
+        setSparkError(readiness.message)
+        await runFallbackSparkInitial(question, version)
+        return
+      }
+      setPhase("retrieving")
+      const requestId = makeRequestId(version)
+      activeInterpretationRequestId.current = requestId
+      await attachInterpretationStream(requestId, version)
+      const result = await interpretSelection({
+        bookId,
+        selectionText,
+        pageIndexes: focusPageIndexes(),
+        selectionRects,
+        focusChunkIds: focusChunkIds(),
+        question,
+        mode: "plain",
+      }, requestId)
+      if (!isCurrentRequest(version)) {
+        return
+      }
+      activeInterpretationRequestId.current = ""
+      clearStreamListener()
+      const evidencePreview = previewEvidence(result.evidence)
+      setEvidence(evidencePreview)
+      setAgentTrace([])
+      setAnswerSource(result.answerSource)
+      setInterpretation(result.answer)
+      void persistInterpretation(result.answer, {
+        evidencePreview,
+        version,
+        answerSource: result.answerSource,
+        kind: "spark",
+        sessionId: activeSparkSessionId || undefined,
+      }).then((saved) => {
+        if (saved) setActiveSparkSessionId(saved.sessionId)
+      })
+      setPhase("streaming")
+      schedule(() => {
+        if (isCurrentRequest(version)) setPhase("reading")
+      }, 350)
+    } catch (error) {
+      activeInterpretationRequestId.current = ""
+      clearStreamListener()
+      setSparkError(localFallbackNotice(error, "解读"))
+      await runFallbackSparkInitial(question, version)
+    }
+  }
+
+  async function runFallbackSparkInitial(question: string, version: number) {
+    if (!isCurrentRequest(version)) {
+      return
+    }
+    const hits = await findEvidenceChunks()
+    if (!isCurrentRequest(version)) {
+      return
+    }
+    const chunks = localFallbackChunks(hits.map(searchHitToChunk))
+    const fallbackPages = selectionRects.length === 0 ? focusPageIndexes() : []
+    const evidencePreview = makeLocalEvidence(selectionRects, parsedPages, chunks, fallbackPages)
+    const answer = makeLocalFollowUpAnswer(
+      question,
+      selectionText,
+      parsedPages,
+      selectionRects,
+      chunks,
+      shouldUseBackendInterpretation({ bookId, libraryStatus, tauriRuntime: isTauriRuntime() }),
+      fallbackPages[0],
+    )
+    setEvidence(evidencePreview)
+    setAgentTrace([])
+    setAnswerSource("local_fallback")
+    setInterpretation(answer)
+    void persistInterpretation(answer, {
+      evidencePreview,
+      version,
+      answerSource: "local_fallback",
+      kind: "spark",
+      sessionId: activeSparkSessionId || undefined,
+    }).then((saved) => {
+      if (saved) setActiveSparkSessionId(saved.sessionId)
+    })
+    setPhase("streaming")
+    schedule(() => {
+      if (isCurrentRequest(version)) setPhase("reading")
+    }, 350)
+  }
+
+  async function answerSparkFollowUp(question: string, version: number) {
+    await answerFollowUp(question, version, {
+      kind: "spark",
+      sessionId: activeSparkSessionId || undefined,
+    })
+  }
+
+  async function handleSparkSaveNote() {
+    if (!selectionText.trim()) {
+      setSparkError("请先框选一段文字")
+      return
+    }
+    const note = sparkDraft.trim()
+    if (!note) {
+      setSparkError("Note 不能为空")
+      return
+    }
+    setSparkError("")
+    const saved = await persistInterpretation(note, {
+      evidencePreview: [],
+      answerSource: "local_fallback",
+      kind: "note",
+      sessionId: activeSparkSessionId || makeInterpretationSessionId(),
+      turnIndex: activeSparkItems.length,
+    })
+    if (saved) {
+      setActiveSparkSessionId(saved.sessionId)
+      setSparkDraft("")
+    }
+  }
+
   function handleStop() {
     stopActiveRequest()
     setPhase("reading")
@@ -330,6 +557,22 @@ export function App() {
   function handleClearSelection() {
     stopActiveRequest()
     clearSelection()
+  }
+
+  function handleOpenSampleBook() {
+    stopActiveRequest()
+    const sample = createSampleBook()
+    setBook(sample.title, sample.pages.length)
+    setParsedDocument(sample.pages, sample.chunks, sample.text, sample.markdown, sample.metadata)
+    setLibraryStatus("memory-only", "示例书已载入；无需配置 key，可直接体验本地兜底解读")
+    setSelection(sample.initialSelection.text, [], sample.initialSelection.anchor)
+    setEvidence(sample.evidence)
+    setAgentTrace(sample.agentTrace)
+    setAnswerSource("local_fallback")
+    setInterpretation(sample.interpretation)
+    setFollowUps([])
+    setInterpretationError("")
+    setPhase("reading")
   }
 
   function inferSelectionAnchor(
@@ -357,11 +600,21 @@ export function App() {
 
   async function runBackendInterpretation(mode: "deep" | "plain", version: number) {
     if (!shouldUseBackendInterpretation({ bookId, libraryStatus, tauriRuntime: isTauriRuntime() })) {
+      setInterpretationError(localFallbackNotice(undefined, "解读"))
       await runFallbackInterpretation(mode, version)
       return
     }
     try {
       if (!isCurrentRequest(version)) {
+        return
+      }
+      const readiness = await backendLlmReadiness("解读")
+      if (!isCurrentRequest(version)) {
+        return
+      }
+      if (!readiness.ready) {
+        setInterpretationError(readiness.message)
+        await runFallbackInterpretation(mode, version)
         return
       }
       setPhase("retrieving")
@@ -372,6 +625,7 @@ export function App() {
         bookId,
         selectionText,
         pageIndexes: focusPageIndexes(),
+        selectionRects,
         focusChunkIds: focusChunkIds(),
         mode,
       }, requestId)
@@ -396,9 +650,7 @@ export function App() {
       if (!isCurrentRequest(version)) {
         return
       }
-      setInterpretationError(
-        `后端解读失败，已切换到本地兜底：${error instanceof Error ? error.message : String(error)}`,
-      )
+      setInterpretationError(localFallbackNotice(error, "解读"))
       await runFallbackInterpretation(mode, version)
     }
   }
@@ -439,16 +691,30 @@ export function App() {
     }, 350)
   }
 
-  async function answerFollowUp(question: string, version: number) {
+  async function answerFollowUp(
+    question: string,
+    version: number,
+    options: { kind?: "interpretation" | "spark"; sessionId?: string } = {},
+  ) {
     if (!isCurrentRequest(version)) {
       return
     }
     setPhase("planning")
     if (!shouldUseBackendInterpretation({ bookId, libraryStatus, tauriRuntime: isTauriRuntime() })) {
-      await answerFallbackFollowUp(question, version)
+      setInterpretationError(localFallbackNotice(undefined, "追问"))
+      await answerFallbackFollowUp(question, version, options)
       return
     }
     try {
+      const readiness = await backendLlmReadiness("追问")
+      if (!isCurrentRequest(version)) {
+        return
+      }
+      if (!readiness.ready) {
+        setInterpretationError(readiness.message)
+        await answerFallbackFollowUp(question, version, options)
+        return
+      }
       setPhase("retrieving")
       const requestId = makeRequestId(version)
       const followUpId = `follow-up-${requestId}`
@@ -459,11 +725,13 @@ export function App() {
         bookId,
         selectionText,
         pageIndexes: focusPageIndexes(),
+        selectionRects,
         focusChunkIds: focusChunkIds(),
         question,
         priorAnswer: interpretation || undefined,
         priorEvidenceChunkIds: evidence.map((item) => item.chunkId),
         followUpHistory: followUps,
+        lightweight: options.kind === "spark",
         mode: "plain",
       }, requestId)
       if (!isCurrentRequest(version)) {
@@ -481,6 +749,8 @@ export function App() {
         version,
         followUpIndex,
         answerSource: result.answerSource,
+        kind: options.kind ?? "interpretation",
+        sessionId: options.sessionId,
       })
       replaceStreamingFollowUp(followUpId, question, result.answer)
       setPhase("streaming")
@@ -490,14 +760,16 @@ export function App() {
     } catch (error) {
       activeInterpretationRequestId.current = ""
       clearStreamListener()
-      setInterpretationError(
-        `后端追问失败，已切换到本地兜底：${error instanceof Error ? error.message : String(error)}`,
-      )
-      await answerFallbackFollowUp(question, version)
+      setInterpretationError(localFallbackNotice(error, "追问"))
+      await answerFallbackFollowUp(question, version, options)
     }
   }
 
-  async function answerFallbackFollowUp(question: string, version: number) {
+  async function answerFallbackFollowUp(
+    question: string,
+    version: number,
+    options: { kind?: "interpretation" | "spark"; sessionId?: string } = {},
+  ) {
     if (!isCurrentRequest(version)) {
       return
     }
@@ -529,11 +801,82 @@ export function App() {
       version,
       followUpIndex,
       answerSource: "local_fallback",
+      kind: options.kind ?? "interpretation",
+      sessionId: options.sessionId,
     })
     setPhase("streaming")
     schedule(() => {
       if (isCurrentRequest(version)) setPhase("reading")
     }, 350)
+  }
+
+  async function backendLlmReadiness(action: "解读" | "追问") {
+    try {
+      return llmKeyReadiness(await getLlmSettings(), action)
+    } catch (error) {
+      return {
+        ready: false as const,
+        reason: "missing_api_key" as const,
+        message: localFallbackNotice(error, action),
+      }
+    }
+  }
+
+  async function ensureTldr(bookIdToLoad = bookId, options: { force?: boolean; manual?: boolean } = {}) {
+    if (!bookIdToLoad || !isTauriRuntime()) {
+      setTldr(null)
+      setTldrLoading(false)
+      setTldrError("")
+      setTldrLlmReady(false)
+      return
+    }
+    if (!options.force && tldrRequestBookId.current === bookIdToLoad) {
+      return
+    }
+    if (!options.force) {
+      const cached = useReaderStore.getState().tldr
+      if (cached?.text.trim() && useReaderStore.getState().bookId === bookIdToLoad) {
+        return
+      }
+    }
+    try {
+      const readiness = await llmKeyReadiness(await getLlmSettings(), "解读")
+      setTldrLlmReady(readiness.ready)
+      if (!readiness.ready) {
+        if (options.manual) {
+          setTldrError(readiness.message)
+        }
+        return
+      }
+    } catch (error) {
+      setTldrLlmReady(false)
+      if (options.manual) {
+        setTldrError(localFallbackNotice(error, "解读"))
+      }
+      return
+    }
+    tldrRequestBookId.current = bookIdToLoad
+    setTldrLoading(true)
+    setTldrError("")
+    try {
+      const result = options.force
+        ? await regenerateDocumentTldr(bookIdToLoad)
+        : await getDocumentTldr(bookIdToLoad)
+      if (useReaderStore.getState().bookId !== bookIdToLoad) {
+        return
+      }
+      setTldr({
+        text: result.text,
+        generatedAt: result.generatedAt,
+        model: result.model,
+        sourceVersion: result.sourceVersion,
+      })
+    } catch (error) {
+      setTldrError(error instanceof Error ? error.message : "TLDR 生成失败")
+    } finally {
+      setTldrLoading(false)
+      tldrRequestBookId.current = ""
+    }
   }
 
   async function persistInterpretation(
@@ -544,9 +887,21 @@ export function App() {
       version?: number
       followUpIndex?: number
       answerSource?: AnswerSource
+      kind?: "interpretation" | "spark" | "note"
+      sessionId?: string
+      turnIndex?: number
     } = {},
   ) {
-    const { question, evidencePreview = evidence, version, followUpIndex, answerSource: savedAnswerSource = answerSource } = options
+    const {
+      question,
+      evidencePreview = evidence,
+      version,
+      followUpIndex,
+      answerSource: savedAnswerSource = answerSource,
+      kind = "interpretation",
+      sessionId,
+      turnIndex: explicitTurnIndex,
+    } = options
     if (version !== undefined && !isCurrentRequest(version)) {
       return
     }
@@ -565,19 +920,29 @@ export function App() {
         preferredPositionStart,
       )
       const turn = planInterpretationTurn({
-        currentSessionId: useReaderStore.getState().interpretationSessionId,
+        currentSessionId:
+          sessionId ??
+          (kind === "interpretation"
+            ? useReaderStore.getState().interpretationSessionId
+            : useReaderStore.getState().activeSparkSessionId),
         intent: question ? "follow_up" : "initial",
-        followUpCount: followUpIndex ?? useReaderStore.getState().followUps.length,
+        followUpCount:
+          explicitTurnIndex !== undefined
+            ? Math.max(0, explicitTurnIndex - 1)
+            : followUpIndex ?? useReaderStore.getState().followUps.length,
         createSessionId: makeInterpretationSessionId,
       })
-      if (turn.createdSession) {
+      if (turn.createdSession && kind === "interpretation") {
         setInterpretationSessionId(turn.sessionId)
+      }
+      if (turn.createdSession && kind === "spark") {
+        setActiveSparkSessionId(turn.sessionId)
       }
       const request = {
         bookId,
         selectionText,
         sessionId: turn.sessionId,
-        turnIndex: turn.turnIndex,
+        turnIndex: explicitTurnIndex ?? turn.turnIndex,
         prefix: selector.prefix,
         suffix: selector.suffix,
         pageIndex,
@@ -585,9 +950,22 @@ export function App() {
         positionEnd: selector.positionEnd,
         pageIndexes,
         evidenceChunkIds: evidencePreview.map((item) => item.chunkId),
+        evidenceChunkSnapshots: evidencePreview.map((item) => {
+          const chunk = parsedChunks.find((candidate) => candidate.chunkId === item.chunkId)
+          return {
+            chunkId: item.chunkId,
+            chunkIdVersion: isNamespacedChunkId(item.chunkId)
+              ? 2
+              : isLegacyChunkId(item.chunkId)
+                ? 1
+                : 0,
+            contentHash: chunk ? chunkContentHash(chunk.text) : null,
+          }
+        }),
         question: question ?? null,
         answer,
         answerSource: savedAnswerSource,
+        kind,
       }
       const saved = isTauriRuntime()
         ? await saveInterpretation(request)
@@ -600,7 +978,11 @@ export function App() {
       if (version !== undefined && !isCurrentRequest(version)) {
         return
       }
-      setInterpretationSessionId(saved.sessionId)
+      if (kind === "interpretation") {
+        setInterpretationSessionId(saved.sessionId)
+      } else if (kind === "spark") {
+        setActiveSparkSessionId(saved.sessionId)
+      }
       addInterpretationHistory(saved)
       return saved
     } catch {
@@ -628,6 +1010,36 @@ export function App() {
       focusChunkIds: focusChunkIds(),
       indexedChunks,
       parsedChunks,
+    })
+  }
+
+  function findSparkThreadForSelection() {
+    const normalizedSelection = normalizeSelectionForSpark(selectionText)
+    if (!normalizedSelection) {
+      return null
+    }
+    const selectionPage = selectionAnchor?.pageIndex ?? currentPage - 1
+    return (
+      interpretationHistory
+        .filter((item) => {
+          const kind = item.kind ?? "interpretation"
+          return kind === "spark" || kind === "note"
+        })
+        .filter((item) => normalizeSelectionForSpark(item.selectionText) === normalizedSelection)
+        .filter((item) => {
+          if (item.pageIndex === selectionPage || item.pageIndexes.includes(selectionPage)) {
+            return true
+          }
+          return item.pageIndex === null || item.pageIndex === undefined
+        })
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0] ?? null
+    )
+  }
+
+  function sparkSessionHasAiTurn(sessionId: string) {
+    return interpretationHistory.some((item) => {
+      const kind = item.kind ?? "interpretation"
+      return kind === "spark" && (item.sessionId || item.id) === sessionId
     })
   }
 
@@ -745,8 +1157,43 @@ export function App() {
     setInterpretation(restored.interpretation)
     setAnswerSource(item.answerSource ?? "llm")
     setFollowUps(restored.followUps)
-    setInterpretationSessionId(item.sessionId || item.id)
+    if ((item.kind ?? "interpretation") === "interpretation") {
+      setInterpretationSessionId(item.sessionId || item.id)
+    }
     setPhase("reading")
+  }
+
+  function handleOpenSparkInterpretation(item: SavedInterpretation, sourceView?: "text" | "translation" | "pdf" | "tldr") {
+    const restored = restoreTargetForSavedInterpretation(
+      item,
+      parsedChunks,
+      parsedPages,
+      interpretationHistory,
+    )
+    if (sourceView === "translation") {
+      setVisiblePage(restored.pageNumber)
+      setSelection(restored.selectionText, restored.selectionRects, restored.selectionAnchor)
+      setActiveChunk(restored.activeChunkId)
+      setEvidence(restored.evidence)
+      setAgentTrace([])
+      setInterpretation(restored.interpretation)
+      setAnswerSource(item.answerSource ?? "llm")
+      setFollowUps(restored.followUps)
+      setPhase("reading")
+    } else {
+      handleOpenInterpretation(item)
+    }
+    const sessionId = item.sessionId || item.id
+    const hasAiSparkTurn = sparkSessionHasAiTurn(sessionId)
+    setActiveSparkSessionId(sessionId)
+    setSparkMode(hasAiSparkTurn ? "spark" : (item.kind ?? "interpretation") === "note" ? "note" : "spark")
+    setSparkDraft((item.kind ?? "interpretation") === "note" ? item.answer : "")
+    if (!hasAiSparkTurn) {
+      setInterpretation("")
+      setFollowUps([])
+      setAnswerSource("llm")
+    }
+    setSparkError("")
   }
 
   async function handleDeleteHighlight(highlightId: string) {
@@ -808,6 +1255,15 @@ export function App() {
     ]),
   ]
 
+  const activeSparkItems = activeSparkSessionId
+    ? interpretationHistory
+        .filter((item) => {
+          const kind = item.kind ?? "interpretation"
+          return (kind === "spark" || kind === "note") && (item.sessionId || item.id) === activeSparkSessionId
+        })
+        .sort((left, right) => left.turnIndex - right.turnIndex || left.createdAt.localeCompare(right.createdAt))
+    : []
+
   return (
     <ReaderShell
       phase={phase}
@@ -827,8 +1283,19 @@ export function App() {
       answerSource={answerSource}
       interpretationError={interpretationError}
       followUps={followUps}
+      tldr={tldr}
+      tldrLoading={tldrLoading}
+      tldrError={tldrError}
+      tldrLlmReady={tldrLlmReady}
+      sparkPanelOpen={Boolean(activeSparkSessionId)}
+      sparkMode={sparkMode}
+      sparkNoteDraft={sparkDraft}
+      sparkQuestion={sparkQuestion}
+      sparkError={sparkError}
+      sparkLoading={Boolean(activeSparkSessionId) && (phase === "planning" || phase === "retrieving" || phase === "streaming")}
+      sparkNoteItems={activeSparkItems}
       highlights={highlights}
-      interpretationHistory={summarizeInterpretationSessions(interpretationHistory)}
+      interpretationHistory={interpretationHistory}
       parsedPages={parsedPages}
       parsedChunks={parsedChunks}
       parserEngine={parserEngine}
@@ -842,9 +1309,11 @@ export function App() {
         if (indexedBookId && status === "indexed") {
           void loadHighlights(indexedBookId)
           void loadInterpretationHistory(indexedBookId)
+          void ensureTldr(indexedBookId)
         }
       }}
       onParsedDocument={setParsedDocument}
+      onParsedDocumentWindow={mergeParsedDocumentWindow}
       onPageChange={handlePageChange}
       onVisiblePageChange={setVisiblePage}
       onZoomChange={setZoom}
@@ -856,14 +1325,29 @@ export function App() {
       onDeepInterpret={() => runLocalInterpretation("deep")}
       onPlainExplain={() => runLocalInterpretation("plain")}
       onQuestionSubmit={handleQuestionSubmit}
+      onOpenSpark={handleOpenSpark}
+      onSparkModeChange={setSparkMode}
+      onSparkQuestionChange={setSparkQuestion}
+      onSparkNoteChange={setSparkDraft}
+      onSparkAsk={() => void handleSparkAsk()}
+      onSparkSaveNote={() => void handleSparkSaveNote()}
+      onCloseSpark={handleCloseSpark}
+      onGenerateTldr={() => void ensureTldr(bookId, { manual: true })}
+      onRegenerateTldr={() => void ensureTldr(bookId, { force: true, manual: true })}
       onSaveHighlight={handleSaveHighlight}
       onOpenHighlight={handleOpenHighlight}
       onDeleteHighlight={handleDeleteHighlight}
       onOpenInterpretation={handleOpenInterpretation}
+      onOpenSparkInterpretation={handleOpenSparkInterpretation}
       onDeleteInterpretation={handleDeleteInterpretation}
       onCitationClick={handleCitationClick}
       onRegenerate={() => runLocalInterpretation("deep")}
       onStop={handleStop}
+      onOpenSampleBook={handleOpenSampleBook}
     />
   )
+}
+
+function normalizeSelectionForSpark(value: string) {
+  return value.replace(/\s+/g, " ").trim()
 }

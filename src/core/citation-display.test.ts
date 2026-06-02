@@ -18,7 +18,7 @@ describe("citation display parsing", () => {
     const text = `普通说明 [不是引用] 保留，证据见 [${chunkA}; ${chunkB}]，旧证据 [p1-c1] 不处理。`
 
     expect(replaceInternalCitationsWithReadableLabels(text)).toBe(
-      "普通说明 [不是引用] 保留，证据见 （第 1 页 · 引用）（第 2 页 · 引用），旧证据 [p1-c1] 不处理。",
+      "普通说明 [不是引用] 保留，证据见 （引用）（引用），旧证据 [p1-c1] 不处理。",
     )
   })
 })

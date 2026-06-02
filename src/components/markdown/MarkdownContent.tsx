@@ -2,11 +2,18 @@ import {
   Children,
   cloneElement,
   isValidElement,
+  memo,
+  useEffect,
+  useState,
   type ReactElement,
   type ReactNode,
 } from "react"
-import ReactMarkdown, { type Components } from "react-markdown"
+import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown"
+import rehypeKatex from "rehype-katex"
+import rehypeRaw from "rehype-raw"
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize"
 import remarkGfm from "remark-gfm"
+import remarkMath from "remark-math"
 import { cn } from "@/lib/utils"
 import type { EvidencePreview } from "@/stores/reader-store"
 import {
@@ -16,6 +23,7 @@ import {
   internalCitationPattern,
   sanitizeInternalReferenceText,
 } from "@/core/citation-display"
+import { markdownImageSrc } from "@/core/markdown-assets"
 import { normalizeWhitespace, resolveTextQuoteSelector } from "@/core/text-quote-selector"
 
 type MarkdownContentProps = {
@@ -25,8 +33,10 @@ type MarkdownContentProps = {
   onCitationClick?: (chunkId: string) => void
   className?: string
   emptyText?: string
+  allowRawHtml?: boolean
   highlightSourceText?: string
   highlights?: MarkdownTextHighlight[]
+  headingAnchor?: MarkdownHeadingAnchor | null
 }
 
 type MarkdownTextHighlight = {
@@ -36,6 +46,11 @@ type MarkdownTextHighlight = {
   suffix?: string
   positionStart?: number | null
   positionEnd?: number | null
+}
+
+type MarkdownHeadingAnchor = {
+  id: string
+  text: string
 }
 
 type MarkdownHighlightRange = {
@@ -50,15 +65,17 @@ type MarkdownHighlightState = {
   cursor: number
 }
 
-export function MarkdownContent({
+function MarkdownContentBase({
   content,
   evidence = [],
   citationChunkIds,
   onCitationClick,
   className,
   emptyText = "",
+  allowRawHtml = false,
   highlightSourceText,
   highlights = [],
+  headingAnchor = null,
 }: MarkdownContentProps) {
   const clickableCitations = citationChunkIds
     ? new Set(citationChunkIds)
@@ -66,7 +83,10 @@ export function MarkdownContent({
       ? new Set(evidence.map((item) => item.chunkId))
       : undefined
   const citationLabels = citationLabelMap(evidence)
-  const source = sanitizeRawHtmlTags(content.trim() || emptyText)
+  const source = allowRawHtml
+    ? content.trim() || emptyText
+    : sanitizeRawHtmlTags(content.trim() || emptyText)
+  const markdownSource = normalizeStandaloneDisplayMath(source)
   const highlightState = createMarkdownHighlightState(
     highlightSourceText?.trim() ? highlightSourceText : source,
     highlights,
@@ -75,18 +95,79 @@ export function MarkdownContent({
   return (
     <div className={cn("markdown-content", className)}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={
+          allowRawHtml
+            ? [rehypeRaw, [rehypeSanitize, markdownSanitizeSchema], [rehypeKatex, katexOptions]]
+            : [[rehypeKatex, katexOptions]]
+        }
         components={markdownComponents({
           clickableCitations,
           citationLabels,
+          headingAnchor,
           highlightState,
           onCitationClick,
         })}
+        urlTransform={markdownUrlTransform}
       >
-        {source}
+        {markdownSource}
       </ReactMarkdown>
     </div>
   )
+}
+
+export const MarkdownContent = memo(MarkdownContentBase, areMarkdownContentPropsEqual)
+
+function areMarkdownContentPropsEqual(left: MarkdownContentProps, right: MarkdownContentProps) {
+  return (
+    left.content === right.content &&
+    left.className === right.className &&
+    left.emptyText === right.emptyText &&
+    left.allowRawHtml === right.allowRawHtml &&
+    left.highlightSourceText === right.highlightSourceText &&
+    left.headingAnchor?.id === right.headingAnchor?.id &&
+    left.headingAnchor?.text === right.headingAnchor?.text &&
+    left.onCitationClick === right.onCitationClick &&
+    shallowEvidenceEqual(left.evidence, right.evidence) &&
+    shallowStringArrayEqual(left.citationChunkIds, right.citationChunkIds) &&
+    shallowHighlightsEqual(left.highlights, right.highlights)
+  )
+}
+
+function shallowEvidenceEqual(left: EvidencePreview[] = [], right: EvidencePreview[] = []) {
+  if (left === right) return true
+  if (left.length !== right.length) return false
+  return left.every(
+    (item, index) =>
+      item.chunkId === right[index].chunkId &&
+      item.title === right[index].title &&
+      item.pageIndex === right[index].pageIndex,
+  )
+}
+
+function shallowStringArrayEqual(left: string[] = [], right: string[] = []) {
+  if (left === right) return true
+  if (left.length !== right.length) return false
+  return left.every((item, index) => item === right[index])
+}
+
+function shallowHighlightsEqual(
+  left: MarkdownTextHighlight[] = [],
+  right: MarkdownTextHighlight[] = [],
+) {
+  if (left === right) return true
+  if (left.length !== right.length) return false
+  return left.every((item, index) => {
+    const other = right[index]
+    return (
+      item.id === other.id &&
+      item.selectionText === other.selectionText &&
+      item.prefix === other.prefix &&
+      item.suffix === other.suffix &&
+      item.positionStart === other.positionStart &&
+      item.positionEnd === other.positionEnd
+    )
+  })
 }
 
 export function renderMarkdownTextWithCitations(
@@ -148,11 +229,13 @@ export function renderMarkdownTextWithCitations(
 function markdownComponents({
   clickableCitations,
   citationLabels,
+  headingAnchor,
   highlightState,
   onCitationClick,
 }: {
   clickableCitations?: ReadonlySet<string>
   citationLabels?: ReadonlyMap<string, string>
+  headingAnchor?: MarkdownHeadingAnchor | null
   highlightState?: MarkdownHighlightState
   onCitationClick?: (chunkId: string) => void
 }): Components {
@@ -168,22 +251,34 @@ function markdownComponents({
   return {
     p: ({ children }) => <p className="my-3 leading-7">{renderChildren(children)}</p>,
     h1: ({ children }) => (
-      <h1 className="mb-4 mt-5 text-xl font-semibold leading-8">
+      <h1
+        className="mb-4 mt-5 text-xl font-semibold leading-8"
+        {...headingAnchorAttributes(children, headingAnchor)}
+      >
         {renderChildren(children)}
       </h1>
     ),
     h2: ({ children }) => (
-      <h2 className="mb-3 mt-5 text-lg font-semibold leading-7">
+      <h2
+        className="mb-3 mt-5 text-lg font-semibold leading-7"
+        {...headingAnchorAttributes(children, headingAnchor)}
+      >
         {renderChildren(children)}
       </h2>
     ),
     h3: ({ children }) => (
-      <h3 className="mb-2 mt-4 text-base font-semibold leading-7">
+      <h3
+        className="mb-2 mt-4 text-base font-semibold leading-7"
+        {...headingAnchorAttributes(children, headingAnchor)}
+      >
         {renderChildren(children)}
       </h3>
     ),
     h4: ({ children }) => (
-      <h4 className="mb-2 mt-4 text-sm font-semibold leading-6">
+      <h4
+        className="mb-2 mt-4 text-sm font-semibold leading-6"
+        {...headingAnchorAttributes(children, headingAnchor)}
+      >
         {renderChildren(children)}
       </h4>
     ),
@@ -201,11 +296,15 @@ function markdownComponents({
       </div>
     ),
     thead: ({ children }) => <thead className="bg-muted/70">{children}</thead>,
-    th: ({ children }) => (
-      <th className="border-b px-3 py-2 font-semibold">{renderChildren(children)}</th>
+    th: ({ children, colSpan, rowSpan }) => (
+      <th colSpan={colSpan} rowSpan={rowSpan} className="border-b px-3 py-2 font-semibold">
+        {renderChildren(children)}
+      </th>
     ),
-    td: ({ children }) => (
-      <td className="border-t px-3 py-2 align-top">{renderChildren(children)}</td>
+    td: ({ children, colSpan, rowSpan }) => (
+      <td colSpan={colSpan} rowSpan={rowSpan} className="border-t px-3 py-2 align-top">
+        {renderChildren(children)}
+      </td>
     ),
     code: ({ children, className }) => (
       <code className={cn("rounded bg-muted px-1 py-0.5 text-[0.92em]", className)}>
@@ -217,14 +316,7 @@ function markdownComponents({
         {children}
       </pre>
     ),
-    img: ({ src, alt }) => (
-      <img
-        src={src ?? ""}
-        alt={alt ?? ""}
-        className="my-4 max-h-[70vh] max-w-full rounded border object-contain"
-        loading="lazy"
-      />
-    ),
+    img: ({ src, alt }) => <MarkdownImage src={src} alt={alt} />,
     strong: ({ children }) => <strong>{renderChildren(children)}</strong>,
     em: ({ children }) => <em>{renderChildren(children)}</em>,
     a: ({ href, children }) => (
@@ -238,6 +330,92 @@ function markdownComponents({
       </a>
     ),
   }
+}
+
+function headingAnchorAttributes(children: ReactNode, headingAnchor?: MarkdownHeadingAnchor | null) {
+  if (!headingAnchor?.id || !headingAnchor.text.trim()) {
+    return {}
+  }
+  if (!markdownHeadingMatchesAnchor(reactNodeText(children), headingAnchor.text)) {
+    return {}
+  }
+  return {
+    "data-outline-anchor-id": headingAnchor.id,
+  }
+}
+
+function reactNodeText(node: ReactNode): string {
+  if (typeof node === "string" || typeof node === "number") {
+    return String(node)
+  }
+  if (Array.isArray(node)) {
+    return node.map(reactNodeText).join("")
+  }
+  if (isValidElement(node)) {
+    return reactNodeText((node as ReactElement<{ children?: ReactNode }>).props.children)
+  }
+  return ""
+}
+
+function markdownHeadingMatchesAnchor(heading: string, anchor: string) {
+  const headingKey = normalizeMarkdownHeadingKey(heading)
+  const anchorKey = normalizeMarkdownHeadingKey(anchor)
+  return (
+    Boolean(headingKey && anchorKey) &&
+    (headingKey === anchorKey || headingKey.endsWith(anchorKey) || anchorKey.endsWith(headingKey))
+  )
+}
+
+function normalizeMarkdownHeadingKey(value: string) {
+  return value
+    .replace(/[\s.#*_`~:：、，,;；\-–—()[\]{}]+/g, "")
+    .toLowerCase()
+}
+
+function MarkdownImage({ src, alt }: { src?: string | null; alt?: string | null }) {
+  const [loadFailed, setLoadFailed] = useState(false)
+  const resolvedSrc = markdownImageSrc(src)
+
+  useEffect(() => {
+    setLoadFailed(false)
+  }, [resolvedSrc])
+
+  if (!resolvedSrc) {
+    return null
+  }
+  if (loadFailed) {
+    return (
+      <span className="my-4 block rounded border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+        图片加载失败。
+      </span>
+    )
+  }
+  return (
+    <img
+      src={resolvedSrc}
+      alt={alt ?? ""}
+      className="my-4 max-h-[70vh] max-w-full rounded border object-contain"
+      loading="lazy"
+      decoding="async"
+      onError={() => setLoadFailed(true)}
+    />
+  )
+}
+
+function markdownUrlTransform(value: string, key: string, node: { tagName?: string }) {
+  if (key === "src" && node.tagName === "img" && isAllowedMarkdownImageUrl(value)) {
+    return value
+  }
+  return defaultUrlTransform(value)
+}
+
+function isAllowedMarkdownImageUrl(value: string) {
+  const trimmed = value.trim()
+  return (
+    /^(?:file|asset):/i.test(trimmed) ||
+    /^https?:\/\/asset\.localhost(?::\d+)?(?:[/?#]|$)/i.test(trimmed) ||
+    /^data:image\/(?:png|jpe?g|gif|webp|bmp);base64,/i.test(trimmed)
+  )
 }
 
 function renderMarkdownChildrenWithCitations(
@@ -359,6 +537,7 @@ function renderMarkdownTextWithHighlights(
         key={`highlight-${segment.highlightId}-${keyPrefix}-${index}`}
         className={markdownHighlightClassName(segment.highlightId)}
         data-highlight-id={segment.highlightId}
+        data-highlight-type={markdownHighlightType(segment.highlightId)}
         data-current-selection={
           segment.highlightId === "current-text-selection" ? "true" : undefined
         }
@@ -462,9 +641,18 @@ function markdownHighlightClassName(id: string) {
     return "reader-current-text-selection box-decoration-clone rounded-sm bg-amber-200/80 px-0.5 text-foreground ring-1 ring-amber-500/35 dark:bg-amber-300/35"
   }
   if (id === "active-citation-target") {
-    return "box-decoration-clone rounded-sm bg-sky-200/65 px-0.5 text-foreground dark:bg-sky-300/30"
+    return "box-decoration-clone rounded-sm bg-sky-200/75 px-0.5 text-foreground ring-1 ring-sky-500/25 animate-citation-pulse dark:bg-sky-300/30"
+  }
+  if (id.startsWith("spark-anchor-")) {
+    return "reader-spark-text-anchor"
   }
   return "box-decoration-clone rounded-sm bg-teal-300/35 px-0.5 text-foreground dark:bg-teal-300/25"
+}
+
+function markdownHighlightType(id: string) {
+  if (id === "current-text-selection") return "selection"
+  if (id === "active-citation-target") return "citation"
+  return "saved"
 }
 
 function highlightPriority(id: string) {
@@ -487,10 +675,47 @@ function rangesOverlap(left: MarkdownHighlightRange, right: MarkdownHighlightRan
   return left.start < right.end && left.end > right.start
 }
 
+const markdownSanitizeSchema = {
+  ...defaultSchema,
+  attributes: {
+    ...defaultSchema.attributes,
+    td: [
+      ...(defaultSchema.attributes?.td ?? []),
+      "colSpan",
+      "rowSpan",
+      "align",
+      "valign",
+    ],
+    th: [
+      ...(defaultSchema.attributes?.th ?? []),
+      "colSpan",
+      "rowSpan",
+      "align",
+      "valign",
+    ],
+  },
+  protocols: {
+    ...defaultSchema.protocols,
+    src: ["http", "https", "file", "data", "asset"],
+  },
+}
+
+const katexOptions = {
+  strict: false,
+  throwOnError: false,
+}
+
 function sanitizeRawHtmlTags(source: string) {
   return source
     .replace(/<\/([A-Za-z][A-Za-z0-9:-]*)\s*>/g, "&lt;/$1&gt;")
     .replace(/<([A-Za-z][A-Za-z0-9:-]*)(?:\s[^>]*)?\s*\/?>/g, "&lt;$1&gt;")
+}
+
+function normalizeStandaloneDisplayMath(source: string) {
+  return source.replace(
+    /^([ \t]*)\$\$[ \t]*(\S[\s\S]*?\S|\S)[ \t]*\$\$[ \t]*$/gm,
+    (_match, indent: string, formula: string) => `${indent}$$\n${formula}\n${indent}$$`,
+  )
 }
 
 function CitationButton({
@@ -505,9 +730,9 @@ function CitationButton({
   return (
     <button
       type="button"
-      className="mx-1 inline-flex translate-y-[-1px] rounded border bg-accent px-1.5 py-0.5 text-[11px] font-medium text-accent-foreground"
+      className="mx-1 inline-flex translate-y-[-1px] rounded border bg-accent px-1.5 py-0.5 text-[11px] font-medium text-accent-foreground transition-[background-color,box-shadow,transform] duration-interactive ease-reader hover:bg-accent/80 hover:shadow-sm hover:ring-1 hover:ring-primary/25 active:scale-95"
       onClick={() => onClick?.(chunkId)}
-      title={chunkId}
+      title={label}
     >
       {label}
     </button>

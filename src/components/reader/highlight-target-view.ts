@@ -1,1 +1,1 @@
-export type ReaderView = "text" | "pdf" | "translation"
+export type ReaderView = "text" | "tldr" | "translation" | "pdf"

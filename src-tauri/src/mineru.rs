@@ -526,6 +526,9 @@ fn extract_zip_bytes(bytes: &[u8], output_dir: &Path) -> Result<(), MinerUError>
             code: -1,
             message: err.to_string(),
         })?;
+        if zip_entry_is_symlink(file.unix_mode()) {
+            return Err(MinerUError::UnsafeZipPath);
+        }
         let out_path = safe_zip_output_path(output_dir, file.name())?;
         if file.name().ends_with('/') {
             fs::create_dir_all(&out_path).map_err(|err| MinerUError::Api {
@@ -540,6 +543,7 @@ fn extract_zip_bytes(bytes: &[u8], output_dir: &Path) -> Result<(), MinerUError>
                 message: err.to_string(),
             })?;
         }
+        reject_symlink_ancestor(output_dir, &out_path)?;
         let mut contents = Vec::new();
         file.read_to_end(&mut contents)
             .map_err(|err| MinerUError::Api {
@@ -552,6 +556,31 @@ fn extract_zip_bytes(bytes: &[u8], output_dir: &Path) -> Result<(), MinerUError>
         })?;
     }
 
+    Ok(())
+}
+
+fn zip_entry_is_symlink(mode: Option<u32>) -> bool {
+    const UNIX_FILE_TYPE_MASK: u32 = 0o170000;
+    const UNIX_SYMLINK_TYPE: u32 = 0o120000;
+    mode.is_some_and(|mode| mode & UNIX_FILE_TYPE_MASK == UNIX_SYMLINK_TYPE)
+}
+
+fn reject_symlink_ancestor(output_dir: &Path, out_path: &Path) -> Result<(), MinerUError> {
+    let mut current = output_dir.to_path_buf();
+    let relative = out_path
+        .strip_prefix(output_dir)
+        .map_err(|_| MinerUError::UnsafeZipPath)?;
+    for component in relative.components() {
+        if let Component::Normal(part) = component {
+            current.push(part);
+            if fs::symlink_metadata(&current)
+                .map(|metadata| metadata.file_type().is_symlink())
+                .unwrap_or(false)
+            {
+                return Err(MinerUError::UnsafeZipPath);
+            }
+        }
+    }
     Ok(())
 }
 
@@ -715,6 +744,13 @@ mod tests {
         assert!(safe_zip_output_path(output_dir, "../secret").is_err());
         assert!(safe_zip_output_path(output_dir, "/absolute").is_err());
         assert!(safe_zip_output_path(output_dir, "nested/layout.json").is_ok());
+    }
+
+    #[test]
+    fn rejects_zip_symlink_entries() {
+        assert!(zip_entry_is_symlink(Some(0o120777)));
+        assert!(!zip_entry_is_symlink(Some(0o100644)));
+        assert!(!zip_entry_is_symlink(None));
     }
 
     #[test]

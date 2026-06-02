@@ -34,7 +34,7 @@ export type InterpretationSessionSummary = SavedInterpretation & {
 
 export function summarizeInterpretationSessions(items: SavedInterpretation[]): InterpretationSessionSummary[] {
   const sessions = new Map<string, SavedInterpretation[]>()
-  for (const item of items) {
+  for (const item of items.filter((item) => (item.kind ?? "interpretation") === "interpretation")) {
     const sessionId = item.sessionId || item.id
     const group = sessions.get(sessionId) ?? []
     group.push(item)

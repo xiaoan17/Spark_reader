@@ -1,18 +1,21 @@
 import { Copy, Highlighter, MessageSquareText, SearchCheck, Sparkles } from "lucide-react"
-import type { CSSProperties } from "react"
+import { forwardRef, type CSSProperties } from "react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
+import { shouldSubmitTextarea } from "@/components/reader/textarea-submit"
 
 type SelectionToolbarProps = {
   approximate?: boolean
   askOpen?: boolean
   className?: string
   style?: CSSProperties
+  visible?: boolean
   disabled?: boolean
   onExplain?: () => void
   onPlainExplain?: () => void
   onAskToggle?: () => void
+  onSpark?: () => void
   onHighlight?: () => void
   onCopy?: () => void
   question?: string
@@ -20,45 +23,52 @@ type SelectionToolbarProps = {
   onQuestionSubmit?: () => void
 }
 
-export function SelectionToolbar({
+export const SelectionToolbar = forwardRef<HTMLDivElement, SelectionToolbarProps>(function SelectionToolbar({
   approximate = false,
   askOpen = false,
   className,
   style,
+  visible = true,
   disabled = false,
   onExplain,
   onPlainExplain,
   onAskToggle,
+  onSpark,
   onHighlight,
   onCopy,
   question = "",
   onQuestionChange,
   onQuestionSubmit,
-}: SelectionToolbarProps) {
+}: SelectionToolbarProps, ref) {
   return (
     <div
+      ref={ref}
       data-testid="selection-toolbar"
       className={cn(
-        "w-fit rounded-lg border bg-card p-2 text-card-foreground shadow-lg transition-[opacity,transform,box-shadow] duration-150 ease-out will-change-transform",
+        "w-fit rounded-lg border bg-card p-2 text-card-foreground shadow-lg transition-[opacity,transform,box-shadow,left,top] duration-subtle ease-reader will-change-transform",
+        visible
+          ? "pointer-events-auto translate-y-0 scale-100 opacity-100"
+          : "pointer-events-none -translate-y-1 scale-95 opacity-0",
         className,
       )}
       style={style}
     >
       <div className="flex items-center gap-1">
-        <Button size="sm" disabled={disabled} onClick={onExplain}>
-          <Sparkles className="mr-1.5 h-4 w-4" />
-          深度解读
-        </Button>
-        <Button size="sm" variant="ghost" disabled={disabled} onClick={onPlainExplain}>
+        <Button size="sm" disabled={disabled} onClick={onPlainExplain ?? onExplain}>
           <SearchCheck className="mr-1.5 h-4 w-4" />
-          它在说什么
+          解读
         </Button>
         <Button size="sm" variant="ghost" disabled={disabled} onClick={onAskToggle}>
           <MessageSquareText className="mr-1.5 h-4 w-4" />
-          提问
+          追问
         </Button>
-        <Button size="icon" variant="ghost" aria-label="高亮" disabled={disabled} onClick={onHighlight}>
-          <Highlighter className="h-4 w-4" />
+        <Button size="sm" variant="ghost" disabled={disabled} onClick={onSpark}>
+          <Sparkles className="mr-1.5 h-4 w-4" />
+          Spark
+        </Button>
+        <Button size="sm" variant="ghost" disabled={disabled} onClick={onHighlight}>
+          <Highlighter className="mr-1.5 h-4 w-4" />
+          标记
         </Button>
         <Button size="icon" variant="ghost" aria-label="复制" disabled={disabled} onClick={onCopy}>
           <Copy className="h-4 w-4" />
@@ -77,7 +87,8 @@ export function SelectionToolbar({
             value={question}
             onChange={(event) => onQuestionChange?.(event.target.value)}
             onKeyDown={(event) => {
-              if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+              if (shouldSubmitTextarea(event)) {
+                event.preventDefault()
                 onQuestionSubmit?.()
               }
             }}
@@ -89,4 +100,4 @@ export function SelectionToolbar({
       ) : null}
     </div>
   )
-}
+})

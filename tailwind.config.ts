@@ -47,6 +47,50 @@ const config: Config = {
           "serif",
         ],
       },
+      transitionDuration: {
+        interactive: "100ms",
+        subtle: "200ms",
+        moderate: "300ms",
+        reveal: "500ms",
+      },
+      transitionTimingFunction: {
+        reader: "cubic-bezier(0.2, 0, 0, 1)",
+      },
+      keyframes: {
+        "fade-in": {
+          "0%": { opacity: "0" },
+          "100%": { opacity: "1" },
+        },
+        "slide-in-up": {
+          "0%": { opacity: "0", transform: "translateY(6px)" },
+          "100%": { opacity: "1", transform: "translateY(0)" },
+        },
+        "scale-in": {
+          "0%": { opacity: "0", transform: "scale(0.97)" },
+          "100%": { opacity: "1", transform: "scale(1)" },
+        },
+        "pop-in": {
+          "0%": { opacity: "0", transform: "translateY(4px) scale(0.96)" },
+          "100%": { opacity: "1", transform: "translateY(0) scale(1)" },
+        },
+        shimmer: {
+          "0%": { backgroundPosition: "200% 0" },
+          "100%": { backgroundPosition: "-200% 0" },
+        },
+        "citation-pulse": {
+          "0%, 100%": { backgroundColor: "rgb(186 230 253 / 0.65)", boxShadow: "0 0 0 0 rgb(14 165 233 / 0)" },
+          "35%": { backgroundColor: "rgb(254 240 138 / 0.9)", boxShadow: "0 0 0 4px rgb(245 158 11 / 0.22)" },
+          "70%": { backgroundColor: "rgb(186 230 253 / 0.75)", boxShadow: "0 0 0 1px rgb(14 165 233 / 0.2)" },
+        },
+      },
+      animation: {
+        "fade-in": "fade-in 200ms cubic-bezier(0.2, 0, 0, 1)",
+        "slide-in-up": "slide-in-up 220ms cubic-bezier(0.2, 0, 0, 1)",
+        "scale-in": "scale-in 160ms cubic-bezier(0.2, 0, 0, 1)",
+        "pop-in": "pop-in 140ms cubic-bezier(0.2, 0, 0, 1)",
+        shimmer: "shimmer 1.3s linear infinite",
+        "citation-pulse": "citation-pulse 950ms cubic-bezier(0.2, 0, 0, 1) 2",
+      },
     },
   },
   plugins: [],

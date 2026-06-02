@@ -42,6 +42,83 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
+pub fn search_book_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "search_book".to_string(),
+        description: "Search indexed chunks in the current book. Use this first for concepts, definitions, context, echoes, and follow-up questions.".to_string(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "A focused search query grounded in the selected text."
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 12
+                }
+            },
+            "required": ["query"]
+        }),
+    }
+}
+
+pub fn get_chunk_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "get_chunk".to_string(),
+        description: "Fetch one exact chunk by stable chunk_id.".to_string(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "chunk_id": { "type": "string" }
+            },
+            "required": ["chunk_id"]
+        }),
+    }
+}
+
+pub fn get_neighbors_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "get_neighbors".to_string(),
+        description: "Fetch nearby chunks before and after a known chunk_id for local context."
+            .to_string(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "chunk_id": { "type": "string" },
+                "radius": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 3
+                }
+            },
+            "required": ["chunk_id"]
+        }),
+    }
+}
+
+pub fn list_structure_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "list_structure".to_string(),
+        description: "List representative structure chunks when direct evidence is sparse."
+            .to_string(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {}
+        }),
+    }
+}
+
+pub fn book_retrieval_tools() -> Vec<ToolDefinition> {
+    vec![
+        search_book_tool(),
+        get_chunk_tool(),
+        get_neighbors_tool(),
+        list_structure_tool(),
+    ]
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolCall {
     pub id: String,
@@ -138,6 +215,11 @@ pub fn cancel(token: &CancellationToken) {
 
 pub fn is_cancelled(token: &CancellationToken) -> bool {
     token.load(Ordering::SeqCst)
+}
+
+pub fn active_model_label() -> Result<String, LlmError> {
+    let config = config::llm_config()?;
+    Ok(format!("{:?}/{}", config.provider, config.model))
 }
 
 #[derive(Debug, Deserialize)]
@@ -930,6 +1012,30 @@ mod tests {
     }
 
     #[test]
+    fn book_retrieval_tools_expose_all_book_tool_schemas() {
+        let tools = book_retrieval_tools();
+        let names = tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            names,
+            vec![
+                "search_book",
+                "get_chunk",
+                "get_neighbors",
+                "list_structure"
+            ]
+        );
+        assert_eq!(tools[0].input_schema["required"][0], "query");
+        assert_eq!(tools[0].input_schema["properties"]["limit"]["maximum"], 12);
+        assert_eq!(tools[1].input_schema["required"][0], "chunk_id");
+        assert_eq!(tools[2].input_schema["properties"]["radius"]["maximum"], 3);
+        assert!(tools[3].input_schema["properties"].is_object());
+    }
+
+    #[test]
     fn anthropic_prompt_cache_marks_static_blocks_only() {
         let request = tool_round_request();
         let system = request
@@ -963,7 +1069,7 @@ mod tests {
     fn openai_chat_body_translates_native_tool_results() {
         let request = tool_round_request();
         let body = openai_chat_body(&llm_config(LlmProviderKind::DeepSeek), &request, false);
-        let messages = body["messages"].as_array().expect("messages array");
+        let messages = json_array(&body["messages"]);
 
         assert_eq!(messages[2]["role"], "assistant");
         assert_eq!(messages[2]["tool_calls"][0]["id"], "call-1");
@@ -992,7 +1098,7 @@ mod tests {
             &request,
             chat_messages,
         );
-        let messages = body["messages"].as_array().expect("messages array");
+        let messages = json_array(&body["messages"]);
 
         assert_eq!(messages[1]["role"], "assistant");
         assert_eq!(messages[1]["content"][0]["type"], "text");
@@ -1133,21 +1239,17 @@ mod tests {
                 ChatMessage::system("系统提示"),
                 ChatMessage::user("查找复利"),
             ],
-            tools: vec![ToolDefinition {
-                name: "search_book".to_string(),
-                description: "Search indexed book chunks by query.".to_string(),
-                input_schema: json!({
-                    "type": "object",
-                    "properties": {
-                        "query": { "type": "string" },
-                        "limit": { "type": "integer" }
-                    },
-                    "required": ["query"]
-                }),
-            }],
+            tools: vec![search_book_tool()],
             max_tokens: 800,
             temperature: 0.1,
         }
+    }
+
+    fn json_array(value: &Value) -> &[Value] {
+        assert!(value.is_array(), "expected JSON array, got {value}");
+        value
+            .as_array()
+            .unwrap_or_else(|| unreachable!("checked above"))
     }
 
     fn tool_round_request() -> ChatRequest {

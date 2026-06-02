@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
+  chunkContentHash,
   isLegacyChunkId,
   isNamespacedChunkId,
   makeChunkId,
@@ -15,6 +16,7 @@ describe("chunk id helpers", () => {
     expect(isNamespacedChunkId(chunkId)).toBe(true)
     expect(isNamespacedChunkId("p3-c5")).toBe(false)
     expect(isLegacyChunkId("p3-c5")).toBe(true)
+    expect(chunkContentHash("复利 来自 时间")).toBe("2a84c8da")
   })
 
   it("normalizes legacy parsed chunks and rewrites markdown headings", () => {

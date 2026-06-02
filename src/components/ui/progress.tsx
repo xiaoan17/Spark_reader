@@ -11,8 +11,8 @@ export function Progress({ value, className }: ProgressProps) {
   return (
     <div className={cn("h-2 w-full overflow-hidden rounded-full bg-muted", className)}>
       <div
-        className="h-full bg-primary transition-all"
-        style={{ width: `${bounded}%` }}
+        className="h-full origin-left bg-primary transition-transform duration-subtle ease-reader will-change-transform"
+        style={{ transform: `scaleX(${bounded / 100})` }}
       />
     </div>
   )

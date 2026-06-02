@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { shouldUseBackendInterpretation } from "./interpretation-runtime"
+import { llmKeyReadiness, shouldUseBackendInterpretation } from "./interpretation-runtime"
 
 describe("shouldUseBackendInterpretation", () => {
   it("uses backend RAG only for indexed desktop books", () => {
@@ -34,5 +34,34 @@ describe("shouldUseBackendInterpretation", () => {
         tauriRuntime: true,
       }),
     ).toBe(false)
+  })
+})
+
+describe("llmKeyReadiness", () => {
+  it("allows backend interpretation when the active provider has a saved key", () => {
+    expect(
+      llmKeyReadiness({
+        provider: "deep_seek",
+        model: "deepseek-v4-flash",
+        apiKeyConfigured: true,
+      }),
+    ).toEqual({ ready: true })
+  })
+
+  it("returns an actionable local fallback message when the key is missing", () => {
+    const readiness = llmKeyReadiness({
+      provider: "open_ai",
+      model: "gpt-5-mini",
+      apiKeyConfigured: false,
+    }, "追问")
+
+    expect(readiness.ready).toBe(false)
+    if (!readiness.ready) {
+      expect(readiness.reason).toBe("missing_api_key")
+      expect(readiness.message).toContain("OpenAI")
+      expect(readiness.message).toContain("gpt-5-mini")
+      expect(readiness.message).toContain("本地兜底")
+      expect(readiness.message).toContain("完整 LLM 追问")
+    }
   })
 })

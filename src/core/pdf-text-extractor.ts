@@ -30,7 +30,20 @@ export type ParsedDocument = {
   markdown: string
 }
 
-export async function extractPdfText(pdf: PDFDocumentProxy): Promise<ParsedDocument> {
+export type PdfTextExtractionProgress = {
+  pageNumber: number
+  totalPages: number
+  percent: number
+}
+
+export type PdfTextExtractionOptions = {
+  onProgress?: (progress: PdfTextExtractionProgress) => void
+}
+
+export async function extractPdfText(
+  pdf: PDFDocumentProxy,
+  options: PdfTextExtractionOptions = {},
+): Promise<ParsedDocument> {
   const pages: ParsedPage[] = []
   const pageBlocks = new Map<number, TextBlock[]>()
 
@@ -47,6 +60,11 @@ export async function extractPdfText(pdf: PDFDocumentProxy): Promise<ParsedDocum
       markdown,
     })
     pageBlocks.set(pageNumber - 1, blocks)
+    options.onProgress?.({
+      pageNumber,
+      totalPages: pdf.numPages,
+      percent: Math.round((pageNumber / Math.max(1, pdf.numPages)) * 100),
+    })
   }
 
   const text = pages.map((page) => page.text).join("\n\n")

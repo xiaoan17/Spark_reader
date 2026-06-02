@@ -15,8 +15,6 @@ describe("text asset export", () => {
     ]
 
     expect(buildTextAssetContent(pages, "txt")).toBe("第一页纯文本\n\n第二页纯文本")
-    expect(buildTextAssetContent(pages, "md")).toBe(
-      "# 第一页\n\n第一页 Markdown\n\n## 第 2 页\n\n第二页纯文本",
-    )
+    expect(buildTextAssetContent(pages, "md")).toBe("# 第一页\n\n第一页 Markdown\n\n第二页纯文本")
   })
 })

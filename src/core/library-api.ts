@@ -8,6 +8,75 @@ import type {
   SavedInterpretation,
 } from "@/stores/reader-store"
 
+export type CommandErrorPayload = {
+  code?: string
+  message: string
+  suggestion?: string | null
+}
+
+export class CommandError extends Error {
+  code: string
+  suggestion?: string
+  raw: unknown
+
+  constructor(payload: CommandErrorPayload, raw?: unknown) {
+    const message = payload.suggestion
+      ? `${payload.message} ${payload.suggestion}`
+      : payload.message
+    super(message)
+    this.name = "CommandError"
+    this.code = payload.code ?? "unknown"
+    this.suggestion = payload.suggestion ?? undefined
+    this.raw = raw
+  }
+}
+
+export function normalizeCommandError(error: unknown): CommandError {
+  if (error instanceof CommandError) {
+    return error
+  }
+  if (error instanceof Error) {
+    return new CommandError(
+      {
+        code: "unknown",
+        message: error.message || "桌面版操作失败。",
+      },
+      error,
+    )
+  }
+  if (isCommandErrorPayload(error)) {
+    return new CommandError(error, error)
+  }
+  if (typeof error === "string") {
+    return new CommandError({ code: "unknown", message: error }, error)
+  }
+  return new CommandError(
+    {
+      code: "unknown",
+      message: "桌面版操作失败。",
+      suggestion: "请保留当前阅读内容后重试；如果问题持续，可打开开发诊断查看详情。",
+    },
+    error,
+  )
+}
+
+function isCommandErrorPayload(error: unknown): error is CommandErrorPayload {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof (error as { message?: unknown }).message === "string"
+  )
+}
+
+async function invokeCommand<T>(command: string, args?: Record<string, unknown>) {
+  try {
+    return await invoke<T>(command, args)
+  } catch (error) {
+    throw normalizeCommandError(error)
+  }
+}
+
 export type SaveParsedBookResponse = {
   bookId: string
   pageCount: number
@@ -62,6 +131,10 @@ export type StoredBookSummary = {
   parserEngine: string
   coordinateMode: string
   quality?: TextQuality | null
+  tldrText?: string | null
+  tldrGeneratedAt?: string | null
+  tldrModel?: string | null
+  tldrSourceVersion?: number | null
   createdAt: string
 }
 
@@ -79,6 +152,31 @@ export type ConvertedBookAsset = {
   parserEngine: string
   coordinateMode: string
   quality?: TextQuality | null
+  tldrText?: string | null
+  tldrGeneratedAt?: string | null
+  tldrModel?: string | null
+  tldrSourceVersion?: number | null
+  pages: ParsedPage[]
+  chunks: ParsedChunk[]
+}
+
+export type DocumentTldr = {
+  bookId: string
+  text: string
+  generatedAt: string
+  model: string
+  sourceVersion: number
+}
+
+export type ConvertedBookManifest = StoredBookSummary
+
+export type ConvertedBookPageWindow = {
+  bookId: string
+  startPage: number
+  endPage: number
+  totalPages: number
+  text: string
+  markdown: string
   pages: ParsedPage[]
   chunks: ParsedChunk[]
 }
@@ -128,6 +226,7 @@ export type InterpretSelectionRequest = {
   bookId: string
   selectionText: string
   pageIndexes: number[]
+  selectionRects?: NormalizedPageRect[]
   focusChunkIds?: string[]
   question?: string
   priorAnswer?: string
@@ -136,6 +235,7 @@ export type InterpretSelectionRequest = {
     question: string
     answer: string
   }>
+  lightweight?: boolean
   mode: InterpretMode
 }
 
@@ -339,26 +439,34 @@ export type SaveInterpretationRequest = {
   question?: string | null
   answer: string
   answerSource?: AnswerSource
+  kind?: InterpretationKind
+  evidenceChunkSnapshots?: {
+    chunkId: string
+    chunkIdVersion: number
+    contentHash?: string | null
+  }[]
 }
+
+export type InterpretationKind = "interpretation" | "spark" | "note"
 
 export function isTauriRuntime() {
   return "__TAURI_INTERNALS__" in window
 }
 
 export async function productSelfCheck() {
-  return invoke<ProductSelfCheckResponse>("product_self_check")
+  return invokeCommand<ProductSelfCheckResponse>("product_self_check")
 }
 
 export async function searchZoteroItems(query: string, limit = 8) {
-  return invoke<ZoteroSearchResult[]>("search_zotero_items", { query, limit })
+  return invokeCommand<ZoteroSearchResult[]>("search_zotero_items", { query, limit })
 }
 
 export async function importZoteroItem(itemKey: string, pageCount?: number | null) {
-  return invoke<SaveParsedBookResponse>("import_zotero_item", { itemKey, pageCount })
+  return invokeCommand<SaveParsedBookResponse>("import_zotero_item", { itemKey, pageCount })
 }
 
 export async function importMineruOutput(outputDir: string, title?: string | null) {
-  return invoke<SaveParsedBookResponse>("import_mineru_output", { outputDir, title })
+  return invokeCommand<SaveParsedBookResponse>("import_mineru_output", { outputDir, title })
 }
 
 export async function importPdfWithMineru(
@@ -366,7 +474,7 @@ export async function importPdfWithMineru(
   options?: MinerUParseOptions,
   pageCount?: number | null,
 ) {
-  return invoke<SaveParsedBookResponse>("import_pdf_with_mineru", { pdfPath, options, pageCount })
+  return invokeCommand<SaveParsedBookResponse>("import_pdf_with_mineru", { pdfPath, options, pageCount })
 }
 
 export async function listenMineruProgress(
@@ -381,11 +489,11 @@ export async function listenMineruProgress(
 }
 
 export async function readPdfFile(pdfPath: string) {
-  return invoke<number[]>("read_pdf_file", { pdfPath })
+  return invokeCommand<number[]>("read_pdf_file", { pdfPath })
 }
 
 export async function searchBook(bookId: string, query: string, limit = 12) {
-  return invoke<SearchBookHit[]>("search_book", {
+  return invokeCommand<SearchBookHit[]>("search_book", {
     bookId,
     query,
     limit,
@@ -393,65 +501,91 @@ export async function searchBook(bookId: string, query: string, limit = 12) {
 }
 
 export async function rebuildSearchIndex(bookId: string) {
-  return invoke<SearchIndexSummary>("rebuild_search_index", { bookId })
+  return invokeCommand<SearchIndexSummary>("rebuild_search_index", { bookId })
 }
 
 export async function searchIndexSummary(bookId: string) {
-  return invoke<SearchIndexSummary>("search_index_summary", { bookId })
+  return invokeCommand<SearchIndexSummary>("search_index_summary", { bookId })
 }
 
 export async function getChunk(bookId: string, chunkId: string) {
-  return invoke<SearchBookHit | null>("get_chunk", { bookId, chunkId })
+  return invokeCommand<SearchBookHit | null>("get_chunk", { bookId, chunkId })
 }
 
 export async function getNeighbors(bookId: string, chunkId: string, radius = 1) {
-  return invoke<SearchBookHit[]>("get_neighbors", { bookId, chunkId, radius })
+  return invokeCommand<SearchBookHit[]>("get_neighbors", { bookId, chunkId, radius })
 }
 
 export async function listStructure(bookId: string) {
-  return invoke<SearchBookHit[]>("list_structure", { bookId })
+  return invokeCommand<SearchBookHit[]>("list_structure", { bookId })
 }
 
 export async function listBooks() {
-  return invoke<StoredBookSummary[]>("list_books")
+  return invokeCommand<StoredBookSummary[]>("list_books")
 }
 
 export async function getConvertedBook(bookId: string) {
-  return invoke<ConvertedBookAsset>("get_converted_book", { bookId })
+  return invokeCommand<ConvertedBookAsset>("get_converted_book", { bookId })
+}
+
+export async function getConvertedBookManifest(bookId: string) {
+  return invokeCommand<ConvertedBookManifest>("get_converted_book_manifest", { bookId })
+}
+
+export async function getDocumentTldr(bookId: string) {
+  return invokeCommand<DocumentTldr>("get_or_generate_document_tldr", {
+    bookId,
+    forceRegenerate: false,
+  })
+}
+
+export async function regenerateDocumentTldr(bookId: string) {
+  return invokeCommand<DocumentTldr>("get_or_generate_document_tldr", {
+    bookId,
+    forceRegenerate: true,
+  })
+}
+
+export async function getConvertedBookPages(bookId: string, startPage: number, pageCount: number) {
+  return invokeCommand<ConvertedBookPageWindow>("get_converted_book_pages", {
+    bookId,
+    startPage,
+    pageCount,
+  })
 }
 
 export async function openBookAsset(bookId: string, kind: BookAssetKind) {
-  return invoke<OpenBookAssetResponse>("open_book_asset", { bookId, kind })
+  return invokeCommand<OpenBookAssetResponse>("open_book_asset", { bookId, kind })
 }
 
 export async function revealBookAsset(bookId: string, kind: BookAssetKind) {
-  return invoke<OpenBookAssetResponse>("reveal_book_asset", { bookId, kind })
+  return invokeCommand<OpenBookAssetResponse>("reveal_book_asset", { bookId, kind })
 }
 
 export async function findBookBySourcePdf(pdfPath: string) {
-  return invoke<StoredBookSummary | null>("find_book_by_source_pdf", { pdfPath })
+  return invokeCommand<StoredBookSummary | null>("find_book_by_source_pdf", { pdfPath })
 }
 
 export async function interpretSelection(request: InterpretSelectionRequest, requestId?: string) {
-  return invoke<InterpretSelectionResponse>("interpret_selection", { request, requestId })
+  return invokeCommand<InterpretSelectionResponse>("interpret_selection", { request, requestId })
 }
 
 export async function cancelInterpretation(requestId: string) {
-  return invoke<boolean>("cancel_interpretation", { requestId })
+  return invokeCommand<boolean>("cancel_interpretation", { requestId })
 }
 
 export async function startTranslation(bookId: string, force = false) {
-  return invoke<TranslationStatus>("start_translation", {
+  return invokeCommand<TranslationStatus>("start_translation", {
     request: { bookId, force },
   })
 }
 
 export async function translationStatus(bookId: string) {
-  return invoke<TranslationStatus>("translation_status", { bookId })
+  return invokeCommand<TranslationStatus>("translation_status", { bookId })
 }
 
 export async function cancelTranslation(bookId: string) {
-  return invoke<boolean>("cancel_translation", { bookId })
+  return invokeCommand<boolean>("cancel_translation", { bookId })
 }
 
 export async function listenInterpretationStream(
@@ -466,63 +600,63 @@ export async function listenInterpretationStream(
 }
 
 export async function getLlmSettings() {
-  return invoke<LlmSettings>("get_llm_settings")
+  return invokeCommand<LlmSettings>("get_llm_settings")
 }
 
 export async function saveLlmSettings(request: SaveLlmSettingsRequest) {
-  return invoke<LlmSettings>("save_llm_settings", { request })
+  return invokeCommand<LlmSettings>("save_llm_settings", { request })
 }
 
 export async function testLlmConnection() {
-  return invoke<LlmConnectionTestResponse>("test_llm_connection")
+  return invokeCommand<LlmConnectionTestResponse>("test_llm_connection")
 }
 
 export async function getEmbeddingSettings() {
-  return invoke<EmbeddingSettings>("get_embedding_settings")
+  return invokeCommand<EmbeddingSettings>("get_embedding_settings")
 }
 
 export async function saveEmbeddingSettings(request: SaveEmbeddingSettingsRequest) {
-  return invoke<EmbeddingSettings>("save_embedding_settings", { request })
+  return invokeCommand<EmbeddingSettings>("save_embedding_settings", { request })
 }
 
 export async function getMineruSettings() {
-  return invoke<MinerUSettings>("get_mineru_settings")
+  return invokeCommand<MinerUSettings>("get_mineru_settings")
 }
 
 export async function saveMineruSettings(request: SaveMinerUSettingsRequest) {
-  return invoke<MinerUSettings>("save_mineru_settings", { request })
+  return invokeCommand<MinerUSettings>("save_mineru_settings", { request })
 }
 
 export async function testEmbeddingConnection() {
-  return invoke<EmbeddingConnectionTestResponse>("test_embedding_connection")
+  return invokeCommand<EmbeddingConnectionTestResponse>("test_embedding_connection")
 }
 
 export async function saveHighlight(request: SaveHighlightRequest) {
-  return invoke<SavedHighlight>("save_highlight", { request })
+  return invokeCommand<SavedHighlight>("save_highlight", { request })
 }
 
 export async function listHighlights(bookId: string) {
-  return invoke<SavedHighlight[]>("list_highlights", { bookId })
+  return invokeCommand<SavedHighlight[]>("list_highlights", { bookId })
 }
 
 export async function deleteHighlight(highlightId: string) {
-  return invoke<void>("delete_highlight", { highlightId })
+  return invokeCommand<void>("delete_highlight", { highlightId })
 }
 
 export async function deleteInterpretation(interpretationId: string) {
-  return invoke<void>("delete_interpretation", { interpretationId })
+  return invokeCommand<void>("delete_interpretation", { interpretationId })
 }
 
 export async function deleteBook(bookId: string) {
-  return invoke<{ bookId: string; removedAssetDir: boolean }>("delete_book", { bookId })
+  return invokeCommand<{ bookId: string; removedAssetDir: boolean }>("delete_book", { bookId })
 }
 
 export async function saveInterpretation(request: SaveInterpretationRequest) {
-  return invoke<SavedInterpretation>("save_interpretation", { request })
+  return invokeCommand<SavedInterpretation>("save_interpretation", { request })
 }
 
 export async function listInterpretations(bookId: string) {
-  return invoke<SavedInterpretation[]>("list_interpretations", { bookId })
+  return invokeCommand<SavedInterpretation[]>("list_interpretations", { bookId })
 }
 
 export function searchHitToChunk(hit: SearchBookHit): ParsedChunk {

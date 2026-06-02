@@ -130,5 +130,8 @@ export const LocalFallback: Story = {
     answerSource: "local_fallback",
     interpretation:
       "LLM 暂不可用时，会显示本地兜底答案，并继续保留可回跳证据。[b12345678-p8-c1-abcdef12]",
+    errorMessage:
+      "DeepSeek 还没有配置 API Key，当前已改用本地兜底。请在设置中填入 API Key 后重试完整 LLM 解读。",
+    onOpenSettings: () => undefined,
   },
 }

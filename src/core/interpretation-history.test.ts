@@ -203,6 +203,16 @@ describe("restoreTargetForSavedInterpretation", () => {
       lastCreatedAt: "2026-06-01T00:02:00Z",
     })
   })
+
+  it("excludes spark and note rows from deep interpretation history summaries", () => {
+    const rows = [
+      savedInterpretation({ id: "deep", sessionId: "deep-session", kind: "interpretation" }),
+      savedInterpretation({ id: "spark", sessionId: "spark-session", kind: "spark" }),
+      savedInterpretation({ id: "note", sessionId: "note-session", kind: "note" }),
+    ]
+
+    expect(summarizeInterpretationSessions(rows).map((item) => item.id)).toEqual(["deep"])
+  })
 })
 
 function savedInterpretation(

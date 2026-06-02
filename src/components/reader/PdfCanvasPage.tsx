@@ -1,7 +1,20 @@
-import { useEffect, useMemo, useRef, useState, type MutableRefObject, type PointerEvent as ReactPointerEvent } from "react"
-import { TextLayer, type PDFDocumentProxy, type PDFPageProxy, type RenderTask } from "@/pdf/pdfjs-compat"
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MutableRefObject,
+  type PointerEvent as ReactPointerEvent,
+} from "react"
+import {
+  loadPdfJs,
+  type PDFDocumentProxy,
+  type PDFPageProxy,
+  type RenderTask,
+} from "@/pdf/pdfjs-compat"
 import type { NormalizedPageRect } from "@/core/coordinates"
 import {
+  type ClientRectLike,
   normalizedToViewportRect,
   rectToCss,
   viewportRectToNormalized,
@@ -9,6 +22,13 @@ import {
 import { SelectionToolbar } from "@/components/selection/SelectionToolbar"
 import type { TextSelectionAnchor } from "@/stores/reader-store"
 import { textSelectionAnchorFromDom } from "./text-selection-anchor"
+import {
+  buildVirtualPageMetrics,
+  virtualPageIndexAtOffset,
+  virtualPageItems,
+  virtualPageOffset,
+} from "./virtual-pages"
+import { useVirtualPageMeasurements } from "./use-virtual-page-measurements"
 
 type PdfCanvasPageProps = {
   pdf: PDFDocumentProxy
@@ -26,6 +46,7 @@ type PdfCanvasPageProps = {
   onClearSelection: () => void
   onExplain: () => void
   onPlainExplain: () => void
+  onSpark?: () => void
   askOpen: boolean
   question: string
   onAskToggle: () => void
@@ -52,6 +73,7 @@ type ProgrammaticPdfScroll = {
   page: number
   targetTop: number
   timeoutId: number
+  cleanup?: () => void
 }
 
 type ProgrammaticPdfScrollRef = MutableRefObject<ProgrammaticPdfScroll | null>
@@ -69,6 +91,7 @@ export function PdfDocumentViewer({
   onClearSelection,
   onExplain,
   onPlainExplain,
+  onSpark = () => undefined,
   askOpen,
   question,
   onAskToggle,
@@ -80,13 +103,35 @@ export function PdfDocumentViewer({
   onCurrentPageChange,
 }: PdfDocumentViewerProps) {
   const scrollerRef = useRef<HTMLDivElement | null>(null)
-  const pageRefs = useRef(new Map<number, HTMLElement>())
   const currentPageRef = useRef(currentPage)
   const observedPageChangeRef = useRef<number | null>(null)
   const programmaticScrollRef = useRef<ProgrammaticPdfScroll | null>(null)
-  const pageNumbers = useMemo(
-    () => Array.from({ length: totalPages }, (_, index) => index + 1),
-    [totalPages],
+  const [virtualScroll, setVirtualScroll] = useState({ top: 0, height: 900 })
+  const {
+    pageRefs,
+    measuredPageHeights,
+    getPageMeasurementRef,
+    resetMeasuredPageHeights,
+  } = useVirtualPageMeasurements()
+  const virtualMetrics = useMemo(
+    () =>
+      buildVirtualPageMetrics({
+        count: totalPages,
+        estimatedHeight: 841 * zoom,
+        gap: 32,
+        measuredHeights: measuredPageHeights,
+      }),
+    [measuredPageHeights, totalPages, zoom],
+  )
+  const renderedPages = useMemo(
+    () =>
+      virtualPageItems({
+        metrics: virtualMetrics,
+        scrollTop: virtualScroll.top,
+        viewportHeight: virtualScroll.height,
+        overscan: 1800,
+      }),
+    [virtualMetrics, virtualScroll],
   )
 
   useEffect(() => {
@@ -100,7 +145,14 @@ export function PdfDocumentViewer({
     if (!scroller) {
       return
     }
-    const handleScroll = () => {
+    let scrollFrame = 0
+    const syncScroll = () => {
+      const nextHeight = scroller.clientHeight || scroller.getBoundingClientRect().height || 900
+      setVirtualScroll((state) =>
+        state.top === scroller.scrollTop && state.height === nextHeight
+          ? state
+          : { top: scroller.scrollTop, height: nextHeight },
+      )
       if (
         shouldDeferVisiblePdfPageUpdateForProgrammaticScroll(
           programmaticScrollRef,
@@ -118,7 +170,7 @@ export function PdfDocumentViewer({
       let bestPage = currentPageRef.current
       let bestDistance = Number.POSITIVE_INFINITY
 
-      for (const [pageNumber, element] of pageRefs.current) {
+      for (const [pageIndex, element] of pageRefs.current) {
         const rect = element.getBoundingClientRect()
         if (rect.bottom < scrollerRect.top || rect.top > scrollerRect.bottom) {
           continue
@@ -126,8 +178,16 @@ export function PdfDocumentViewer({
         const distance = Math.abs(rect.top - viewportAnchor)
         if (distance < bestDistance) {
           bestDistance = distance
-          bestPage = pageNumber
+          bestPage = pageIndex + 1
         }
+      }
+      if (bestDistance === Number.POSITIVE_INFINITY) {
+        bestPage =
+          virtualPageIndexAtOffset(
+            virtualMetrics,
+            scroller.scrollTop + Math.min(180, nextHeight * 0.28),
+            currentPageRef.current - 1,
+          ) + 1
       }
 
       if (bestPage !== currentPageRef.current) {
@@ -136,28 +196,74 @@ export function PdfDocumentViewer({
         onCurrentPageChange(bestPage)
       }
     }
+    const handleScroll = () => {
+      if (scrollFrame !== 0) {
+        return
+      }
+      scrollFrame = requestReaderAnimationFrame(() => {
+        scrollFrame = 0
+        syncScroll()
+      })
+    }
 
     scroller.addEventListener("scroll", handleScroll, { passive: true })
-    handleScroll()
-    return () => scroller.removeEventListener("scroll", handleScroll)
-  }, [onCurrentPageChange, pageNumbers])
+    syncScroll()
+    return () => {
+      scroller.removeEventListener("scroll", handleScroll)
+      cancelReaderAnimationFrame(scrollFrame)
+    }
+  }, [onCurrentPageChange, totalPages, virtualMetrics])
 
   useEffect(() => {
-    const target = pageRefs.current.get(currentPage)
+    const target = pageRefs.current.get(currentPage - 1)
     const scroller = scrollerRef.current
-    if (!target || !scroller) {
+    if (!scroller || totalPages <= 0) {
       return
     }
     if (observedPageChangeRef.current === currentPage) {
       observedPageChangeRef.current = null
       return
     }
-    if (isPdfPageNearScrollerAnchor(scroller, target)) {
+    if (target && isPdfPageNearScrollerAnchor(scroller, target)) {
       return
     }
-    const targetTop = scrollPdfPageIntoScrollerView(scroller, target)
-    startProgrammaticPdfScroll(programmaticScrollRef, currentPage, targetTop)
-  }, [currentPage, pageNumbers])
+    const targetTop = target
+      ? scrollPdfPageIntoScrollerView(scroller, target)
+      : scrollVirtualPdfPageIntoScrollerView(scroller, virtualMetrics, currentPage - 1, {
+          behavior: "smooth",
+          topOffset: 24,
+        })
+    startProgrammaticPdfScroll(programmaticScrollRef, currentPage, targetTop, scroller)
+    // Intentionally keyed to page intent, not measurement-only virtual metric updates.
+    // Measured PDF page heights settle after mount and should not pull natural scrolling back.
+  }, [currentPage, totalPages])
+
+  useEffect(() => {
+    const scroller = scrollerRef.current
+    if (!scroller) {
+      return
+    }
+    const syncViewport = () => {
+      const nextHeight = scroller.clientHeight || scroller.getBoundingClientRect().height || 900
+      setVirtualScroll((state) =>
+        state.top === scroller.scrollTop && state.height === nextHeight
+          ? state
+          : { top: scroller.scrollTop, height: nextHeight },
+      )
+    }
+    syncViewport()
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", syncViewport)
+      return () => window.removeEventListener("resize", syncViewport)
+    }
+    const observer = new ResizeObserver(syncViewport)
+    observer.observe(scroller)
+    return () => observer.disconnect()
+  }, [])
+
+  useEffect(() => {
+    resetMeasuredPageHeights()
+  }, [pdf, totalPages, zoom, resetMeasuredPageHeights])
 
   function clearSelection() {
     window.getSelection()?.removeAllRanges()
@@ -185,19 +291,23 @@ export function PdfDocumentViewer({
       data-pdf-scroller
       onPointerUp={handleBackgroundPointerUp}
     >
-      <div className="mx-auto flex min-w-max flex-col items-center gap-8">
-        {pageNumbers.map((pageNumber) => (
+      <div
+        className="relative mx-auto min-w-max"
+        style={{ height: virtualMetrics.totalHeight }}
+      >
+        {renderedPages.map((virtualPage) => {
+          const pageNumber = virtualPage.index + 1
+          return (
           <section
             key={pageNumber}
-            ref={(element) => {
-              if (element) {
-                pageRefs.current.set(pageNumber, element)
-              } else {
-                pageRefs.current.delete(pageNumber)
-              }
-            }}
-            className="scroll-mt-8"
+            ref={getPageMeasurementRef(virtualPage.index)}
+            className="absolute left-1/2 scroll-mt-8"
             data-pdf-page-wrapper
+            style={{
+              top: virtualPage.offsetTop,
+              minHeight: virtualPage.height,
+              transform: "translateX(-50%)",
+            }}
           >
             <PdfCanvasPage
               pdf={pdf}
@@ -211,6 +321,7 @@ export function PdfDocumentViewer({
               onClearSelection={clearSelection}
               onExplain={onExplain}
               onPlainExplain={onPlainExplain}
+              onSpark={onSpark}
               askOpen={askOpen}
               question={question}
               onAskToggle={onAskToggle}
@@ -221,7 +332,8 @@ export function PdfDocumentViewer({
               onRenderError={onRenderError}
             />
           </section>
-        ))}
+          )
+        })}
       </div>
     </div>
   )
@@ -239,6 +351,7 @@ export function PdfCanvasPage({
   onClearSelection,
   onExplain,
   onPlainExplain,
+  onSpark = () => undefined,
   askOpen,
   question,
   onAskToggle,
@@ -256,10 +369,11 @@ export function PdfCanvasPage({
   useEffect(() => {
     let cancelled = false
     let renderTask: RenderTask | null = null
-    let textLayer: TextLayer | null = null
+    let textLayer: { render: () => Promise<void>; cancel: () => void } | null = null
 
     async function renderPage() {
       try {
+        const { TextLayer } = await loadPdfJs()
         const canvas = canvasRef.current
         const textLayerContainer = textLayerRef.current
         if (!canvas || !textLayerContainer) {
@@ -390,9 +504,23 @@ export function PdfCanvasPage({
     }
   }
 
-  const visibleHighlightRects = highlightRects.filter((rect) => rect.pageIndex === pageNumber - 1)
-  const visibleSelectionRects = selectionRects.filter((rect) => rect.pageIndex === pageNumber - 1)
-  const visibleRects = [...visibleHighlightRects, ...visibleSelectionRects]
+  const pageIndex = pageNumber - 1
+  const visibleHighlightRects = useMemo(
+    () => (pageState ? viewportRectsForPage(highlightRects, pageIndex, pageState) : []),
+    [highlightRects, pageIndex, pageState],
+  )
+  const visibleSelectionRects = useMemo(
+    () => (pageState ? viewportRectsForPage(selectionRects, pageIndex, pageState) : []),
+    [selectionRects, pageIndex, pageState],
+  )
+  const visibleRects = useMemo(
+    () => [...visibleHighlightRects, ...visibleSelectionRects],
+    [visibleHighlightRects, visibleSelectionRects],
+  )
+  const toolbarPosition =
+    pageState && visibleSelectionRects.length > 0
+      ? pdfSelectionToolbarPositionFromViewportRects(visibleSelectionRects, pageState)
+      : null
 
   return (
     <div
@@ -409,34 +537,86 @@ export function PdfCanvasPage({
       <canvas ref={canvasRef} className="absolute inset-0" />
       <div ref={textLayerRef} className="textLayer absolute inset-0" />
       {pageState
-        ? visibleRects.map((rect, index) => {
-            const viewportRect = normalizedToViewportRect(rect, pageState)
-            return (
-              <div
-                key={`${pageNumber}-${index}`}
-                className="pointer-events-none absolute z-[2] rounded-sm bg-teal-300/35"
-                style={rectToCss(viewportRect)}
-              />
-            )
-          })
+        ? visibleRects.map((rect, index) => (
+            <div
+              key={`${pageNumber}-${index}`}
+              className="pointer-events-none absolute z-[2] rounded-sm bg-teal-300/35"
+              style={rectToCss(rect)}
+            />
+          ))
         : null}
       {visibleSelectionRects.length > 0 ? (
         <SelectionToolbar
           approximate={approximateSelection}
           askOpen={askOpen}
-          className="absolute left-8 top-8 z-10"
+          className="absolute z-10 max-w-[calc(100%-2rem)] animate-pop-in"
           question={question}
+          style={toolbarPosition ?? { left: 32, top: 32 }}
           onAskToggle={onAskToggle}
           onCopy={onCopy}
           onExplain={onExplain}
           onHighlight={onHighlight}
           onPlainExplain={onPlainExplain}
+          onSpark={onSpark}
           onQuestionChange={onQuestionChange}
           onQuestionSubmit={onQuestionSubmit}
         />
       ) : null}
     </div>
   )
+}
+
+export function pdfSelectionToolbarPosition(
+  selectionRects: NormalizedPageRect[],
+  pageState: PageState,
+) {
+  return pdfSelectionToolbarPositionFromViewportRects(
+    selectionRects.map((rect) => normalizedToViewportRect(rect, pageState)),
+    pageState,
+  )
+}
+
+export function viewportRectsForPage(
+  rects: NormalizedPageRect[],
+  pageIndex: number,
+  pageState: PageState,
+) {
+  return rects
+    .filter((rect) => rect.pageIndex === pageIndex)
+    .map((rect) => normalizedToViewportRect(rect, pageState))
+}
+
+function pdfSelectionToolbarPositionFromViewportRects(
+  viewportRects: ClientRectLike[],
+  pageState: PageState,
+) {
+  if (viewportRects.length === 0) {
+    return null
+  }
+  const left = Math.min(...viewportRects.map((rect) => rect.left))
+  const right = Math.max(...viewportRects.map((rect) => rect.right))
+  const top = Math.min(...viewportRects.map((rect) => rect.top))
+  const bottom = Math.max(...viewportRects.map((rect) => rect.bottom))
+  const estimatedToolbarWidth = Math.min(520, Math.max(280, pageState.width - 32))
+  const estimatedToolbarHeight = 52
+  const horizontalPadding = 16
+  const centerLeft = (left + right) / 2 - estimatedToolbarWidth / 2
+  const toolbarLeft = clampNumber(
+    centerLeft,
+    horizontalPadding,
+    Math.max(horizontalPadding, pageState.width - estimatedToolbarWidth - horizontalPadding),
+  )
+  const topAbove = top - estimatedToolbarHeight - 12
+  const topBelow = bottom + 12
+  const toolbarTop =
+    topAbove >= 16
+      ? topAbove
+      : clampNumber(topBelow, 16, Math.max(16, pageState.height - estimatedToolbarHeight - 16))
+  return { left: toolbarLeft, top: toolbarTop }
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max)
 }
 
 function scrollPdfPageIntoScrollerView(scroller: HTMLElement, target: HTMLElement) {
@@ -451,28 +631,68 @@ function scrollPdfPageIntoScrollerView(scroller: HTMLElement, target: HTMLElemen
   return targetTop
 }
 
+function scrollVirtualPdfPageIntoScrollerView(
+  scroller: HTMLElement,
+  metrics: ReturnType<typeof buildVirtualPageMetrics>,
+  pageIndex: number,
+  { behavior = "smooth", topOffset = 0 }: { behavior?: ScrollBehavior; topOffset?: number } = {},
+) {
+  const targetTop = virtualPageOffset(metrics, pageIndex, topOffset)
+  if (typeof scroller.scrollTo === "function") {
+    scroller.scrollTo({ top: targetTop, behavior })
+  } else {
+    scroller.scrollTop = targetTop
+  }
+  return targetTop
+}
+
 function startProgrammaticPdfScroll(
   ref: ProgrammaticPdfScrollRef,
   page: number,
   targetTop: number,
+  scroller?: HTMLElement,
 ) {
   clearProgrammaticPdfScroll(ref)
+  const finish = () => {
+    if (ref.current?.page === page) {
+      clearProgrammaticPdfScroll(ref)
+    }
+  }
+  scroller?.addEventListener("scrollend", finish, { once: true })
   ref.current = {
     page,
     targetTop,
     timeoutId: window.setTimeout(() => {
-      if (ref.current?.page === page) {
-        ref.current = null
-      }
-    }, 1400),
+      finish()
+    }, 2200),
+    cleanup: scroller ? () => scroller.removeEventListener("scrollend", finish) : undefined,
   }
 }
 
 function clearProgrammaticPdfScroll(ref: ProgrammaticPdfScrollRef) {
   if (ref.current) {
     window.clearTimeout(ref.current.timeoutId)
+    ref.current.cleanup?.()
     ref.current = null
   }
+}
+
+function requestReaderAnimationFrame(callback: FrameRequestCallback) {
+  if (typeof window.requestAnimationFrame === "function") {
+    return window.requestAnimationFrame(callback)
+  }
+  return window.setTimeout(() => callback(performance.now()), 16)
+}
+
+function cancelReaderAnimationFrame(handle: number) {
+  if (handle === 0) {
+    return
+  }
+  if (typeof window.cancelAnimationFrame === "function") {
+    window.cancelAnimationFrame(handle)
+    return
+  }
+  window.clearTimeout(handle)
 }
 
 function shouldDeferVisiblePdfPageUpdateForProgrammaticScroll(
@@ -486,11 +706,7 @@ function shouldDeferVisiblePdfPageUpdateForProgrammaticScroll(
   if (!pending) {
     return false
   }
-  const target = pageRefs.current.get(pending.page)
-  if (!target) {
-    clearProgrammaticPdfScroll(ref)
-    return false
-  }
+  const target = pageRefs.current.get(pending.page - 1)
   if (isProgrammaticPdfPageScrollSettled(scroller, target, pending.targetTop)) {
     const page = pending.page
     clearProgrammaticPdfScroll(ref)
@@ -505,9 +721,12 @@ function shouldDeferVisiblePdfPageUpdateForProgrammaticScroll(
 
 function isProgrammaticPdfPageScrollSettled(
   scroller: HTMLElement,
-  target: HTMLElement,
+  target: HTMLElement | undefined,
   targetTop: number,
 ) {
+  if (!target) {
+    return Math.abs(scroller.scrollTop - targetTop) < 2
+  }
   const scrollerRect = scroller.getBoundingClientRect()
   const targetRect = target.getBoundingClientRect()
   return (

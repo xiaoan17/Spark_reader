@@ -19,15 +19,14 @@ export function citationLabelForChunkId(chunkId: string, labels?: ReadonlyMap<st
   }
   const pageMatch = /(?:^|-)p(\d+)-/i.exec(chunkId)
   if (pageMatch) {
-    return `第 ${pageMatch[1]} 页 · 引用`
+    return "引用"
   }
   return "引用"
 }
 
 export function evidenceLabel(item: EvidencePreview, allEvidence: EvidencePreview[], index?: number) {
-  const samePageCount = allEvidence.filter((candidate) => candidate.pageIndex === item.pageIndex).length
-  const suffix = samePageCount > 1 && typeof index === "number" ? ` · 引用 ${index + 1}` : ""
-  return `第 ${item.pageIndex + 1} 页 · 相关段落${suffix}`
+  const suffix = allEvidence.length > 1 && typeof index === "number" ? ` · 引用 ${index + 1}` : ""
+  return `相关段落${suffix}`
 }
 
 export function chunkIdsInCitation(value: string) {
@@ -53,7 +52,7 @@ export function replaceInternalCitationsWithReadableLabels(
 export function sanitizeInternalReferenceText(text: string, labels?: ReadonlyMap<string, string>) {
   return replaceInternalCitationsWithReadableLabels(text, labels)
     .replace(internalCitationPattern, "（未核验引用）")
-    .replace(legacyCitationPattern, (_match, _chunkId, pageNumber: string) => `（第 ${pageNumber} 页 · 引用）`)
+    .replace(legacyCitationPattern, "（引用）")
     .replace(/文本\s*chunks?/gi, "转换文本")
     .replace(/(\d+)\s*个\s*chunks?\b/gi, "$1 段正文")
     .replace(/(\d+)\s*chunks?\b/gi, "$1 段正文")

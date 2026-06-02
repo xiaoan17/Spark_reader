@@ -1,11 +1,15 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    env,
+    path::Path,
     sync::{Mutex, OnceLock},
 };
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+#[cfg(test)]
+use serde_json::json;
+use serde_json::Value;
 use tauri::{AppHandle, Emitter};
 
 use crate::{
@@ -17,12 +21,16 @@ use crate::{
 static ACTIVE_INTERPRETATIONS: OnceLock<Mutex<BTreeMap<String, CancellationToken>>> =
     OnceLock::new();
 
+const MAX_SYNTHESIS_EVIDENCE_CHUNKS: usize = 6;
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InterpretRequest {
     pub book_id: String,
     pub selection_text: String,
     pub page_indexes: Vec<u32>,
+    #[serde(default)]
+    pub selection_rects: Vec<storage::NormalizedRectInput>,
     #[serde(default)]
     pub focus_chunk_ids: Vec<String>,
     pub question: Option<String>,
@@ -32,6 +40,8 @@ pub struct InterpretRequest {
     pub prior_evidence_chunk_ids: Vec<String>,
     #[serde(default)]
     pub follow_up_history: Vec<FollowUpContext>,
+    #[serde(default)]
+    pub lightweight: bool,
     pub mode: InterpretMode,
 }
 
@@ -75,6 +85,8 @@ impl From<AnswerSource> for storage::AnswerSource {
 }
 
 pub const INTERPRETATION_STREAM_EVENT: &str = "interpretation://stream";
+const TLDR_STRUCTURE_CHAR_BUDGET: usize = 8_000;
+const TLDR_MAX_TOKENS: u32 = 1_600;
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -83,6 +95,10 @@ pub struct EvidenceItem {
     pub title: String,
     pub page_index: u32,
     pub text: String,
+    #[serde(skip_serializing)]
+    pub score: f64,
+    #[serde(skip_serializing)]
+    pub rects: Vec<storage::NormalizedRectInput>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -128,11 +144,89 @@ pub enum AgentTracePhase {
     Synthesize,
 }
 
+pub async fn generate_document_tldr(
+    db_path: &Path,
+    book_id: &str,
+) -> Result<String, llm::LlmError> {
+    let structure =
+        storage::list_structure(db_path, book_id).map_err(|err| llm::LlmError::Provider {
+            status: 500,
+            body: format!("failed to read document structure: {err:#}"),
+        })?;
+    let prompt_context = tldr_structure_context(&structure);
+    let messages = vec![
+        ChatMessage::system(
+            "你是一位精读助手。只输出 TLDR 正文本身，不要标题、不要列表、不要“本文/这篇文章”以外的客套。信息完整优先，不要人为压缩到固定字数。",
+        ),
+        ChatMessage::user(format!(
+            "请写一段帮助读者快速了解这篇文章/论文的 TLDR：它在讲什么核心问题、给出的关键结论或主张、为什么值得读。根据内容自然展开，写完整，不要截断。\n\n文档结构与代表片段：\n{}",
+            prompt_context
+        )),
+    ];
+    let output = llm::chat(messages, TLDR_MAX_TOKENS).await?;
+    Ok(clean_tldr_text(&output))
+}
+
+fn tldr_structure_context(structure: &[storage::SearchHit]) -> String {
+    let mut output = String::new();
+    for hit in representative_tldr_hits(structure) {
+        let text = trim_for_prompt(&hit.text, 700);
+        if text.trim().is_empty() {
+            continue;
+        }
+        let row = format!(
+            "[{}] page {}\n{}\n\n",
+            hit.chunk_id,
+            hit.page_index + 1,
+            text.trim()
+        );
+        if output.chars().count() + row.chars().count() > TLDR_STRUCTURE_CHAR_BUDGET {
+            break;
+        }
+        output.push_str(&row);
+    }
+    if output.trim().is_empty() {
+        "没有可用的文档结构片段。".to_string()
+    } else {
+        output
+    }
+}
+
+fn representative_tldr_hits(structure: &[storage::SearchHit]) -> Vec<&storage::SearchHit> {
+    if structure.len() <= 24 {
+        return structure.iter().collect();
+    }
+    let mut selected = Vec::new();
+    selected.extend(structure.iter().take(12));
+    let middle_start = structure.len().saturating_div(2).saturating_sub(3);
+    selected.extend(structure.iter().skip(middle_start).take(6));
+    selected.extend(structure.iter().rev().take(8));
+    selected.sort_by(|left, right| {
+        left.page_index
+            .cmp(&right.page_index)
+            .then_with(|| left.chunk_id.cmp(&right.chunk_id))
+    });
+    selected.dedup_by(|left, right| left.chunk_id == right.chunk_id);
+    selected
+}
+
+fn clean_tldr_text(text: &str) -> String {
+    text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim_matches(|ch: char| ch == '"' || ch == '“' || ch == '”')
+        .trim()
+        .to_string()
+}
+
 pub async fn interpret(
     db_path: &std::path::Path,
     request: InterpretRequest,
 ) -> Result<InterpretResponse> {
-    let (evidence, mut trace) = run_agentic_retrieval_with_model_tools(db_path, &request).await?;
+    let (evidence, mut trace) = run_retrieval_for_request(db_path, &request).await?;
     let messages = build_messages(&request, &evidence);
     let (answer, answer_source) = match llm::chat(messages, 1400).await {
         Ok(answer) => (
@@ -206,26 +300,25 @@ pub async fn interpret_with_progress(
             trace: Vec::new(),
         },
     );
-    let (evidence, mut trace) =
-        match run_agentic_retrieval_with_model_tools(db_path, &request).await {
-            Ok(result) => result,
-            Err(error) => {
-                emit_stream_event(
-                    &app,
-                    InterpretationStreamEvent {
-                        request_id: request_id.clone(),
-                        stage: InterpretationStreamStage::Failed,
-                        message: error.to_string(),
-                        delta: None,
-                        answer: None,
-                        answer_source: None,
-                        evidence: Vec::new(),
-                        trace: Vec::new(),
-                    },
-                );
-                return Err(error);
-            }
-        };
+    let (evidence, mut trace) = match run_retrieval_for_request(db_path, &request).await {
+        Ok(result) => result,
+        Err(error) => {
+            emit_stream_event(
+                &app,
+                InterpretationStreamEvent {
+                    request_id: request_id.clone(),
+                    stage: InterpretationStreamStage::Failed,
+                    message: error.to_string(),
+                    delta: None,
+                    answer: None,
+                    answer_source: None,
+                    evidence: Vec::new(),
+                    trace: Vec::new(),
+                },
+            );
+            return Err(error);
+        }
+    };
     emit_stream_event(
         &app,
         InterpretationStreamEvent {
@@ -344,12 +437,7 @@ fn emit_stream_event(app: &AppHandle, event: InterpretationStreamEvent) {
 }
 
 pub fn cancel_interpretation(request_id: &str) -> bool {
-    let Some(token) = active_interpretations()
-        .lock()
-        .expect("active interpretation lock")
-        .get(request_id)
-        .cloned()
-    else {
+    let Some(token) = with_active_interpretations(|active| active.get(request_id).cloned()) else {
         return false;
     };
     llm::cancel(&token);
@@ -358,22 +446,29 @@ pub fn cancel_interpretation(request_id: &str) -> bool {
 
 fn register_active_interpretation(request_id: &str) -> CancellationToken {
     let token = llm::cancellation_token();
-    active_interpretations()
-        .lock()
-        .expect("active interpretation lock")
-        .insert(request_id.to_string(), token.clone());
+    with_active_interpretations(|active| {
+        active.insert(request_id.to_string(), token.clone());
+    });
     token
 }
 
 fn unregister_active_interpretation(request_id: &str) {
-    active_interpretations()
-        .lock()
-        .expect("active interpretation lock")
-        .remove(request_id);
+    with_active_interpretations(|active| {
+        active.remove(request_id);
+    });
 }
 
 fn active_interpretations() -> &'static Mutex<BTreeMap<String, CancellationToken>> {
     ACTIVE_INTERPRETATIONS.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+fn with_active_interpretations<T>(
+    action: impl FnOnce(&mut BTreeMap<String, CancellationToken>) -> T,
+) -> T {
+    let mut guard = active_interpretations()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    action(&mut guard)
 }
 
 struct ActiveInterpretationGuard {
@@ -507,7 +602,7 @@ fn run_agentic_retrieval(
 
     let evidence = rank_evidence(by_id.into_values().collect(), request)
         .into_iter()
-        .take(10)
+        .take(MAX_SYNTHESIS_EVIDENCE_CHUNKS)
         .collect::<Vec<_>>();
     trace.push(AgentTraceStep {
         phase: AgentTracePhase::Synthesize,
@@ -519,6 +614,88 @@ fn run_agentic_retrieval(
     Ok((evidence, trace))
 }
 
+async fn run_retrieval_for_request(
+    db_path: &std::path::Path,
+    request: &InterpretRequest,
+) -> Result<(Vec<EvidenceItem>, Vec<AgentTraceStep>)> {
+    if request.lightweight {
+        run_lightweight_retrieval(db_path, request)
+    } else {
+        run_agentic_retrieval_with_model_tools(db_path, request).await
+    }
+}
+
+fn run_lightweight_retrieval(
+    db_path: &std::path::Path,
+    request: &InterpretRequest,
+) -> Result<(Vec<EvidenceItem>, Vec<AgentTraceStep>)> {
+    let mut by_id = BTreeMap::new();
+    let mut trace = vec![AgentTraceStep {
+        phase: AgentTracePhase::Plan,
+        query: None,
+        chunk_ids: Vec::new(),
+        note: "轻量 Spark 追问：复用首轮证据和当前选区，不运行完整 agentic 检索循环。".to_string(),
+    }];
+
+    let mut focus_ids = Vec::new();
+    for chunk_id in request.focus_chunk_ids.iter().take(6) {
+        if let Some(hit) = storage::get_chunk(db_path, &request.book_id, chunk_id)? {
+            focus_ids.push(hit.chunk_id.clone());
+            insert_hit(&mut by_id, hit);
+        }
+    }
+    if !focus_ids.is_empty() {
+        trace.push(AgentTraceStep {
+            phase: AgentTracePhase::Retrieve,
+            query: Some("focus_chunk_ids".to_string()),
+            chunk_ids: focus_ids,
+            note: "读取当前选区直接命中的 chunk。".to_string(),
+        });
+    }
+
+    let mut prior_ids = Vec::new();
+    for chunk_id in request.prior_evidence_chunk_ids.iter().take(8) {
+        if let Some(hit) = storage::get_chunk(db_path, &request.book_id, chunk_id)? {
+            prior_ids.push(hit.chunk_id.clone());
+            insert_hit(&mut by_id, hit);
+        }
+    }
+    if !prior_ids.is_empty() {
+        trace.push(AgentTraceStep {
+            phase: AgentTracePhase::Retrieve,
+            query: Some("prior_evidence".to_string()),
+            chunk_ids: prior_ids,
+            note: "复用首轮证据，避免 Spark 追问重新展开重检索。".to_string(),
+        });
+    }
+
+    if by_id.len() < 2 {
+        let mut page_ids = Vec::new();
+        for hit in storage::chunks_for_pages(db_path, &request.book_id, &request.page_indexes, 3)? {
+            page_ids.push(hit.chunk_id.clone());
+            insert_hit(&mut by_id, hit);
+        }
+        trace.push(AgentTraceStep {
+            phase: AgentTracePhase::Retrieve,
+            query: Some(format!("page_indexes={:?}", request.page_indexes)),
+            chunk_ids: page_ids,
+            note: "证据不足时只补当前页少量 chunk。".to_string(),
+        });
+    }
+
+    let evidence = rank_evidence(by_id.into_values().collect(), request)
+        .into_iter()
+        .take(MAX_SYNTHESIS_EVIDENCE_CHUNKS)
+        .collect::<Vec<_>>();
+    trace.push(AgentTraceStep {
+        phase: AgentTracePhase::Synthesize,
+        query: None,
+        chunk_ids: evidence.iter().map(|item| item.chunk_id.clone()).collect(),
+        note: format!("轻量证据复用完成：{} 条候选证据进入合成。", evidence.len()),
+    });
+    Ok((evidence, trace))
+}
+
 async fn run_agentic_retrieval_with_model_tools(
     db_path: &std::path::Path,
     request: &InterpretRequest,
@@ -526,44 +703,72 @@ async fn run_agentic_retrieval_with_model_tools(
     let mut by_id = BTreeMap::new();
     let mut trace = Vec::new();
     let mut history = Vec::new();
+    let mut tool_loop_status = None;
+    let mut tool_loop_failed = false;
 
     match run_model_tool_loop(db_path, request, &mut by_id, &mut history, &mut trace).await {
-        Ok(ModelToolLoopStatus::Completed) => {}
-        Ok(ModelToolLoopStatus::NoToolCalls { note }) => {
-            trace.push(AgentTraceStep {
-                phase: AgentTracePhase::Plan,
-                query: Some("llm_tools".to_string()),
-                chunk_ids: Vec::new(),
-                note,
-            });
+        Ok(status @ ModelToolLoopStatus::Completed) => {
+            tool_loop_status = Some(status);
         }
-        Ok(ModelToolLoopStatus::NoNewEvidence { note }) => {
-            trace.push(AgentTraceStep {
-                phase: AgentTracePhase::Iterate,
-                query: Some("llm_tools".to_string()),
-                chunk_ids: Vec::new(),
-                note,
-            });
+        Ok(status @ ModelToolLoopStatus::NoToolCalls { .. }) => {
+            if let ModelToolLoopStatus::NoToolCalls { note } = &status {
+                trace.push(AgentTraceStep {
+                    phase: AgentTracePhase::Plan,
+                    query: Some("llm_tools".to_string()),
+                    chunk_ids: Vec::new(),
+                    note: note.clone(),
+                });
+            }
+            tool_loop_status = Some(status);
+        }
+        Ok(status @ ModelToolLoopStatus::NoNewEvidence { .. }) => {
+            if let ModelToolLoopStatus::NoNewEvidence { note } = &status {
+                trace.push(AgentTraceStep {
+                    phase: AgentTracePhase::Iterate,
+                    query: Some("llm_tools".to_string()),
+                    chunk_ids: Vec::new(),
+                    note: note.clone(),
+                });
+            }
+            tool_loop_status = Some(status);
         }
         Err(error) => {
+            tool_loop_failed = true;
             trace.push(AgentTraceStep {
                 phase: AgentTracePhase::Plan,
                 query: Some("llm_tools".to_string()),
                 chunk_ids: Vec::new(),
-                note: format!("LLM 工具循环不可用，回退到后端确定性检索计划：{error}"),
+                note: format!("LLM 工具循环不可用：{error}"),
             });
         }
     }
 
-    let (fallback_evidence, fallback_trace) = run_agentic_retrieval(db_path, request)?;
-    for item in fallback_evidence {
-        by_id.entry(item.chunk_id.clone()).or_insert(item);
+    if let Some(reason) =
+        deterministic_fallback_reason(tool_loop_status.as_ref(), tool_loop_failed, by_id.len())
+    {
+        trace.push(AgentTraceStep {
+            phase: AgentTracePhase::Plan,
+            query: Some("deterministic_fallback".to_string()),
+            chunk_ids: Vec::new(),
+            note: deterministic_fallback_note(reason).to_string(),
+        });
+        let (fallback_evidence, fallback_trace) = run_agentic_retrieval(db_path, request)?;
+        for item in fallback_evidence {
+            by_id.entry(item.chunk_id.clone()).or_insert(item);
+        }
+        trace.extend(fallback_trace);
+    } else {
+        trace.push(AgentTraceStep {
+            phase: AgentTracePhase::Synthesize,
+            query: None,
+            chunk_ids: by_id.keys().cloned().collect(),
+            note: "LLM 工具检索已取得足够证据，跳过后端确定性补检索。".to_string(),
+        });
     }
-    trace.extend(fallback_trace);
 
     let evidence = rank_evidence(by_id.into_values().collect(), request)
         .into_iter()
-        .take(10)
+        .take(MAX_SYNTHESIS_EVIDENCE_CHUNKS)
         .collect::<Vec<_>>();
     Ok((evidence, trace))
 }
@@ -586,6 +791,53 @@ enum ModelToolLoopStatus {
     Completed,
     NoToolCalls { note: String },
     NoNewEvidence { note: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeterministicFallbackReason {
+    ToolLoopUnavailable,
+    NoToolCalls,
+    NoNewEvidence,
+    InsufficientEvidence,
+}
+
+fn deterministic_fallback_reason(
+    status: Option<&ModelToolLoopStatus>,
+    tool_loop_failed: bool,
+    evidence_count: usize,
+) -> Option<DeterministicFallbackReason> {
+    if tool_loop_failed {
+        return Some(DeterministicFallbackReason::ToolLoopUnavailable);
+    }
+    match status {
+        Some(ModelToolLoopStatus::NoToolCalls { .. }) if evidence_count == 0 => {
+            Some(DeterministicFallbackReason::NoToolCalls)
+        }
+        Some(ModelToolLoopStatus::NoNewEvidence { .. }) => {
+            Some(DeterministicFallbackReason::NoNewEvidence)
+        }
+        _ if evidence_count < MAX_SYNTHESIS_EVIDENCE_CHUNKS / 2 => {
+            Some(DeterministicFallbackReason::InsufficientEvidence)
+        }
+        _ => None,
+    }
+}
+
+fn deterministic_fallback_note(reason: DeterministicFallbackReason) -> &'static str {
+    match reason {
+        DeterministicFallbackReason::ToolLoopUnavailable => {
+            "LLM 工具循环不可用，启用后端确定性检索作为最后防线。"
+        }
+        DeterministicFallbackReason::NoToolCalls => {
+            "LLM 未调用工具且没有可用证据，启用后端确定性检索作为最后防线。"
+        }
+        DeterministicFallbackReason::NoNewEvidence => {
+            "LLM 工具结果遇到瓶颈，启用后端确定性检索补足证据。"
+        }
+        DeterministicFallbackReason::InsufficientEvidence => {
+            "LLM 工具证据不足，启用后端确定性检索补足合成依据。"
+        }
+    }
 }
 
 async fn run_model_tool_loop(
@@ -708,10 +960,10 @@ async fn run_model_tool_loop(
             executions,
         });
 
-        if round_new_ids == 0 {
+        if should_stop_for_no_new_evidence(round_index, MAX_TOOL_ROUNDS, round_new_ids) {
             return Ok(ModelToolLoopStatus::NoNewEvidence {
                 note: format!(
-                    "LLM 第 {} 轮工具结果没有带来新 chunk，停止工具循环并回退补检索。",
+                    "LLM 已完成 {} 轮检索；最后一轮工具结果没有带来新 chunk，进入确定性补证据。",
                     round_index + 1
                 ),
             });
@@ -719,6 +971,14 @@ async fn run_model_tool_loop(
     }
 
     Ok(ModelToolLoopStatus::Completed)
+}
+
+fn should_stop_for_no_new_evidence(
+    round_index: usize,
+    max_tool_rounds: usize,
+    round_new_ids: usize,
+) -> bool {
+    round_new_ids == 0 && round_index + 1 == max_tool_rounds
 }
 
 fn format_tool_result_prompt(tool_call: &ToolCall, hits: &[storage::SearchHit]) -> String {
@@ -744,12 +1004,24 @@ fn format_tool_result_prompt(tool_call: &ToolCall, hits: &[storage::SearchHit]) 
     format!("{}\n结果：\n{}", format_tool_call_query(tool_call), rows)
 }
 
-fn format_tool_execution_result_for_model(execution: &ToolExecutionRecord) -> String {
+fn format_tool_execution_result_for_model(
+    execution: &ToolExecutionRecord,
+    include_text_snippets: bool,
+) -> String {
     let chunk_ids = if execution.chunk_ids.is_empty() {
         "chunks: []".to_string()
     } else {
         format!("chunks: [{}]", execution.chunk_ids.join(", "))
     };
+    if !include_text_snippets {
+        let query = execution
+            .result_prompt
+            .lines()
+            .next()
+            .map(|line| trim_for_prompt(line, 160))
+            .unwrap_or_else(|| "tool_result".to_string());
+        return format!("{chunk_ids}\n已检索：{query}\n旧轮证据正文已压缩，只保留 chunk id；如仍需原文请调用 get_chunk。");
+    }
     format!("{}\n{}", chunk_ids, execution.result_prompt)
 }
 
@@ -885,8 +1157,15 @@ fn focus_phrase_queries(text: &str) -> Vec<String> {
 }
 
 fn query_rewrite_expansions(text: &str) -> Vec<String> {
+    query_rewrite_expansions_with_pairs(text, &configurable_concept_pairs())
+}
+
+fn query_rewrite_expansions_with_pairs(
+    text: &str,
+    concept_pairs: &[(String, String)],
+) -> Vec<String> {
     let mut expansions = Vec::new();
-    let terms = semantic_terms(text);
+    let terms = lexical_terms(text);
     let chinese_terms = terms
         .iter()
         .filter(|term| contains_cjk(term) && term.chars().count() >= 2)
@@ -896,19 +1175,17 @@ fn query_rewrite_expansions(text: &str) -> Vec<String> {
     if !chinese_terms.is_empty() {
         expansions.push(chinese_terms.join(" "));
     }
+    let compact_cjk = compact_cjk_text(text);
+    if compact_cjk.chars().count() >= 4 {
+        let topic_terms = cjk_topic_terms(&compact_cjk);
+        if !topic_terms.is_empty() {
+            expansions.push(topic_terms.join(" "));
+        }
+    }
 
     let compact = trim_for_query(text, 180);
-    let concept_pairs = [
-        ("复利", "长期 时间 耐心 增长"),
-        ("风险", "波动 控制 安全边际"),
-        ("现金流", "流动性 持续 投入"),
-        ("认知", "理解 判断 决策"),
-        ("模型", "框架 机制 结构"),
-        ("历史", "背景 演变 原因"),
-        ("市场", "价格 竞争 供需"),
-    ];
     for (needle, rewrite) in concept_pairs {
-        if compact.contains(needle) {
+        if compact.contains(needle.as_str()) {
             expansions.push(format!("{needle} {rewrite}"));
         }
     }
@@ -959,6 +1236,8 @@ fn insert_hit(by_id: &mut BTreeMap<String, EvidenceItem>, hit: storage::SearchHi
         chunk_id: hit.chunk_id,
         page_index: hit.page_index,
         text: hit.text,
+        score: hit.score,
+        rects: hit.rects,
     });
 }
 
@@ -984,8 +1263,14 @@ fn rank_evidence(mut evidence: Vec<EvidenceItem>, request: &InterpretRequest) ->
         let b_prior = prior_rank.get(b.chunk_id.as_str()).copied();
         let a_same_page = page_indexes.contains(&a.page_index);
         let b_same_page = page_indexes.contains(&b.page_index);
-        let a_overlap = lexical_overlap(&a.text, &terms);
-        let b_overlap = lexical_overlap(&b.text, &terms);
+        let a_geometry = selection_rect_score(a, &request.selection_rects);
+        let b_geometry = selection_rect_score(b, &request.selection_rects);
+        let a_overlap = lexical_match_score(&a.text, &terms);
+        let b_overlap = lexical_match_score(&b.text, &terms);
+        let score_order = b
+            .score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal);
         a_focus
             .is_none()
             .cmp(&b_focus.is_none())
@@ -995,12 +1280,14 @@ fn rank_evidence(mut evidence: Vec<EvidenceItem>, request: &InterpretRequest) ->
                     .cmp(&b_focus.unwrap_or(usize::MAX))
             })
             .then_with(|| b_same_page.cmp(&a_same_page))
+            .then_with(|| b_geometry.cmp(&a_geometry))
             .then_with(|| a_prior.is_none().cmp(&b_prior.is_none()))
             .then_with(|| {
                 a_prior
                     .unwrap_or(usize::MAX)
                     .cmp(&b_prior.unwrap_or(usize::MAX))
             })
+            .then(score_order)
             .then_with(|| b_overlap.cmp(&a_overlap))
             .then_with(|| a.page_index.cmp(&b.page_index))
             .then_with(|| a.chunk_id.cmp(&b.chunk_id))
@@ -1008,17 +1295,47 @@ fn rank_evidence(mut evidence: Vec<EvidenceItem>, request: &InterpretRequest) ->
     evidence
 }
 
+fn selection_rect_score(
+    evidence: &EvidenceItem,
+    selection_rects: &[storage::NormalizedRectInput],
+) -> u32 {
+    if selection_rects.is_empty() || evidence.rects.is_empty() {
+        return 0;
+    }
+    let mut score = 0.0;
+    for selection_rect in selection_rects {
+        for evidence_rect in &evidence.rects {
+            if selection_rect.page_index != evidence_rect.page_index
+                || evidence.page_index != evidence_rect.page_index
+            {
+                continue;
+            }
+            score += rect_intersection_area(selection_rect, evidence_rect);
+        }
+    }
+    (score * 1_000_000.0).round() as u32
+}
+
+fn rect_intersection_area(
+    left: &storage::NormalizedRectInput,
+    right: &storage::NormalizedRectInput,
+) -> f64 {
+    let width = (left.x1.min(right.x1) - left.x0.max(right.x0)).max(0.0);
+    let height = (left.y1.min(right.y1) - left.y0.max(right.y0)).max(0.0);
+    width * height
+}
+
 fn ranking_terms(request: &InterpretRequest) -> Vec<String> {
-    let mut terms = semantic_terms(&request.selection_text);
+    let mut terms = lexical_terms(&request.selection_text);
     if let Some(question) = &request.question {
-        terms.extend(semantic_terms(question));
+        terms.extend(lexical_terms(question));
     }
     terms.sort();
     terms.dedup();
     terms
 }
 
-fn semantic_terms(text: &str) -> Vec<String> {
+fn lexical_terms(text: &str) -> Vec<String> {
     let compact = text
         .to_lowercase()
         .chars()
@@ -1040,18 +1357,85 @@ fn semantic_terms(text: &str) -> Vec<String> {
     for window in chars.windows(3).take(80) {
         terms.push(window.iter().collect());
     }
+    if contains_cjk(&compact) {
+        terms.extend(cjk_topic_terms(&compact));
+    }
     terms
 }
 
-fn contains_cjk(text: &str) -> bool {
-    text.chars().any(|ch| {
-        ('\u{4e00}'..='\u{9fff}').contains(&ch)
-            || ('\u{3400}'..='\u{4dbf}').contains(&ch)
-            || ('\u{f900}'..='\u{faff}').contains(&ch)
-    })
+fn cjk_topic_terms(text: &str) -> Vec<String> {
+    let chars = compact_cjk_text(text).chars().collect::<Vec<_>>();
+    if chars.len() < 2 {
+        return Vec::new();
+    }
+    let mut scores = BTreeMap::<String, usize>::new();
+    for size in [2, 3, 4] {
+        for window in chars.windows(size).take(120) {
+            if window.iter().all(|ch| cjk_stop_char(*ch)) {
+                continue;
+            }
+            let term = window.iter().collect::<String>();
+            *scores.entry(term).or_insert(0) += size;
+        }
+    }
+    let mut ranked = scores.into_iter().collect::<Vec<_>>();
+    ranked.sort_by(|(left_term, left_score), (right_term, right_score)| {
+        right_score
+            .cmp(left_score)
+            .then_with(|| right_term.chars().count().cmp(&left_term.chars().count()))
+            .then_with(|| left_term.cmp(right_term))
+    });
+    ranked.into_iter().map(|(term, _)| term).take(24).collect()
 }
 
-fn lexical_overlap(text: &str, terms: &[String]) -> usize {
+fn compact_cjk_text(text: &str) -> String {
+    text.chars()
+        .filter(|ch| contains_cjk_char(*ch))
+        .collect::<String>()
+}
+
+fn contains_cjk_char(ch: char) -> bool {
+    ('\u{4e00}'..='\u{9fff}').contains(&ch)
+        || ('\u{3400}'..='\u{4dbf}').contains(&ch)
+        || ('\u{f900}'..='\u{faff}').contains(&ch)
+}
+
+fn cjk_stop_char(ch: char) -> bool {
+    matches!(
+        ch,
+        '的' | '了'
+            | '和'
+            | '与'
+            | '及'
+            | '或'
+            | '在'
+            | '是'
+            | '有'
+            | '为'
+            | '对'
+            | '中'
+            | '上'
+            | '下'
+            | '这'
+            | '那'
+            | '把'
+            | '被'
+            | '而'
+            | '并'
+            | '就'
+            | '都'
+            | '也'
+            | '更'
+            | '从'
+            | '到'
+    )
+}
+
+fn contains_cjk(text: &str) -> bool {
+    text.chars().any(contains_cjk_char)
+}
+
+fn lexical_match_score(text: &str, terms: &[String]) -> usize {
     if terms.is_empty() {
         return 0;
     }
@@ -1059,7 +1443,49 @@ fn lexical_overlap(text: &str, terms: &[String]) -> usize {
     terms
         .iter()
         .filter(|term| !term.trim().is_empty() && haystack.contains(term.as_str()))
-        .count()
+        .map(|term| term.chars().count().clamp(1, 8))
+        .sum()
+}
+
+fn configurable_concept_pairs() -> Vec<(String, String)> {
+    #[cfg(not(test))]
+    crate::config::load_dotenv();
+    if let Ok(raw) = env::var("FOCUSED_READING_CONCEPT_PAIRS") {
+        return parse_concept_pairs(&raw);
+    }
+    default_concept_pairs()
+        .into_iter()
+        .map(|(needle, rewrite)| (needle.to_string(), rewrite.to_string()))
+        .collect()
+}
+
+fn parse_concept_pairs(raw: &str) -> Vec<(String, String)> {
+    raw.split(';')
+        .filter_map(|entry| {
+            let (needle, rewrite) = entry.split_once('=')?;
+            let needle = needle.trim();
+            let rewrite = rewrite.trim();
+            (!needle.is_empty() && !rewrite.is_empty())
+                .then(|| (needle.to_string(), rewrite.to_string()))
+        })
+        .collect()
+}
+
+fn default_concept_pairs() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("复利", "长期 时间 耐心 增长"),
+        ("风险", "波动 控制 安全边际"),
+        ("现金流", "流动性 持续 投入"),
+        ("认知", "理解 判断 决策"),
+        ("模型", "框架 机制 结构"),
+        ("历史", "背景 演变 原因"),
+        ("市场", "价格 竞争 供需"),
+        ("制度", "规则 激励 约束"),
+        ("技术", "工具 系统 效率"),
+        ("学习", "反馈 迁移 练习"),
+        ("组织", "协作 流程 治理"),
+        ("数据", "指标 样本 趋势"),
+    ]
 }
 
 fn is_punctuation(ch: char) -> bool {
@@ -1188,13 +1614,13 @@ fn fallback_grounded_answer(
         InterpretMode::Deep => "深度解读",
         InterpretMode::Plain => "直白解释",
     };
-    let error_hint = llm_error
-        .map(|error| {
-            format!(
-                "LLM 暂不可用，以下是后端基于本地检索证据生成的可核对{mode_label}。错误：{error}"
-            )
-        })
-        .unwrap_or_else(|| format!("以下是基于本地检索证据生成的可核对{mode_label}。"));
+    let error_hint = if llm_error.is_some() {
+        format!(
+            "LLM 暂不可用，以下是基于本地书库检索证据生成的可核对{mode_label}。请在设置中检查 LLM API Key、Base URL 和网络连接后重试深度解读。"
+        )
+    } else {
+        format!("以下是基于本地检索证据生成的可核对{mode_label}。")
+    };
     sections.push(error_hint);
     sections.push(format!("框选文本：{}", focus));
     if let Some(prior_answer) = request
@@ -1433,18 +1859,31 @@ fn build_tool_loop_messages(
     ]
     .join("\n");
     let user = format!(
-        "第 {} 轮检索。\n\n框选文本：\n{}\n\n用户问题：{}\n当前页索引：{:?}\n焦点 chunk：{:?}{}{}\n\n请只通过工具继续检索需要的书内证据；如证据已经足够，可以不调用工具。",
+        "第 {} 轮检索。\n\n{}",
         round_index + 1,
-        request.selection_text.trim(),
-        question,
-        request.page_indexes,
-        request.focus_chunk_ids,
-        prior,
-        follow_up_context
+        if round_index == 0 {
+            format!(
+                "框选文本：\n{}\n\n用户问题：{}\n当前页索引：{:?}\n焦点 chunk：{:?}{}{}\n\n请只通过工具继续检索需要的书内证据；如证据已经足够，可以不调用工具。",
+                request.selection_text.trim(),
+                question,
+                request.page_indexes,
+                request.focus_chunk_ids,
+                prior,
+                follow_up_context
+            )
+        } else {
+            format!(
+                "检索目标保持不变。\n框选文本摘要：{}\n用户问题：{}\n焦点 chunk：{:?}\n\n请读取上一轮工具结果，只针对仍缺的定义、上下文、呼应、反例或追问相关证据继续调用工具；如证据已经足够，可以不调用工具。",
+                trim_for_prompt(request.selection_text.trim(), 180),
+                trim_for_prompt(question, 120),
+                request.focus_chunk_ids
+            )
+        }
     );
 
     let mut messages = vec![ChatMessage::system(system), ChatMessage::user(user)];
-    for round in history {
+    for (history_index, round) in history.iter().enumerate() {
+        let include_text_snippets = history_index + 1 == history.len();
         messages.push(ChatMessage::assistant(
             round.model_note.clone(),
             round.tool_calls.clone(),
@@ -1452,7 +1891,7 @@ fn build_tool_loop_messages(
         for execution in &round.executions {
             messages.push(ChatMessage::tool_result(
                 execution.tool_call_id.clone(),
-                format_tool_execution_result_for_model(execution),
+                format_tool_execution_result_for_model(execution, include_text_snippets),
             ));
         }
     }
@@ -1460,62 +1899,7 @@ fn build_tool_loop_messages(
 }
 
 fn retrieval_tool_definitions() -> Vec<ToolDefinition> {
-    vec![
-        ToolDefinition {
-            name: "search_book".to_string(),
-            description: "Search indexed chunks in the current book. Use this first for concepts, definitions, context, echoes, and follow-up questions.".to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "A focused search query grounded in the selected text."
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 12
-                    }
-                },
-                "required": ["query"]
-            }),
-        },
-        ToolDefinition {
-            name: "get_chunk".to_string(),
-            description: "Fetch one exact chunk by stable chunk_id.".to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "chunk_id": { "type": "string" }
-                },
-                "required": ["chunk_id"]
-            }),
-        },
-        ToolDefinition {
-            name: "get_neighbors".to_string(),
-            description: "Fetch nearby chunks before and after a known chunk_id for local context.".to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "chunk_id": { "type": "string" },
-                    "radius": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 3
-                    }
-                },
-                "required": ["chunk_id"]
-            }),
-        },
-        ToolDefinition {
-            name: "list_structure".to_string(),
-            description: "List representative structure chunks when direct evidence is sparse.".to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {}
-            }),
-        },
-    ]
+    llm::book_retrieval_tools()
 }
 
 fn trim_for_prompt(text: &str, max_chars: usize) -> String {
@@ -1560,11 +1944,13 @@ mod tests {
             book_id: "book-1".to_string(),
             selection_text: "复利来自长期坚持。".to_string(),
             page_indexes: vec![0],
+            selection_rects: Vec::new(),
             focus_chunk_ids: Vec::new(),
             question: Some("为什么强调长期？".to_string()),
             prior_answer: None,
             prior_evidence_chunk_ids: Vec::new(),
             follow_up_history: Vec::new(),
+            lightweight: false,
             mode: InterpretMode::Deep,
         };
         let evidence = vec![EvidenceItem {
@@ -1572,6 +1958,8 @@ mod tests {
             title: "Chunk p1-c1".to_string(),
             page_index: 0,
             text: "复利需要时间积累，短期收益并不关键。".to_string(),
+            score: 0.0,
+            rects: Vec::new(),
         }];
 
         let messages = build_messages(&request, &evidence);
@@ -1587,6 +1975,7 @@ mod tests {
             book_id: "book-1".to_string(),
             selection_text: "复利来自长期坚持。".to_string(),
             page_indexes: vec![0],
+            selection_rects: Vec::new(),
             focus_chunk_ids: Vec::new(),
             question: Some("那它和风险控制有什么关系？".to_string()),
             prior_answer: Some("上一轮已经说明长期是复利成立的时间条件。[p1-c1]".to_string()),
@@ -1595,6 +1984,7 @@ mod tests {
                 question: "为什么强调长期？".to_string(),
                 answer: "因为时间会放大差异。[p1-c1]".to_string(),
             }],
+            lightweight: false,
             mode: InterpretMode::Plain,
         };
         let evidence = vec![EvidenceItem {
@@ -1602,6 +1992,8 @@ mod tests {
             title: "Chunk p1-c1".to_string(),
             page_index: 0,
             text: "复利需要时间积累，短期收益并不关键。".to_string(),
+            score: 0.0,
+            rects: Vec::new(),
         }];
 
         let messages = build_messages(&request, &evidence);
@@ -1618,11 +2010,13 @@ mod tests {
             book_id: "book-1".to_string(),
             selection_text: "复利来自长期坚持，也需要风险控制。".to_string(),
             page_indexes: vec![0],
+            selection_rects: Vec::new(),
             focus_chunk_ids: Vec::new(),
             question: Some("为什么强调长期？".to_string()),
             prior_answer: None,
             prior_evidence_chunk_ids: Vec::new(),
             follow_up_history: Vec::new(),
+            lightweight: false,
             mode: InterpretMode::Deep,
         };
 
@@ -1639,6 +2033,48 @@ mod tests {
     }
 
     #[test]
+    fn cjk_lexical_terms_add_topic_windows_without_domain_concepts() {
+        let terms = lexical_terms("这段讨论社会制度演化与组织治理，而不是投资复利。");
+
+        assert!(terms.iter().any(|term| term == "社会制度"));
+        assert!(terms.iter().any(|term| term == "组织治理"));
+        assert!(lexical_match_score("后文继续分析组织治理结构。", &terms) >= 4);
+    }
+
+    #[test]
+    fn query_rewrite_expansions_cover_general_concepts() {
+        let expansions = query_rewrite_expansions("组织治理依赖制度约束和数据反馈。");
+
+        assert!(expansions.iter().any(|query| query.contains("组织 协作")));
+        assert!(expansions.iter().any(|query| query.contains("制度 规则")));
+        assert!(expansions.iter().any(|query| query.contains("数据 指标")));
+    }
+
+    #[test]
+    fn parses_configurable_concept_pairs_from_env_format() {
+        let pairs = parse_concept_pairs("氧化=电子 转移; 叙事 = 视角 结构 ;bad;空=");
+
+        assert_eq!(
+            pairs,
+            vec![
+                ("氧化".to_string(), "电子 转移".to_string()),
+                ("叙事".to_string(), "视角 结构".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn query_rewrite_expansions_can_use_custom_domain_concepts() {
+        let pairs = vec![("叙事".to_string(), "视角 结构 节奏".to_string())];
+        let expansions = query_rewrite_expansions_with_pairs("这一段讨论叙事声音。", &pairs);
+
+        assert!(expansions
+            .iter()
+            .any(|query| query.contains("叙事 视角 结构 节奏")));
+        assert!(!expansions.iter().any(|query| query.contains("长期 时间")));
+    }
+
+    #[test]
     fn trim_for_prompt_prefers_sentence_boundaries() {
         let text = "第一句用于铺垫。第二句包含关键判断。第三句很长很长很长很长很长很长很长。";
         let trimmed = trim_for_prompt(text, 24);
@@ -1647,16 +2083,39 @@ mod tests {
     }
 
     #[test]
+    fn clean_tldr_text_preserves_long_cjk_output() {
+        let text = format!(
+            "{}{}",
+            "这本书围绕长期复利展开，核心强调时间、纪律、现金流和风险控制共同决定结果。".repeat(4),
+            "后面还有很多也应该保留的内容。".repeat(10)
+        );
+        let cleaned = clean_tldr_text(&text);
+
+        assert_eq!(cleaned, text);
+        assert!(cleaned.contains("也应该保留"));
+    }
+
+    #[test]
+    fn clean_tldr_text_removes_outer_quotes_and_blank_lines() {
+        let text = "\n\n“第一段。\n\n第二段继续展开。”\n\n";
+        let cleaned = clean_tldr_text(text);
+
+        assert_eq!(cleaned, "第一段。 第二段继续展开。");
+    }
+
+    #[test]
     fn retrieval_plan_adds_mode_specific_queries_without_losing_focus() {
         let request = InterpretRequest {
             book_id: "book-1".to_string(),
             selection_text: "复利来自长期坚持。".to_string(),
             page_indexes: vec![0],
+            selection_rects: Vec::new(),
             focus_chunk_ids: Vec::new(),
             question: Some("为什么强调长期？".to_string()),
             prior_answer: None,
             prior_evidence_chunk_ids: Vec::new(),
             follow_up_history: Vec::new(),
+            lightweight: false,
             mode: InterpretMode::Deep,
         };
 
@@ -1701,11 +2160,13 @@ mod tests {
             book_id: "book-1".to_string(),
             selection_text: "复利来自长期坚持。".to_string(),
             page_indexes: vec![0],
+            selection_rects: Vec::new(),
             focus_chunk_ids: vec!["p1-c1".to_string()],
             question: Some("为什么强调长期？".to_string()),
             prior_answer: Some("上一轮说明长期是时间条件。".to_string()),
             prior_evidence_chunk_ids: Vec::new(),
             follow_up_history: Vec::new(),
+            lightweight: false,
             mode: InterpretMode::Deep,
         };
 
@@ -1723,6 +2184,7 @@ mod tests {
             book_id: "book-1".to_string(),
             selection_text: "复利来自长期坚持。".to_string(),
             page_indexes: vec![0],
+            selection_rects: Vec::new(),
             focus_chunk_ids: vec!["p1-c1".to_string()],
             question: Some("它和风险控制有什么关系？".to_string()),
             prior_answer: Some("上一轮说明长期是复利成立的时间条件。".to_string()),
@@ -1731,6 +2193,7 @@ mod tests {
                 question: "为什么强调长期？".to_string(),
                 answer: "因为时间会放大差异。[p1-c1]".to_string(),
             }],
+            lightweight: false,
             mode: InterpretMode::Deep,
         };
         let history = vec![ToolLoopRound {
@@ -1751,14 +2214,98 @@ mod tests {
 
         assert!(messages[0].content.contains("agentic RAG"));
         assert!(messages[1].content.contains("第 2 轮检索"));
+        assert!(messages[1].content.contains("上一轮工具结果"));
+        assert!(messages[1].content.contains("框选文本摘要"));
         assert!(messages[1].content.contains("复利来自长期坚持"));
-        assert!(messages[1].content.contains("风险控制"));
-        assert!(messages[1].content.contains("为什么强调长期"));
+        assert!(!messages[1].content.contains("上一轮说明长期"));
+        assert!(!messages[1].content.contains("为什么强调长期"));
         assert_eq!(messages[2].tool_calls[0].id, "call-1");
         assert!(messages[2].content.contains("先查框选段落"));
         assert_eq!(messages[3].tool_call_id.as_deref(), Some("call-1"));
         assert!(messages[3].content.contains("chunks: [p1-c1, p2-c1]"));
         assert!(messages[3].content.contains("[p2-c1] page 2"));
+    }
+
+    #[test]
+    fn tool_loop_messages_compact_old_tool_results_but_keep_latest_snippets() {
+        let request = InterpretRequest {
+            book_id: "book-1".to_string(),
+            selection_text: "复利来自长期坚持。".to_string(),
+            page_indexes: vec![0],
+            selection_rects: Vec::new(),
+            focus_chunk_ids: vec!["p1-c1".to_string()],
+            question: Some("它和风险控制有什么关系？".to_string()),
+            prior_answer: Some("上一轮说明长期是复利成立的时间条件。".to_string()),
+            prior_evidence_chunk_ids: vec!["p1-c1".to_string()],
+            follow_up_history: Vec::new(),
+            lightweight: false,
+            mode: InterpretMode::Deep,
+        };
+        let history = vec![
+            ToolLoopRound {
+                model_note: "先查框选段落附近的语境。".to_string(),
+                tool_calls: vec![ToolCall {
+                    id: "call-1".to_string(),
+                    name: "search_book".to_string(),
+                    arguments: json!({"query": "复利 长期"}),
+                }],
+                executions: vec![ToolExecutionRecord {
+                    tool_call_id: "call-1".to_string(),
+                    chunk_ids: vec!["p1-c1".to_string()],
+                    result_prompt: "search_book {\"query\":\"复利 长期\"}\n结果：\n[p1-c1] page 1\n早期轮次的长正文不应在后续轮反复回灌。".to_string(),
+                }],
+            },
+            ToolLoopRound {
+                model_note: "再查风险控制。".to_string(),
+                tool_calls: vec![ToolCall {
+                    id: "call-2".to_string(),
+                    name: "search_book".to_string(),
+                    arguments: json!({"query": "风险控制"}),
+                }],
+                executions: vec![ToolExecutionRecord {
+                    tool_call_id: "call-2".to_string(),
+                    chunk_ids: vec!["p2-c1".to_string()],
+                    result_prompt: "search_book {\"query\":\"风险控制\"}\n结果：\n[p2-c1] page 2\n最新轮次正文需要保留，供模型判断是否继续检索。".to_string(),
+                }],
+            },
+        ];
+
+        let messages = build_tool_loop_messages(&request, &history, 2);
+
+        assert_eq!(messages[3].tool_call_id.as_deref(), Some("call-1"));
+        assert!(messages[3].content.contains("chunks: [p1-c1]"));
+        assert!(messages[3].content.contains("旧轮证据正文已压缩"));
+        assert!(!messages[3].content.contains("早期轮次的长正文"));
+        assert_eq!(messages[5].tool_call_id.as_deref(), Some("call-2"));
+        assert!(messages[5].content.contains("chunks: [p2-c1]"));
+        assert!(messages[5].content.contains("最新轮次正文需要保留"));
+    }
+
+    #[test]
+    fn first_tool_loop_round_carries_full_query_context_once() {
+        let request = InterpretRequest {
+            book_id: "book-1".to_string(),
+            selection_text: "复利来自长期坚持。".to_string(),
+            page_indexes: vec![0],
+            selection_rects: Vec::new(),
+            focus_chunk_ids: vec!["p1-c1".to_string()],
+            question: Some("它和风险控制有什么关系？".to_string()),
+            prior_answer: Some("上一轮说明长期是复利成立的时间条件。".to_string()),
+            prior_evidence_chunk_ids: vec!["p1-c1".to_string()],
+            follow_up_history: vec![FollowUpContext {
+                question: "为什么强调长期？".to_string(),
+                answer: "因为时间会放大差异。[p1-c1]".to_string(),
+            }],
+            lightweight: false,
+            mode: InterpretMode::Deep,
+        };
+
+        let messages = build_tool_loop_messages(&request, &[], 0);
+
+        assert!(messages[1].content.contains("复利来自长期坚持"));
+        assert!(messages[1].content.contains("它和风险控制有什么关系"));
+        assert!(messages[1].content.contains("上一轮说明长期"));
+        assert!(messages[1].content.contains("为什么强调长期"));
     }
 
     #[test]
@@ -1826,11 +2373,13 @@ mod tests {
             book_id: saved.book_id,
             selection_text: "复利来自长期坚持。".to_string(),
             page_indexes: vec![0],
+            selection_rects: Vec::new(),
             focus_chunk_ids: vec!["p1-c1".to_string()],
             question: None,
             prior_answer: None,
             prior_evidence_chunk_ids: Vec::new(),
             follow_up_history: Vec::new(),
+            lightweight: false,
             mode: InterpretMode::Deep,
         };
 
@@ -1911,11 +2460,13 @@ mod tests {
             book_id: "book-1".to_string(),
             selection_text: "焦点".to_string(),
             page_indexes: vec![3],
+            selection_rects: Vec::new(),
             focus_chunk_ids: Vec::new(),
             question: None,
             prior_answer: None,
             prior_evidence_chunk_ids: Vec::new(),
             follow_up_history: Vec::new(),
+            lightweight: false,
             mode: InterpretMode::Deep,
         };
         let ranked = rank_evidence(
@@ -1925,12 +2476,16 @@ mod tests {
                     title: "Chunk p2-c1".to_string(),
                     page_index: 1,
                     text: "前文".to_string(),
+                    score: 0.0,
+                    rects: Vec::new(),
                 },
                 EvidenceItem {
                     chunk_id: "p4-c1".to_string(),
                     title: "Chunk p4-c1".to_string(),
                     page_index: 3,
                     text: "当前页".to_string(),
+                    score: 0.0,
+                    rects: Vec::new(),
                 },
             ],
             &request,
@@ -1945,11 +2500,13 @@ mod tests {
             book_id: "book-1".to_string(),
             selection_text: "核心概念".to_string(),
             page_indexes: vec![0],
+            selection_rects: Vec::new(),
             focus_chunk_ids: vec!["p1-c3".to_string()],
             question: Some("为什么强调核心概念？".to_string()),
             prior_answer: None,
             prior_evidence_chunk_ids: Vec::new(),
             follow_up_history: Vec::new(),
+            lightweight: false,
             mode: InterpretMode::Deep,
         };
         let ranked = rank_evidence(
@@ -1959,18 +2516,249 @@ mod tests {
                     title: "Chunk p1-c1".to_string(),
                     page_index: 0,
                     text: "核心概念 核心概念 核心概念 为什么 强调".to_string(),
+                    score: 0.0,
+                    rects: Vec::new(),
                 },
                 EvidenceItem {
                     chunk_id: "p1-c3".to_string(),
                     title: "Chunk p1-c3".to_string(),
                     page_index: 0,
                     text: "用户真正框选的最后一段。".to_string(),
+                    score: 0.0,
+                    rects: Vec::new(),
                 },
             ],
             &request,
         );
 
         assert_eq!(ranked[0].chunk_id, "p1-c3");
+    }
+
+    #[test]
+    fn rank_evidence_uses_selection_rects_as_secondary_signal() {
+        let request = InterpretRequest {
+            book_id: "book-1".to_string(),
+            selection_text: "核心概念".to_string(),
+            page_indexes: vec![0],
+            selection_rects: vec![storage::NormalizedRectInput {
+                page_index: 0,
+                x0: 0.60,
+                y0: 0.60,
+                x1: 0.90,
+                y1: 0.70,
+            }],
+            focus_chunk_ids: Vec::new(),
+            question: None,
+            prior_answer: None,
+            prior_evidence_chunk_ids: Vec::new(),
+            follow_up_history: Vec::new(),
+            lightweight: false,
+            mode: InterpretMode::Deep,
+        };
+        let ranked = rank_evidence(
+            vec![
+                EvidenceItem {
+                    chunk_id: "p1-c1".to_string(),
+                    title: "Chunk p1-c1".to_string(),
+                    page_index: 0,
+                    text: "核心概念".to_string(),
+                    score: 0.0,
+                    rects: vec![storage::NormalizedRectInput {
+                        page_index: 0,
+                        x0: 0.10,
+                        y0: 0.10,
+                        x1: 0.30,
+                        y1: 0.20,
+                    }],
+                },
+                EvidenceItem {
+                    chunk_id: "p1-c2".to_string(),
+                    title: "Chunk p1-c2".to_string(),
+                    page_index: 0,
+                    text: "核心概念".to_string(),
+                    score: 0.0,
+                    rects: vec![storage::NormalizedRectInput {
+                        page_index: 0,
+                        x0: 0.58,
+                        y0: 0.58,
+                        x1: 0.92,
+                        y1: 0.72,
+                    }],
+                },
+            ],
+            &request,
+        );
+
+        assert_eq!(ranked[0].chunk_id, "p1-c2");
+    }
+
+    #[test]
+    fn rank_evidence_uses_retrieval_score_when_primary_signals_tie() {
+        let request = InterpretRequest {
+            book_id: "book-1".to_string(),
+            selection_text: "核心概念".to_string(),
+            page_indexes: vec![0],
+            selection_rects: Vec::new(),
+            focus_chunk_ids: Vec::new(),
+            question: None,
+            prior_answer: None,
+            prior_evidence_chunk_ids: Vec::new(),
+            follow_up_history: Vec::new(),
+            lightweight: false,
+            mode: InterpretMode::Deep,
+        };
+        let ranked = rank_evidence(
+            vec![
+                EvidenceItem {
+                    chunk_id: "p1-c1".to_string(),
+                    title: "Chunk p1-c1".to_string(),
+                    page_index: 0,
+                    text: "核心概念".to_string(),
+                    score: 0.01,
+                    rects: Vec::new(),
+                },
+                EvidenceItem {
+                    chunk_id: "p1-c2".to_string(),
+                    title: "Chunk p1-c2".to_string(),
+                    page_index: 0,
+                    text: "核心概念".to_string(),
+                    score: 0.05,
+                    rects: Vec::new(),
+                },
+            ],
+            &request,
+        );
+
+        assert_eq!(ranked[0].chunk_id, "p1-c2");
+    }
+
+    #[test]
+    fn rank_evidence_lets_retrieval_score_outrank_lexical_overlap_after_geometry() {
+        let request = InterpretRequest {
+            book_id: "book-1".to_string(),
+            selection_text: "核心概念".to_string(),
+            page_indexes: vec![0],
+            selection_rects: Vec::new(),
+            focus_chunk_ids: Vec::new(),
+            question: None,
+            prior_answer: None,
+            prior_evidence_chunk_ids: Vec::new(),
+            follow_up_history: Vec::new(),
+            lightweight: false,
+            mode: InterpretMode::Deep,
+        };
+        let ranked = rank_evidence(
+            vec![
+                EvidenceItem {
+                    chunk_id: "p1-c-lexical".to_string(),
+                    title: "Chunk p1-c-lexical".to_string(),
+                    page_index: 0,
+                    text: "核心概念 核心概念 核心概念 核心概念".to_string(),
+                    score: 0.01,
+                    rects: Vec::new(),
+                },
+                EvidenceItem {
+                    chunk_id: "p1-c-semantic".to_string(),
+                    title: "Chunk p1-c-semantic".to_string(),
+                    page_index: 0,
+                    text: "这一段用不同措辞解释同一个含义。".to_string(),
+                    score: 0.10,
+                    rects: Vec::new(),
+                },
+            ],
+            &request,
+        );
+
+        assert_eq!(ranked[0].chunk_id, "p1-c-semantic");
+    }
+
+    #[test]
+    fn synthesis_evidence_budget_is_capped_for_prompt_size() {
+        let request = InterpretRequest {
+            book_id: "book-1".to_string(),
+            selection_text: "焦点".to_string(),
+            page_indexes: vec![0],
+            selection_rects: Vec::new(),
+            focus_chunk_ids: Vec::new(),
+            question: None,
+            prior_answer: None,
+            prior_evidence_chunk_ids: Vec::new(),
+            follow_up_history: Vec::new(),
+            lightweight: false,
+            mode: InterpretMode::Deep,
+        };
+        let evidence = (0..12)
+            .map(|index| EvidenceItem {
+                chunk_id: format!("p{}-c1", index + 1),
+                title: format!("Chunk {}", index + 1),
+                page_index: index,
+                text: format!("证据 {index}"),
+                score: 0.0,
+                rects: Vec::new(),
+            })
+            .collect::<Vec<_>>();
+
+        let capped = rank_evidence(evidence, &request)
+            .into_iter()
+            .take(MAX_SYNTHESIS_EVIDENCE_CHUNKS)
+            .collect::<Vec<_>>();
+
+        assert_eq!(MAX_SYNTHESIS_EVIDENCE_CHUNKS, 6);
+        assert_eq!(capped.len(), 6);
+    }
+
+    #[test]
+    fn deterministic_fallback_is_only_a_last_line_of_defense() {
+        assert_eq!(
+            deterministic_fallback_reason(Some(&ModelToolLoopStatus::Completed), false, 6),
+            None,
+        );
+        assert_eq!(
+            deterministic_fallback_reason(Some(&ModelToolLoopStatus::Completed), false, 2),
+            Some(DeterministicFallbackReason::InsufficientEvidence),
+        );
+        assert_eq!(
+            deterministic_fallback_reason(None, true, 6),
+            Some(DeterministicFallbackReason::ToolLoopUnavailable),
+        );
+        assert_eq!(
+            deterministic_fallback_reason(
+                Some(&ModelToolLoopStatus::NoToolCalls {
+                    note: "够了".to_string(),
+                }),
+                false,
+                0,
+            ),
+            Some(DeterministicFallbackReason::NoToolCalls),
+        );
+        assert_eq!(
+            deterministic_fallback_reason(
+                Some(&ModelToolLoopStatus::NoToolCalls {
+                    note: "已有证据".to_string(),
+                }),
+                false,
+                4,
+            ),
+            None,
+        );
+        assert_eq!(
+            deterministic_fallback_reason(
+                Some(&ModelToolLoopStatus::NoNewEvidence {
+                    note: "没有新 chunk".to_string(),
+                }),
+                false,
+                6,
+            ),
+            Some(DeterministicFallbackReason::NoNewEvidence),
+        );
+    }
+
+    #[test]
+    fn no_new_evidence_only_stops_at_the_max_tool_round() {
+        assert!(!should_stop_for_no_new_evidence(0, 3, 0));
+        assert!(!should_stop_for_no_new_evidence(1, 3, 0));
+        assert!(should_stop_for_no_new_evidence(2, 3, 0));
+        assert!(!should_stop_for_no_new_evidence(2, 3, 1));
     }
 
     #[test]
@@ -2046,6 +2834,7 @@ mod tests {
             book_id: saved.book_id,
             selection_text: "复利来自长期坚持。".to_string(),
             page_indexes: vec![0],
+            selection_rects: Vec::new(),
             focus_chunk_ids: Vec::new(),
             question: Some("为什么强调长期计划？".to_string()),
             prior_answer: Some("上一轮提到风险控制是长期计划的保护条件。".to_string()),
@@ -2054,6 +2843,7 @@ mod tests {
                 question: "这和风险有什么关系？".to_string(),
                 answer: "风险控制让长期计划不被短期波动打断。[p2-c1]".to_string(),
             }],
+            lightweight: false,
             mode: InterpretMode::Deep,
         };
         let (evidence, trace) =
@@ -2161,11 +2951,13 @@ mod tests {
             book_id: saved.book_id,
             selection_text: "最后一段包含核心概念".to_string(),
             page_indexes: vec![0],
+            selection_rects: Vec::new(),
             focus_chunk_ids: vec!["p1-c3".to_string()],
             question: None,
             prior_answer: None,
             prior_evidence_chunk_ids: Vec::new(),
             follow_up_history: Vec::new(),
+            lightweight: false,
             mode: InterpretMode::Deep,
         };
         let (evidence, trace) =
@@ -2239,11 +3031,13 @@ mod tests {
             book_id: "book-1".to_string(),
             selection_text: "复利来自长期坚持。".to_string(),
             page_indexes: vec![0],
+            selection_rects: Vec::new(),
             focus_chunk_ids: Vec::new(),
             question: None,
             prior_answer: None,
             prior_evidence_chunk_ids: Vec::new(),
             follow_up_history: Vec::new(),
+            lightweight: false,
             mode: InterpretMode::Deep,
         };
         let evidence = vec![EvidenceItem {
@@ -2251,6 +3045,8 @@ mod tests {
             title: "Chunk p1-c1".to_string(),
             page_index: 0,
             text: "复利需要时间积累。".to_string(),
+            score: 0.0,
+            rects: Vec::new(),
         }];
 
         let answer = enforce_grounded_citations("这是一个没有引用的回答。", &request, &evidence);
@@ -2264,11 +3060,13 @@ mod tests {
             book_id: "book-1".to_string(),
             selection_text: "复利来自长期坚持。".to_string(),
             page_indexes: vec![0],
+            selection_rects: Vec::new(),
             focus_chunk_ids: Vec::new(),
             question: Some("为什么强调长期？".to_string()),
             prior_answer: None,
             prior_evidence_chunk_ids: Vec::new(),
             follow_up_history: Vec::new(),
+            lightweight: false,
             mode: InterpretMode::Plain,
         };
         let evidence = vec![EvidenceItem {
@@ -2276,10 +3074,15 @@ mod tests {
             title: "Chunk p1-c1".to_string(),
             page_index: 0,
             text: "复利需要时间积累，短期收益并不关键。".to_string(),
+            score: 0.0,
+            rects: Vec::new(),
         }];
 
         let answer = fallback_grounded_answer(&request, &evidence, Some("missing key"));
         assert!(answer.contains("LLM 暂不可用"));
+        assert!(answer.contains("本地书库检索证据"));
+        assert!(!answer.contains("后端"));
+        assert!(!answer.contains("missing key"));
         assert!(answer.contains("为什么强调长期"));
         assert!(answer.contains("[p1-c1]"));
         assert!(answer.contains("第 1 页"));
@@ -2295,6 +3098,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&config_dir);
         std::fs::create_dir_all(&config_dir).unwrap();
         std::env::set_var("FOCUSED_READING_CONFIG_DIR", &config_dir);
+        std::env::set_var("EMBEDDING_PROVIDER", "disabled");
         std::env::remove_var("DEEPSEEK_API_KEY");
 
         let db_path = std::env::temp_dir().join(format!(
@@ -2360,11 +3164,13 @@ mod tests {
                 book_id: saved.book_id,
                 selection_text: "复利来自长期坚持".to_string(),
                 page_indexes: vec![0],
+                selection_rects: Vec::new(),
                 focus_chunk_ids: Vec::new(),
                 question: Some("为什么强调长期？".to_string()),
                 prior_answer: None,
                 prior_evidence_chunk_ids: Vec::new(),
                 follow_up_history: Vec::new(),
+                lightweight: false,
                 mode: InterpretMode::Deep,
             },
         )
@@ -2392,6 +3198,7 @@ mod tests {
         let _ = std::fs::remove_file(&db_path);
         let _ = std::fs::remove_dir_all(&config_dir);
         std::env::remove_var("FOCUSED_READING_CONFIG_DIR");
+        std::env::set_var("EMBEDDING_PROVIDER", "disabled");
     }
 
     #[tokio::test]
@@ -2498,11 +3305,13 @@ mod tests {
                 book_id: saved.book_id.clone(),
                 selection_text: "复利来自长期坚持".to_string(),
                 page_indexes: vec![0],
+                selection_rects: Vec::new(),
                 focus_chunk_ids: vec!["p1-c1".to_string()],
                 question: Some("它和风险控制有什么关系？".to_string()),
                 prior_answer: None,
                 prior_evidence_chunk_ids: Vec::new(),
                 follow_up_history: Vec::new(),
+                lightweight: false,
                 mode: InterpretMode::Deep,
             },
         )
@@ -2537,6 +3346,8 @@ mod tests {
                 question: Some("它和风险控制有什么关系？".to_string()),
                 answer: response.answer.clone(),
                 answer_source: response.answer_source.into(),
+                kind: None,
+                evidence_chunk_snapshots: Vec::new(),
             },
         )
         .expect("interpretation history should persist");

@@ -1,10 +1,12 @@
 import { act, useState } from "react"
 import { createRoot } from "react-dom/client"
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { getDocument, type PDFDocumentProxy } from "@/pdf/pdfjs-compat"
+import { loadPdfDocument, type PDFDocumentProxy } from "@/pdf/pdfjs-compat"
 import { open } from "@tauri-apps/plugin-dialog"
+import { extractPdfText } from "@/core/pdf-text-extractor"
 import { buildReaderOutline } from "./reader-outline"
 import {
+  READER_SESSION_STORAGE_KEY,
   nextAutoOpenBookId,
   nextStartupRestoreTarget,
   parseStartupSession,
@@ -29,6 +31,8 @@ import type {
 import {
   findBookBySourcePdf,
   getConvertedBook,
+  getConvertedBookManifest,
+  getConvertedBookPages,
   importPdfWithMineru,
   importZoteroItem,
   isTauriRuntime,
@@ -49,8 +53,8 @@ import {
   .IS_REACT_ACT_ENVIRONMENT = true
 
 vi.mock("@/pdf/pdfjs-compat", () => ({
-  getDocument: vi.fn(() => {
-    throw new Error("unexpected pdfjs getDocument call in ReaderShell tests")
+  loadPdfDocument: vi.fn(() => {
+    throw new Error("unexpected pdfjs loadPdfDocument call in ReaderShell tests")
   }),
 }))
 
@@ -58,12 +62,22 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(),
 }))
 
+vi.mock("@/core/pdf-text-extractor", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/core/pdf-text-extractor")>()
+  return {
+    ...actual,
+    extractPdfText: vi.fn(),
+  }
+})
+
 vi.mock("@/core/library-api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/core/library-api")>()
   return {
     ...actual,
     findBookBySourcePdf: vi.fn(async () => null),
     getConvertedBook: vi.fn(),
+    getConvertedBookManifest: vi.fn(),
+    getConvertedBookPages: vi.fn(),
     importPdfWithMineru: vi.fn(),
     importZoteroItem: vi.fn(),
     isTauriRuntime: vi.fn(() => false),
@@ -103,6 +117,7 @@ async function renderClient(element: React.ReactElement) {
   })
   return {
     container,
+    rerender: (nextElement: React.ReactElement) => rerenderClient(root, nextElement),
     unmount: () => {
       act(() => root.unmount())
       container.remove()
@@ -110,8 +125,20 @@ async function renderClient(element: React.ReactElement) {
   }
 }
 
+async function rerenderClient(root: ReturnType<typeof createRoot>, element: React.ReactElement) {
+  await act(async () => {
+    root.render(element)
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+}
+
 function buttonByText(container: ParentNode, text: string, index = 0) {
   return elementsByText(container, "button", text)[index] as HTMLButtonElement
+}
+
+function buttonByLabel(container: ParentNode, label: string) {
+  return container.querySelector(`button[aria-label="${label}"]`) as HTMLButtonElement
 }
 
 function elementsByText(container: ParentNode, selector: string, text: string) {
@@ -130,6 +157,28 @@ function inputByPlaceholder(container: ParentNode, placeholder: string) {
     throw new Error(`missing input placeholder: ${placeholder}`)
   }
   return element
+}
+
+function readerViewButtonLabels(container: ParentNode) {
+  const group = elementsByText(container, "button", "转换稿").at(0)?.parentElement
+  return group
+    ? [...group.querySelectorAll("button")].map((button) => textContent(button))
+    : []
+}
+
+function readerViewButton(container: ParentNode, label: string) {
+  const group = elementsByText(container, "button", "转换稿").at(0)?.parentElement
+  const button = group
+    ? [...group.querySelectorAll("button")].find((candidate) => textContent(candidate) === label)
+    : null
+  if (!button) {
+    throw new Error(`missing reader view button: ${label}`)
+  }
+  return button
+}
+
+async function openImportMenu(container: ParentNode) {
+  await clickAsync(buttonByText(container, "导入"))
 }
 
 function click(element: Element) {
@@ -155,6 +204,27 @@ function changeInput(element: HTMLInputElement | HTMLTextAreaElement, value: str
     descriptor?.set?.call(element, value)
     element.dispatchEvent(new Event("input", { bubbles: true }))
     element.dispatchEvent(new Event("change", { bubbles: true }))
+  })
+}
+
+async function dropFiles(element: Element, files: File[]) {
+  const event = new Event("drop", { bubbles: true, cancelable: true })
+  Object.defineProperty(event, "dataTransfer", {
+    value: {
+      files,
+      items: files.map((file) => ({
+        kind: "file",
+        type: file.type,
+        getAsFile: () => file,
+      })),
+      dropEffect: "copy",
+      effectAllowed: "all",
+    },
+  })
+  await act(async () => {
+    element.dispatchEvent(event)
+    await Promise.resolve()
+    await Promise.resolve()
   })
 }
 
@@ -193,6 +263,7 @@ function deferred<T>() {
 
 beforeEach(() => {
   document.body.replaceChildren()
+  window.localStorage.clear()
   Element.prototype.scrollIntoView = vi.fn()
   HTMLElement.prototype.scrollTo = vi.fn(function scrollToMock(this: HTMLElement, options?: ScrollToOptions | number) {
     if (typeof options === "object" && typeof options.top === "number") {
@@ -201,13 +272,19 @@ beforeEach(() => {
   })
   vi.mocked(open).mockReset()
   vi.mocked(open).mockResolvedValue(null)
-  vi.mocked(getDocument).mockReset()
-  vi.mocked(getDocument).mockImplementation(() => {
-    throw new Error("unexpected pdfjs getDocument call in ReaderShell tests")
+  vi.mocked(loadPdfDocument).mockReset()
+  vi.mocked(loadPdfDocument).mockImplementation(() => {
+    throw new Error("unexpected pdfjs loadPdfDocument call in ReaderShell tests")
+  })
+  vi.mocked(extractPdfText).mockReset()
+  vi.mocked(extractPdfText).mockImplementation(() => {
+    throw new Error("unexpected extractPdfText call in ReaderShell tests")
   })
   vi.mocked(isTauriRuntime).mockReturnValue(false)
   vi.mocked(findBookBySourcePdf).mockResolvedValue(null)
   vi.mocked(getConvertedBook).mockReset()
+  vi.mocked(getConvertedBookManifest).mockReset()
+  vi.mocked(getConvertedBookPages).mockReset()
   vi.mocked(importPdfWithMineru).mockReset()
   vi.mocked(importZoteroItem).mockReset()
   vi.mocked(listenMineruProgress).mockResolvedValue(null)
@@ -351,6 +428,7 @@ describe("ReaderShell outline", () => {
         sectionNumber: "第一章",
         chunkCount: 2,
         preview: "第一页正文，不应该变成目录。",
+        anchorText: "第一章 复利来自时间",
         firstChunkId: "p1-c1",
       },
       {
@@ -361,6 +439,7 @@ describe("ReaderShell outline", () => {
         sectionNumber: "1.1",
         chunkCount: 1,
         preview: "1.1 风险控制 正文",
+        anchorText: "1.1 风险控制",
         firstChunkId: "p3-c1",
       },
     ])
@@ -403,8 +482,77 @@ describe("ReaderShell outline", () => {
         sectionNumber: "1.2",
         chunkCount: 1,
         preview: "1.1 fallback",
+        anchorText: "PDF 书签标题",
         firstChunkId: "p1-c1",
       },
+    ])
+  })
+
+  it("targets the heading chunk when several outline entries share one page", () => {
+    const outline = buildReaderOutline(
+      [
+        {
+          pageIndex: 3,
+          text: "4. Experiments\n\n4.1. Benchmarks and Setup\n\n4.2. Main Results",
+          markdown: "# 4. Experiments\n\n# 4.1. Benchmarks and Setup\n\n# 4.2. Main Results",
+        },
+      ],
+      [
+        {
+          chunkId: "p4-c3",
+          pageIndex: 3,
+          text: "4. Experiments",
+          markdown: "### [p4-c3] Page 4\n\n4. Experiments",
+          rects: [],
+        },
+        {
+          chunkId: "p4-c4",
+          pageIndex: 3,
+          text: "4.1. Benchmarks and Setup",
+          markdown: "### [p4-c4] Page 4\n\n4.1. Benchmarks and Setup",
+          rects: [],
+        },
+        {
+          chunkId: "p4-c10",
+          pageIndex: 3,
+          text: "4.2. Main Results",
+          markdown: "### [p4-c10] Page 4\n\n4.2. Main Results",
+          rects: [],
+        },
+      ],
+      8,
+      [
+        {
+          id: "pdf-outline-experiments",
+          pageIndex: 3,
+          title: "Experiments",
+          level: 1,
+          chunkCount: 0,
+          preview: "",
+        },
+        {
+          id: "pdf-outline-benchmarks",
+          pageIndex: 3,
+          title: "Benchmarks and Setup",
+          level: 2,
+          chunkCount: 0,
+          preview: "",
+        },
+        {
+          id: "pdf-outline-main-results",
+          pageIndex: 3,
+          title: "Main Results",
+          level: 2,
+          chunkCount: 0,
+          preview: "",
+        },
+      ],
+    )
+
+    expect(outline.map((entry) => [entry.title, entry.anchorText, entry.firstChunkId])).toEqual([
+      ["Experiments", "4. Experiments", "p4-c3"],
+      ["Benchmarks and Setup", "4.1. Benchmarks and Setup", "p4-c4"],
+      ["Main Results", "4.2. Main Results", "p4-c10"],
     ])
   })
 
@@ -429,7 +577,7 @@ describe("ReaderShell interpretation clipboard", () => {
     expect(text).toContain("AI 解读：")
     expect(text).toContain("追问：")
     expect(text).toContain("引用证据：")
-    expect(text).toContain("第 1 页 · 相关段落")
+    expect(text).toContain("相关段落")
     expect(text).not.toContain("[p1-c1]")
     expect(text).not.toContain("[p2-c1]")
   })
@@ -615,6 +763,425 @@ describe("ReaderShell current text selection rendering", () => {
     expect(onClearSelection).toHaveBeenCalledTimes(1)
     unmount()
   })
+
+  it("keeps the selection toolbar mounted briefly so it can fade out", async () => {
+    const { ReaderShell } = await import("./ReaderShell")
+    const pageText = "第一段正文。工具栏淡出测试。最后一句。"
+    const selectionText = "工具栏淡出"
+    const selectionStart = pageText.indexOf(selectionText)
+    vi.useFakeTimers()
+
+    function shell(selection: string) {
+      return (
+        <ReaderShell
+          phase="reading"
+          bookId="book-selection"
+          libraryStatus="indexed"
+          libraryMessage=""
+          bookTitle="工具栏淡出测试"
+          currentPage={1}
+          totalPages={1}
+          selectionText={selection}
+          selectionRects={[]}
+          selectionAnchor={
+            selection
+              ? {
+                  pageIndex: 0,
+                  positionStart: selectionStart,
+                  positionEnd: selectionStart + selection.length,
+                }
+              : null
+          }
+          evidence={[]}
+          agentTrace={[]}
+          interpretation=""
+          followUps={[]}
+          highlights={[]}
+          interpretationHistory={[]}
+          parsedPages={[
+            {
+              pageIndex: 0,
+              text: pageText,
+              markdown: `## Page 1\n\n${pageText}`,
+            },
+          ]}
+          parsedChunks={[]}
+          parserEngine="test"
+          coordinateMode="normalized-page-rects"
+          activeChunkId=""
+          zoom={1}
+          onBookLoaded={vi.fn()}
+          onLibraryStatus={vi.fn()}
+          onParsedDocument={vi.fn()}
+          onPageChange={vi.fn()}
+          onVisiblePageChange={vi.fn()}
+          onZoomChange={vi.fn()}
+          onSelection={vi.fn()}
+          onActiveChunk={vi.fn()}
+          onChunkFocus={vi.fn()}
+          onPhaseChange={vi.fn()}
+          onDeepInterpret={vi.fn()}
+          onPlainExplain={vi.fn()}
+          onQuestionSubmit={vi.fn()}
+          onSaveHighlight={vi.fn(async () => false)}
+          onOpenHighlight={vi.fn()}
+          onDeleteHighlight={vi.fn()}
+          onOpenInterpretation={vi.fn()}
+          onDeleteInterpretation={vi.fn()}
+          onRegenerate={vi.fn()}
+          onStop={vi.fn()}
+        />
+      )
+    }
+
+    const { container, rerender, unmount } = await renderClient(shell(selectionText))
+    expect(container.querySelector('[data-testid="selection-toolbar"]')).not.toBeNull()
+
+    await rerender(shell(""))
+    const fadingToolbar = container.querySelector('[data-testid="selection-toolbar"]')
+    expect(fadingToolbar).not.toBeNull()
+    expect(fadingToolbar?.className).toContain("opacity-0")
+    expect(fadingToolbar?.className).toContain("pointer-events-none")
+
+    await act(async () => {
+      vi.advanceTimersByTime(181)
+      await Promise.resolve()
+    })
+    expect(container.querySelector('[data-testid="selection-toolbar"]')).toBeNull()
+    unmount()
+  })
+})
+
+describe("ReaderShell view navigation", () => {
+  it("orders reader view tabs as converted text, TLDR, translation, then PDF", async () => {
+    const { ReaderShell } = await import("./ReaderShell")
+    vi.mocked(isTauriRuntime).mockReturnValue(true)
+
+    const { container, unmount } = await renderClient(
+      <ReaderShell
+        phase="reading"
+        bookId="book-tabs"
+        libraryStatus="indexed"
+        libraryMessage="已打开转换稿"
+        bookTitle="标签顺序测试"
+        currentPage={1}
+        totalPages={1}
+        selectionText=""
+        selectionRects={[]}
+        selectionAnchor={null}
+        evidence={[]}
+        agentTrace={[]}
+        interpretation=""
+        followUps={[]}
+        highlights={[]}
+        interpretationHistory={[]}
+        parsedPages={[
+          {
+            pageIndex: 0,
+            text: "1. Introduction\n\n正文。",
+            markdown: "## 1. Introduction\n\n正文。",
+          },
+        ]}
+        parsedChunks={[]}
+        parserEngine="mineru-layout"
+        coordinateMode="normalized-page-rects"
+        activeChunkId=""
+        textQuality={{
+          charCount: 20,
+          replacementCharRatio: 0,
+          controlCharRatio: 0,
+          looksUsable: true,
+        }}
+        zoom={1}
+        onBookLoaded={vi.fn()}
+        onLibraryStatus={vi.fn()}
+        onParsedDocument={vi.fn()}
+        onPageChange={vi.fn()}
+        onVisiblePageChange={vi.fn()}
+        onZoomChange={vi.fn()}
+        onSelection={vi.fn()}
+        onActiveChunk={vi.fn()}
+        onChunkFocus={vi.fn()}
+        onPhaseChange={vi.fn()}
+        onDeepInterpret={vi.fn()}
+        onPlainExplain={vi.fn()}
+        onQuestionSubmit={vi.fn()}
+        onSaveHighlight={vi.fn(async () => false)}
+        onOpenHighlight={vi.fn()}
+        onDeleteHighlight={vi.fn()}
+        onOpenInterpretation={vi.fn()}
+        onDeleteInterpretation={vi.fn()}
+        onRegenerate={vi.fn()}
+        onStop={vi.fn()}
+      />,
+    )
+
+    expect(readerViewButtonLabels(container)).toEqual(["转换稿", "TLDR", "对照翻译", "PDF"])
+    unmount()
+  })
+
+  it("keeps outline clicks inside the translation view", async () => {
+    const { ReaderShell } = await import("./ReaderShell")
+    vi.mocked(isTauriRuntime).mockReturnValue(true)
+    vi.mocked(readPdfFile).mockResolvedValue([37, 80, 68, 70])
+    vi.mocked(loadPdfDocument).mockResolvedValue({
+      numPages: 2,
+      cleanup: vi.fn(),
+      getOutline: vi.fn(async () => []),
+    } as unknown as PDFDocumentProxy)
+    const translation: TranslationStatus = {
+      bookId: "book-view-outline",
+      totalPages: 2,
+      completedPages: 2,
+      failedPages: 0,
+      running: false,
+      provider: "deep_seek",
+      model: "deepseek-v4-flash",
+      pages: [
+        {
+          pageIndex: 0,
+          sourceMarkdown: "## 1. Introduction\n\nIntro source.",
+          translatedMarkdown: "## 1. 引言\n\n引言译文。",
+          status: "done",
+          error: "",
+          provider: "deep_seek",
+          model: "deepseek-v4-flash",
+          updatedAt: "2026-06-01T00:00:00Z",
+        },
+        {
+          pageIndex: 1,
+          sourceMarkdown: "## 2. Results\n\nResults source.",
+          translatedMarkdown: "## 2. 结果\n\n结果译文。",
+          status: "done",
+          error: "",
+          provider: "deep_seek",
+          model: "deepseek-v4-flash",
+          updatedAt: "2026-06-01T00:00:00Z",
+        },
+      ],
+    }
+    vi.mocked(translationStatus).mockResolvedValue(translation)
+
+    function Harness() {
+      const [currentPage, setCurrentPage] = useState(1)
+      return (
+        <ReaderShell
+          phase="reading"
+          bookId="book-view-outline"
+          libraryStatus="indexed"
+          libraryMessage="已打开转换稿"
+          bookTitle="视图导航测试"
+          currentPage={currentPage}
+          totalPages={2}
+          selectionText=""
+          selectionRects={[]}
+          selectionAnchor={null}
+          evidence={[]}
+          agentTrace={[]}
+          interpretation=""
+          followUps={[]}
+          highlights={[]}
+          interpretationHistory={[]}
+          parsedPages={[
+            {
+              pageIndex: 0,
+              text: "1. Introduction\n\nIntro source.",
+              markdown: "## 1. Introduction\n\nIntro source.",
+            },
+            {
+              pageIndex: 1,
+              text: "2. Results\n\nResults source.",
+              markdown: "## 2. Results\n\nResults source.",
+            },
+          ]}
+          parsedChunks={[]}
+          parserEngine="mineru-layout"
+          coordinateMode="normalized-page-rects"
+          activeChunkId=""
+          textQuality={{
+            charCount: 60,
+            replacementCharRatio: 0,
+            controlCharRatio: 0,
+            looksUsable: true,
+          }}
+          zoom={1}
+          onBookLoaded={vi.fn()}
+          onLibraryStatus={vi.fn()}
+          onParsedDocument={vi.fn()}
+          onPageChange={setCurrentPage}
+          onVisiblePageChange={setCurrentPage}
+          onZoomChange={vi.fn()}
+          onSelection={vi.fn()}
+          onActiveChunk={vi.fn()}
+          onChunkFocus={vi.fn()}
+          onPhaseChange={vi.fn()}
+          onDeepInterpret={vi.fn()}
+          onPlainExplain={vi.fn()}
+          onQuestionSubmit={vi.fn()}
+          onSaveHighlight={vi.fn(async () => false)}
+          onOpenHighlight={vi.fn()}
+          onDeleteHighlight={vi.fn()}
+          onOpenInterpretation={vi.fn()}
+          onDeleteInterpretation={vi.fn()}
+          onRegenerate={vi.fn()}
+          onStop={vi.fn()}
+        />
+      )
+    }
+
+    const { container, unmount } = await renderClient(<Harness />)
+    await clickAsync(buttonByText(container, "对照翻译"))
+    await vi.waitFor(() => expect(translationStatus).toHaveBeenCalledWith("book-view-outline"))
+    expect(container.querySelector("[data-translation-scroller]")).not.toBeNull()
+    await clickAsync(buttonByText(container, "Results"))
+    expect(container.querySelector("[data-translation-scroller]")).not.toBeNull()
+    expect(textContent(container)).toContain("对照翻译")
+    expect(textContent(container)).not.toContain("转换稿主视图")
+    unmount()
+  })
+
+  it("hides the converted outline in PDF view", async () => {
+    const { ReaderShell } = await import("./ReaderShell")
+    window.localStorage.setItem("focused-reading.onboarding.seen.v1", "1")
+    window.localStorage.setItem(
+      READER_SESSION_STORAGE_KEY,
+      JSON.stringify({
+        bookId: "book-pdf-outline",
+        currentPage: 1,
+        readerView: "pdf",
+      }),
+    )
+    vi.mocked(isTauriRuntime).mockReturnValue(true)
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
+      {} as CanvasRenderingContext2D,
+    )
+    const loadedPdf = {
+      numPages: 2,
+      cleanup: vi.fn(),
+      getPage: vi.fn(async () => ({
+        getViewport: () => ({ width: 600, height: 800 }),
+        render: () => ({ promise: Promise.resolve(), cancel: vi.fn() }),
+        getTextContent: vi.fn(async () => ({ items: [], styles: Object.create(null) })),
+      })),
+    } as unknown as PDFDocumentProxy
+    vi.mocked(loadPdfDocument).mockResolvedValue(loadedPdf)
+    vi.mocked(readPdfFile).mockResolvedValue([37, 80, 68, 70])
+    const manifest = storedBook({
+      bookId: "book-pdf-outline",
+      title: "PDF 目录测试",
+      createdAt: "2026-06-03T03:00:00Z",
+      totalPages: 2,
+      originalPdfPath: "/tmp/pdf-outline/original.pdf",
+      textCharCount: 50,
+    })
+    vi.mocked(listBooks).mockResolvedValue([manifest])
+    vi.mocked(getConvertedBookManifest).mockResolvedValue(manifest)
+    vi.mocked(getConvertedBookPages).mockResolvedValue({
+      bookId: "book-pdf-outline",
+      startPage: 0,
+      endPage: 2,
+      totalPages: 2,
+      text: "1. Introduction\n\nIntro source.\n\n2. Results\n\nResults source.",
+      markdown: "## 1. Introduction\n\nIntro source.\n\n## 2. Results\n\nResults source.",
+      pages: [
+        {
+          pageIndex: 0,
+          text: "1. Introduction\n\nIntro source.",
+          markdown: "## 1. Introduction\n\nIntro source.",
+        },
+        {
+          pageIndex: 1,
+          text: "2. Results\n\nResults source.",
+          markdown: "## 2. Results\n\nResults source.",
+        },
+      ],
+      chunks: [],
+    })
+
+    function Harness() {
+      const [phase, setPhase] = useState<ReaderPhase>("empty")
+      const [bookTitle, setBookTitle] = useState("未导入 PDF")
+      const [bookId, setBookId] = useState("")
+      const [libraryStatus, setLibraryStatus] = useState<LibraryStatus>("idle")
+      const [currentPage, setCurrentPage] = useState(1)
+      const [totalPages, setTotalPages] = useState(0)
+      const [pages, setPages] = useState<ParsedPage[]>([])
+      const [chunks, setChunks] = useState<ParsedChunk[]>([])
+      return (
+        <ReaderShell
+          phase={phase}
+          bookId={bookId}
+          libraryStatus={libraryStatus}
+          libraryMessage=""
+          bookTitle={bookTitle}
+          currentPage={currentPage}
+          totalPages={totalPages}
+          selectionText=""
+          selectionRects={[]}
+          selectionAnchor={null}
+          evidence={[]}
+          agentTrace={[]}
+          interpretation=""
+          followUps={[]}
+          highlights={[]}
+          interpretationHistory={[]}
+          parsedPages={pages}
+          parsedChunks={chunks}
+          parserEngine="mineru-layout"
+          coordinateMode="normalized-page-rects"
+          activeChunkId=""
+          textQuality={{
+            charCount: 50,
+            replacementCharRatio: 0,
+            controlCharRatio: 0,
+            looksUsable: true,
+          }}
+          zoom={1}
+          onBookLoaded={(title, pageCount) => {
+            setBookTitle(title)
+            setTotalPages(pageCount)
+          }}
+          onLibraryStatus={(status, _message, nextBookId) => {
+            setLibraryStatus(status)
+            if (nextBookId) {
+              setBookId(nextBookId)
+            }
+          }}
+          onParsedDocument={(nextPages, nextChunks) => {
+            setPages(nextPages)
+            setChunks(nextChunks)
+          }}
+          onPageChange={setCurrentPage}
+          onVisiblePageChange={setCurrentPage}
+          onZoomChange={vi.fn()}
+          onSelection={vi.fn()}
+          onActiveChunk={vi.fn()}
+          onChunkFocus={vi.fn()}
+          onPhaseChange={setPhase}
+          onDeepInterpret={vi.fn()}
+          onPlainExplain={vi.fn()}
+          onQuestionSubmit={vi.fn()}
+          onSaveHighlight={vi.fn(async () => false)}
+          onOpenHighlight={vi.fn()}
+          onDeleteHighlight={vi.fn()}
+          onOpenInterpretation={vi.fn()}
+          onDeleteInterpretation={vi.fn()}
+          onRegenerate={vi.fn()}
+          onStop={vi.fn()}
+        />
+      )
+    }
+
+    const { container, unmount } = await renderClient(<Harness />)
+    await vi.waitFor(() => expect(readPdfFile).toHaveBeenCalledWith("/tmp/pdf-outline/original.pdf"))
+    expect(readPdfFile).toHaveBeenCalledWith("/tmp/pdf-outline/original.pdf")
+    await vi.waitFor(() => expect(textContent(container)).toContain("原 PDF 校对"))
+
+    expect(container.querySelector("[data-readable-page]")).toBeNull()
+    expect(container.querySelector("[data-translation-scroller]")).toBeNull()
+    expect(container.querySelector("[data-reader-outline-panel]")).toBeNull()
+    unmount()
+  })
 })
 
 describe("ReaderShell MinerU progress labels", () => {
@@ -651,6 +1218,383 @@ describe("ReaderShell MinerU progress labels", () => {
 })
 
 describe("ReaderShell runtime affordances", () => {
+  it("offers a zero-key sample book path from the first empty state", async () => {
+    const { ReaderShell } = await import("./ReaderShell")
+    const onOpenSampleBook = vi.fn()
+    const { container, unmount } = await renderClient(
+      <ReaderShell
+        phase="empty"
+        bookId=""
+        libraryStatus="idle"
+        libraryMessage=""
+        bookTitle="未导入 PDF"
+        currentPage={1}
+        totalPages={0}
+        selectionText=""
+        selectionRects={[]}
+        selectionAnchor={null}
+        evidence={[]}
+        agentTrace={[]}
+        interpretation=""
+        followUps={[]}
+        highlights={[]}
+        interpretationHistory={[]}
+        parsedPages={[]}
+        parsedChunks={[]}
+        parserEngine=""
+        coordinateMode=""
+        activeChunkId=""
+        textQuality={null}
+        zoom={1}
+        onBookLoaded={vi.fn()}
+        onLibraryStatus={vi.fn()}
+        onParsedDocument={vi.fn()}
+        onPageChange={vi.fn()}
+        onVisiblePageChange={vi.fn()}
+        onZoomChange={vi.fn()}
+        onSelection={vi.fn()}
+        onActiveChunk={vi.fn()}
+        onChunkFocus={vi.fn()}
+        onPhaseChange={vi.fn()}
+        onDeepInterpret={vi.fn()}
+        onPlainExplain={vi.fn()}
+        onQuestionSubmit={vi.fn()}
+        onSaveHighlight={vi.fn(async () => false)}
+        onOpenHighlight={vi.fn()}
+        onDeleteHighlight={vi.fn()}
+        onOpenInterpretation={vi.fn()}
+        onDeleteInterpretation={vi.fn()}
+        onRegenerate={vi.fn()}
+        onStop={vi.fn()}
+        onOpenSampleBook={onOpenSampleBook}
+      />,
+    )
+
+    expect(textContent(container)).toContain("先体验框选精读")
+    expect(textContent(container)).toContain("无需配置 key")
+    expect(textContent(container)).toContain("将 PDF 拖到此处")
+    expect(textContent(container)).toContain("先看一次框选精读链路")
+    await clickAsync(buttonByText(container, "打开示例书"))
+    expect(onOpenSampleBook).toHaveBeenCalledTimes(1)
+    unmount()
+  })
+
+  it("persists first-run onboarding dismissal and lets the empty state reopen it", async () => {
+    const { ReaderShell } = await import("./ReaderShell")
+    const { container, unmount } = await renderClient(
+      <ReaderShell
+        phase="empty"
+        bookId=""
+        libraryStatus="idle"
+        libraryMessage=""
+        bookTitle="未导入 PDF"
+        currentPage={1}
+        totalPages={0}
+        selectionText=""
+        selectionRects={[]}
+        selectionAnchor={null}
+        evidence={[]}
+        agentTrace={[]}
+        interpretation=""
+        followUps={[]}
+        highlights={[]}
+        interpretationHistory={[]}
+        parsedPages={[]}
+        parsedChunks={[]}
+        parserEngine=""
+        coordinateMode=""
+        activeChunkId=""
+        textQuality={null}
+        zoom={1}
+        onBookLoaded={vi.fn()}
+        onLibraryStatus={vi.fn()}
+        onParsedDocument={vi.fn()}
+        onPageChange={vi.fn()}
+        onVisiblePageChange={vi.fn()}
+        onZoomChange={vi.fn()}
+        onSelection={vi.fn()}
+        onActiveChunk={vi.fn()}
+        onChunkFocus={vi.fn()}
+        onPhaseChange={vi.fn()}
+        onDeepInterpret={vi.fn()}
+        onPlainExplain={vi.fn()}
+        onQuestionSubmit={vi.fn()}
+        onSaveHighlight={vi.fn(async () => false)}
+        onOpenHighlight={vi.fn()}
+        onDeleteHighlight={vi.fn()}
+        onOpenInterpretation={vi.fn()}
+        onDeleteInterpretation={vi.fn()}
+        onRegenerate={vi.fn()}
+        onStop={vi.fn()}
+        onOpenSampleBook={vi.fn()}
+      />,
+    )
+
+    expect(textContent(container)).toContain("先看一次框选精读链路")
+    await clickAsync(buttonByText(container, "关闭"))
+    expect(window.localStorage.getItem("focused-reading.onboarding.seen.v1")).toBe("1")
+    expect(textContent(container)).not.toContain("先看一次框选精读链路")
+
+    await clickAsync(buttonByText(container, "查看引导"))
+    expect(textContent(container)).toContain("先看一次框选精读链路")
+    unmount()
+  })
+
+  it("imports a dropped PDF in browser preview mode", async () => {
+    const { ReaderShell } = await import("./ReaderShell")
+    const loadedPdf = { numPages: 1, cleanup: vi.fn() } as unknown as PDFDocumentProxy
+    vi.mocked(loadPdfDocument).mockResolvedValue(loadedPdf)
+    vi.mocked(extractPdfText).mockResolvedValue({
+      engine: "pdfjs-browser",
+      coordinateMode: "normalized-page-rects",
+      quality: {
+        charCount: 8,
+        replacementCharRatio: 0,
+        controlCharRatio: 0,
+        looksUsable: true,
+      },
+      text: "拖拽导入正文",
+      markdown: "## Page 1\n\n拖拽导入正文",
+      pages: [
+        {
+          pageIndex: 0,
+          text: "拖拽导入正文",
+          markdown: "## Page 1\n\n拖拽导入正文",
+        },
+      ],
+      chunks: [
+        {
+          chunkId: "drop-p1-c1",
+          pageIndex: 0,
+          text: "拖拽导入正文",
+          markdown: "### [drop-p1-c1] Page 1\n\n拖拽导入正文",
+          rects: [],
+        },
+      ],
+    })
+    const onBookLoaded = vi.fn()
+    const onParsedDocument = vi.fn()
+    const onPhaseChange = vi.fn()
+    const { container, unmount } = await renderClient(
+      <ReaderShell
+        phase="empty"
+        bookId=""
+        libraryStatus="idle"
+        libraryMessage=""
+        bookTitle="未导入 PDF"
+        currentPage={1}
+        totalPages={0}
+        selectionText=""
+        selectionRects={[]}
+        selectionAnchor={null}
+        evidence={[]}
+        agentTrace={[]}
+        interpretation=""
+        followUps={[]}
+        highlights={[]}
+        interpretationHistory={[]}
+        parsedPages={[]}
+        parsedChunks={[]}
+        parserEngine=""
+        coordinateMode=""
+        activeChunkId=""
+        textQuality={null}
+        zoom={1}
+        onBookLoaded={onBookLoaded}
+        onLibraryStatus={vi.fn()}
+        onParsedDocument={onParsedDocument}
+        onPageChange={vi.fn()}
+        onVisiblePageChange={vi.fn()}
+        onZoomChange={vi.fn()}
+        onSelection={vi.fn()}
+        onActiveChunk={vi.fn()}
+        onChunkFocus={vi.fn()}
+        onPhaseChange={onPhaseChange}
+        onDeepInterpret={vi.fn()}
+        onPlainExplain={vi.fn()}
+        onQuestionSubmit={vi.fn()}
+        onSaveHighlight={vi.fn(async () => false)}
+        onOpenHighlight={vi.fn()}
+        onDeleteHighlight={vi.fn()}
+        onOpenInterpretation={vi.fn()}
+        onDeleteInterpretation={vi.fn()}
+        onRegenerate={vi.fn()}
+        onStop={vi.fn()}
+      />,
+    )
+
+    const droppedPdf = {
+      name: "drop-book.pdf",
+      type: "application/pdf",
+      size: 4,
+      lastModified: 1,
+      arrayBuffer: vi.fn(async () => new Uint8Array([37, 80, 68, 70]).buffer),
+    } as unknown as File
+    await dropFiles(container.querySelector('[data-testid="empty-import-dropzone"]')!, [droppedPdf])
+
+    await vi.waitFor(() => {
+      expect(loadPdfDocument).toHaveBeenCalled()
+      expect(extractPdfText).toHaveBeenCalledWith(loadedPdf, {
+        onProgress: expect.any(Function),
+      })
+      expect(onBookLoaded).toHaveBeenCalledWith("drop-book", 1)
+      expect((droppedPdf as File & { arrayBuffer: ReturnType<typeof vi.fn> }).arrayBuffer).toHaveBeenCalled()
+      expect(onParsedDocument).toHaveBeenCalledWith(
+        [
+          {
+            pageIndex: 0,
+            text: "拖拽导入正文",
+            markdown: "## Page 1\n\n拖拽导入正文",
+          },
+        ],
+        [
+          {
+            chunkId: "drop-p1-c1",
+            pageIndex: 0,
+            text: "拖拽导入正文",
+            markdown: "### [drop-p1-c1] Page 1\n\n拖拽导入正文",
+            rects: [],
+          },
+        ],
+        "拖拽导入正文",
+        "## Page 1\n\n拖拽导入正文",
+        expect.objectContaining({
+          originalPdfPath: "drop-book.pdf",
+          sourcePdfPath: "drop-book.pdf",
+          sourcePdfFingerprint: expect.stringMatching(/^browser-/),
+        }),
+      )
+    })
+    expect(onPhaseChange).toHaveBeenCalledWith("reading")
+    unmount()
+  })
+
+  it("opens an import choice panel before choosing an import source", async () => {
+    const { ReaderShell } = await import("./ReaderShell")
+    window.localStorage.setItem("focused-reading.onboarding.seen.v1", "1")
+    const onOpenSampleBook = vi.fn()
+    const { container, unmount } = await renderClient(
+      <ReaderShell
+        phase="empty"
+        bookId=""
+        libraryStatus="idle"
+        libraryMessage=""
+        bookTitle="未导入 PDF"
+        currentPage={1}
+        totalPages={0}
+        selectionText=""
+        selectionRects={[]}
+        selectionAnchor={null}
+        evidence={[]}
+        agentTrace={[]}
+        interpretation=""
+        followUps={[]}
+        highlights={[]}
+        interpretationHistory={[]}
+        parsedPages={[]}
+        parsedChunks={[]}
+        parserEngine=""
+        coordinateMode=""
+        activeChunkId=""
+        textQuality={null}
+        zoom={1}
+        onBookLoaded={vi.fn()}
+        onLibraryStatus={vi.fn()}
+        onParsedDocument={vi.fn()}
+        onPageChange={vi.fn()}
+        onVisiblePageChange={vi.fn()}
+        onZoomChange={vi.fn()}
+        onSelection={vi.fn()}
+        onActiveChunk={vi.fn()}
+        onChunkFocus={vi.fn()}
+        onPhaseChange={vi.fn()}
+        onDeepInterpret={vi.fn()}
+        onPlainExplain={vi.fn()}
+        onQuestionSubmit={vi.fn()}
+        onSaveHighlight={vi.fn(async () => false)}
+        onOpenHighlight={vi.fn()}
+        onDeleteHighlight={vi.fn()}
+        onOpenInterpretation={vi.fn()}
+        onDeleteInterpretation={vi.fn()}
+        onRegenerate={vi.fn()}
+        onStop={vi.fn()}
+        onOpenSampleBook={onOpenSampleBook}
+      />,
+    )
+
+    await openImportMenu(container)
+
+    expect(textContent(container)).toContain("本地 PDF")
+    expect(textContent(container)).toContain("Zotero")
+    expect(textContent(container)).toContain("MinerU 输出目录")
+    expect(textContent(container)).toContain("打开示例书")
+    expect(buttonByText(container, "MinerU 输出目录").disabled).toBe(true)
+
+    await clickAsync(buttonByText(container, "打开示例书"))
+    expect(onOpenSampleBook).toHaveBeenCalledTimes(1)
+    unmount()
+  })
+
+  it("rejects non-PDF files dropped onto the empty import area", async () => {
+    const { ReaderShell } = await import("./ReaderShell")
+    const { container, unmount } = await renderClient(
+      <ReaderShell
+        phase="empty"
+        bookId=""
+        libraryStatus="idle"
+        libraryMessage=""
+        bookTitle="未导入 PDF"
+        currentPage={1}
+        totalPages={0}
+        selectionText=""
+        selectionRects={[]}
+        selectionAnchor={null}
+        evidence={[]}
+        agentTrace={[]}
+        interpretation=""
+        followUps={[]}
+        highlights={[]}
+        interpretationHistory={[]}
+        parsedPages={[]}
+        parsedChunks={[]}
+        parserEngine=""
+        coordinateMode=""
+        activeChunkId=""
+        textQuality={null}
+        zoom={1}
+        onBookLoaded={vi.fn()}
+        onLibraryStatus={vi.fn()}
+        onParsedDocument={vi.fn()}
+        onPageChange={vi.fn()}
+        onVisiblePageChange={vi.fn()}
+        onZoomChange={vi.fn()}
+        onSelection={vi.fn()}
+        onActiveChunk={vi.fn()}
+        onChunkFocus={vi.fn()}
+        onPhaseChange={vi.fn()}
+        onDeepInterpret={vi.fn()}
+        onPlainExplain={vi.fn()}
+        onQuestionSubmit={vi.fn()}
+        onSaveHighlight={vi.fn(async () => false)}
+        onOpenHighlight={vi.fn()}
+        onDeleteHighlight={vi.fn()}
+        onOpenInterpretation={vi.fn()}
+        onDeleteInterpretation={vi.fn()}
+        onRegenerate={vi.fn()}
+        onStop={vi.fn()}
+      />,
+    )
+
+    await dropFiles(container.querySelector('[data-testid="empty-import-dropzone"]')!, [
+      new File(["not pdf"], "notes.txt", { type: "text/plain" }),
+    ])
+
+    expect(textContent(container)).toContain("请拖入 PDF 文件")
+    expect(loadPdfDocument).not.toHaveBeenCalled()
+    expect(extractPdfText).not.toHaveBeenCalled()
+    unmount()
+  })
+
   it("hides internal chunk terminology and ids from reader-facing chrome", async () => {
     const { ReaderShell } = await import("./ReaderShell")
     const pages: ParsedPage[] = [
@@ -760,12 +1704,18 @@ describe("ReaderShell runtime affordances", () => {
     expect(visibleText).not.toContain("chunk_id")
     expect(visibleText).not.toContain("[p2-c1]")
     expect(visibleText).not.toContain("坐标锚点")
-    expect(visibleText).toContain("目录与索引")
+    expect(visibleText).toContain("目录")
+    expect(visibleText).not.toContain("目录与索引")
+    expect(container.querySelector('[aria-label^="阅读进度"]')).toBeNull()
+    expect(container.querySelector('[aria-label="顶部跳转页码"]')).toBeNull()
+    expect(container.querySelector('[aria-label="跳转页码"]')).toBeNull()
+    expect(container.querySelector('[aria-label="上一页"]')).toBeNull()
+    expect(container.querySelector('[aria-label="下一页"]')).toBeNull()
     expect(visibleText).toContain("1.1目录结构")
     expect(visibleText).toContain("1.2TTC 指标")
     expect(visibleText).toContain("第二页正文包含 TTC。")
     expect(visibleText).not.toContain("第 2 页 · 第二页正文包含 TTC。")
-    expect(visibleText).not.toContain("这个指标可从公式理解。（第 2 页 · 引用）")
+    expect(visibleText).not.toContain("这个指标可从公式理解。（引用）")
     unmount()
   }, 10_000)
 
@@ -819,11 +1769,10 @@ describe("ReaderShell runtime affordances", () => {
       />,
     )
 
-    expect(textContent(container)).toContain("浏览器预览")
-    expect(textContent(container)).toContain("浏览器预览会使用已转换文本做本地兜底解读")
-    expect(buttonByText(container, "从 Zotero 导入").title).toContain(
-      "需要 Tauri 桌面端后端",
-    )
+    expect(textContent(container)).toContain("浏览器版")
+    expect(textContent(container)).toContain("浏览器版会使用已转换文本做本地兜底解读")
+    await openImportMenu(container)
+    expect(buttonByText(container, "Zotero").title).toContain("此功能需要桌面版")
     unmount()
   })
 
@@ -886,6 +1835,70 @@ describe("ReaderShell runtime affordances", () => {
     expect(textContent(container)).toContain("保存全部")
     await clickAsync(settingsButton)
     expect(container.querySelector('[data-testid="settings-panel"]')).toBeNull()
+    unmount()
+  })
+
+  it("opens settings from the local fallback key guidance", async () => {
+    const { ReaderShell } = await import("./ReaderShell")
+    const { container, unmount } = await renderClient(
+      <ReaderShell
+        phase="reading"
+        bookId="book-local"
+        libraryStatus="indexed"
+        libraryMessage=""
+        bookTitle="本地兜底书籍"
+        currentPage={1}
+        totalPages={1}
+        selectionText="复利来自长期坚持"
+        selectionRects={[]}
+        selectionAnchor={null}
+        evidence={[{ chunkId: "b12345678-p1-c1-abcdef12", title: "第 1 页", pageIndex: 0 }]}
+        agentTrace={[]}
+        interpretation="已使用本地证据生成回答。[b12345678-p1-c1-abcdef12]"
+        answerSource="local_fallback"
+        interpretationError="DeepSeek 还没有配置 API Key，当前已改用本地兜底。请在设置中填入 API Key 后重试完整 LLM 解读。"
+        followUps={[]}
+        highlights={[]}
+        interpretationHistory={[]}
+        parsedPages={[
+          {
+            pageIndex: 0,
+            text: "复利来自长期坚持",
+            markdown: "复利来自长期坚持",
+          },
+        ]}
+        parsedChunks={[]}
+        parserEngine="pdfjs"
+        coordinateMode="text-only"
+        activeChunkId=""
+        zoom={1}
+        onBookLoaded={vi.fn()}
+        onLibraryStatus={vi.fn()}
+        onParsedDocument={vi.fn()}
+        onPageChange={vi.fn()}
+        onVisiblePageChange={vi.fn()}
+        onZoomChange={vi.fn()}
+        onSelection={vi.fn()}
+        onActiveChunk={vi.fn()}
+        onChunkFocus={vi.fn()}
+        onPhaseChange={vi.fn()}
+        onDeepInterpret={vi.fn()}
+        onPlainExplain={vi.fn()}
+        onQuestionSubmit={vi.fn()}
+        onSaveHighlight={vi.fn(async () => false)}
+        onOpenHighlight={vi.fn()}
+        onDeleteHighlight={vi.fn()}
+        onOpenInterpretation={vi.fn()}
+        onDeleteInterpretation={vi.fn()}
+        onRegenerate={vi.fn()}
+        onStop={vi.fn()}
+      />,
+    )
+
+    expect(container.querySelector('[data-testid="settings-panel"]')).toBeNull()
+    await clickAsync(buttonByText(container, "打开设置"))
+    expect(container.querySelector('[data-testid="settings-panel"]')).not.toBeNull()
+    expect(textContent(container)).toContain("保存全部")
     unmount()
   })
 
@@ -979,7 +1992,7 @@ describe("ReaderShell runtime affordances", () => {
   })
 
   it("filters and groups shelf books by search text and import date", async () => {
-    const { ReaderShell, __readerShellTestUtils } = await import("./ReaderShell")
+    const { ReaderShell } = await import("./ReaderShell")
     const now = new Date("2026-06-03T12:00:00")
     vi.setSystemTime(now)
     const todayBook = storedBook({
@@ -1000,18 +2013,6 @@ describe("ReaderShell runtime affordances", () => {
       createdAt: "2026-05-10T08:00:00",
       parserEngine: "unknown",
     })
-
-    expect(__readerShellTestUtils.groupLibraryBooksByRange([todayBook, weekBook, olderBook], now).map((group) => [
-      group.title,
-      group.books.map((book) => book.bookId),
-    ])).toEqual([
-      ["今天", ["book-today"]],
-      ["本周", ["book-week"]],
-      ["本月及以前", ["book-older"]],
-    ])
-    expect(__readerShellTestUtils.filterLibraryBooks([todayBook, weekBook, olderBook], "pymupdf", "all", now)).toEqual([
-      weekBook,
-    ])
 
     vi.mocked(isTauriRuntime).mockReturnValue(true)
     vi.mocked(listBooks).mockResolvedValue([todayBook, weekBook, olderBook])
@@ -1077,6 +2078,117 @@ describe("ReaderShell runtime affordances", () => {
 
     await clickAsync(buttonByText(container, "今天"))
     expect(textContent(container)).toContain("没有匹配的图书")
+    unmount()
+  })
+
+  it("opens stored desktop books through a manifest and page window instead of the full asset", async () => {
+    const { ReaderShell } = await import("./ReaderShell")
+    vi.mocked(isTauriRuntime).mockReturnValue(true)
+    const manifest = storedBook({
+      bookId: "book-windowed",
+      title: "长书",
+      createdAt: "2026-06-03T02:00:00Z",
+      totalPages: 120,
+      textCharCount: 800000,
+      markdownCharCount: 860000,
+      originalPdfPath: "",
+    })
+    vi.mocked(listBooks).mockResolvedValue([manifest])
+    vi.mocked(getConvertedBookManifest).mockResolvedValue(manifest)
+    vi.mocked(getConvertedBookPages).mockResolvedValue({
+      bookId: "book-windowed",
+      startPage: 0,
+      endPage: 48,
+      totalPages: 120,
+      text: "第一页窗口正文",
+      markdown: "## Page 1\n\n第一页窗口正文",
+      pages: [
+        {
+          pageIndex: 0,
+          text: "第一页窗口正文",
+          markdown: "## Page 1\n\n第一页窗口正文",
+        },
+      ],
+      chunks: [
+        {
+          chunkId: "p1-c1",
+          pageIndex: 0,
+          text: "第一页窗口正文",
+          markdown: "### [p1-c1] Page 1\n\n第一页窗口正文",
+          rects: [],
+        },
+      ],
+    })
+    const onParsedDocument = vi.fn()
+    const onLibraryStatus = vi.fn()
+    const onBookLoaded = vi.fn()
+
+    const { container, unmount } = await renderClient(
+      <ReaderShell
+        phase="empty"
+        bookId=""
+        libraryStatus="idle"
+        libraryMessage=""
+        bookTitle="未导入 PDF"
+        currentPage={1}
+        totalPages={0}
+        selectionText=""
+        selectionRects={[]}
+        selectionAnchor={null}
+        evidence={[]}
+        agentTrace={[]}
+        interpretation=""
+        followUps={[]}
+        highlights={[]}
+        interpretationHistory={[]}
+        parsedPages={[]}
+        parsedChunks={[]}
+        parserEngine=""
+        coordinateMode=""
+        activeChunkId=""
+        textQuality={null}
+        zoom={1}
+        onBookLoaded={onBookLoaded}
+        onLibraryStatus={onLibraryStatus}
+        onParsedDocument={onParsedDocument}
+        onPageChange={vi.fn()}
+        onVisiblePageChange={vi.fn()}
+        onZoomChange={vi.fn()}
+        onSelection={vi.fn()}
+        onActiveChunk={vi.fn()}
+        onChunkFocus={vi.fn()}
+        onPhaseChange={vi.fn()}
+        onDeepInterpret={vi.fn()}
+        onPlainExplain={vi.fn()}
+        onQuestionSubmit={vi.fn()}
+        onSaveHighlight={vi.fn(async () => false)}
+        onOpenHighlight={vi.fn()}
+        onDeleteHighlight={vi.fn()}
+        onOpenInterpretation={vi.fn()}
+        onDeleteInterpretation={vi.fn()}
+        onRegenerate={vi.fn()}
+        onStop={vi.fn()}
+      />,
+    )
+
+    await vi.waitFor(() => expect(listBooks).toHaveBeenCalled())
+    await clickAsync(buttonByText(container, "书架"))
+    await clickAsync(buttonByText(container, "长书"))
+
+    await vi.waitFor(() => expect(getConvertedBookManifest).toHaveBeenCalledWith("book-windowed"))
+    expect(getConvertedBookPages).toHaveBeenCalledWith("book-windowed", 0, 48)
+    expect(getConvertedBook).not.toHaveBeenCalled()
+    expect(onBookLoaded).toHaveBeenCalledWith("长书", 120)
+    expect(onParsedDocument).toHaveBeenCalled()
+    const [pages] = onParsedDocument.mock.calls[0] as [ParsedPage[]]
+    expect(pages).toHaveLength(120)
+    expect(pages[0]).toMatchObject({ pageIndex: 0, loaded: true })
+    expect(pages[1]).toMatchObject({ pageIndex: 1, loaded: false })
+    expect(onLibraryStatus).toHaveBeenCalledWith(
+      "indexed",
+      "已打开 Markdown 转换稿：800000 字正文",
+      "book-windowed",
+    )
     unmount()
   })
 
@@ -1175,13 +2287,159 @@ describe("ReaderShell runtime affordances", () => {
     expect(toolbar?.className).not.toContain("sticky")
     expect(scroller?.className).toContain("overflow-y-auto")
     expect(textContent(toolbar)).toContain("本地缓存")
-    expect(textContent(toolbar)).toContain("1/1 页完成")
+    expect(textContent(toolbar)).toContain("译文进度 1/1")
     expect(textContent(toolbar)).toContain("重新翻译")
     expect(textContent(toolbar)).not.toContain("继续翻译")
     expect(textContent(toolbar)).not.toContain("重试失败")
     expect(textContent(scroller)).toContain("English source.")
     expect(textContent(scroller)).toContain("中文译文。")
     expect(textContent(scroller)).not.toContain("本地缓存")
+    unmount()
+  })
+
+  it("virtualizes the translation view and requests missing page windows", async () => {
+    const { ReaderShell } = await import("./ReaderShell")
+    vi.mocked(isTauriRuntime).mockReturnValue(true)
+    const pages: ParsedPage[] = Array.from({ length: 80 }, (_, index) => ({
+      pageIndex: index,
+      text: index === 0 ? "First loaded source." : "",
+      markdown: index === 0 ? "## Page 1\n\nFirst loaded source." : "",
+      loaded: index === 0,
+    }))
+    const chunks: ParsedChunk[] = [
+      {
+        chunkId: "p1-c1",
+        pageIndex: 0,
+        text: "First loaded source.",
+        markdown: "### [p1-c1] Page 1\n\nFirst loaded source.",
+        rects: [],
+      },
+    ]
+    const translation: TranslationStatus = {
+      bookId: "book-translation-virtual",
+      totalPages: 80,
+      completedPages: 1,
+      failedPages: 0,
+      running: false,
+      provider: "deep_seek",
+      model: "deepseek-v4-flash",
+      pages: [
+        {
+          pageIndex: 0,
+          sourceMarkdown: "## Page 1\n\nFirst loaded source.",
+          translatedMarkdown: "第一页译文。",
+          status: "done",
+          error: "",
+          provider: "deep_seek",
+          model: "deepseek-v4-flash",
+          updatedAt: "2026-06-01T00:00:00Z",
+        },
+      ],
+    }
+    vi.mocked(translationStatus).mockResolvedValue(translation)
+    vi.mocked(getConvertedBookPages).mockImplementation(async (bookId, startPage, pageCount) => {
+      const endPage = Math.min(80, startPage + pageCount)
+      const windowPages = Array.from({ length: endPage - startPage }, (_, offset) => {
+        const pageIndex = startPage + offset
+        return {
+          pageIndex,
+          text: pageIndex === 0 ? "First loaded source." : `Loaded source ${pageIndex + 1}.`,
+          markdown:
+            pageIndex === 0
+              ? "## Page 1\n\nFirst loaded source."
+              : `## Page ${pageIndex + 1}\n\nLoaded source ${pageIndex + 1}.`,
+          loaded: true,
+        }
+      })
+      return {
+        bookId,
+        startPage,
+        endPage,
+        totalPages: 80,
+        text: windowPages.map((page) => page.text).join("\n\n"),
+        markdown: windowPages.map((page) => page.markdown).join("\n\n"),
+        pages: windowPages,
+        chunks: startPage === 0 ? chunks : [],
+      }
+    })
+
+    function Harness() {
+      const [currentPage, setCurrentPage] = useState(1)
+      return (
+        <ReaderShell
+          phase="reading"
+          bookId="book-translation-virtual"
+          libraryStatus="indexed"
+          libraryMessage="已打开转换稿"
+          bookTitle="长翻译书"
+          currentPage={currentPage}
+          totalPages={80}
+          selectionText=""
+          selectionRects={[]}
+          selectionAnchor={null}
+          evidence={[]}
+          agentTrace={[]}
+          interpretation=""
+          followUps={[]}
+          highlights={[]}
+          interpretationHistory={[]}
+          parsedPages={pages}
+          parsedChunks={chunks}
+          parserEngine="mineru-layout"
+          coordinateMode="normalized-page-rects"
+          activeChunkId=""
+          textQuality={{
+            charCount: 4000,
+            replacementCharRatio: 0,
+            controlCharRatio: 0,
+            looksUsable: true,
+          }}
+          zoom={1}
+          onBookLoaded={vi.fn()}
+          onLibraryStatus={vi.fn()}
+          onParsedDocument={vi.fn()}
+          onParsedDocumentWindow={vi.fn()}
+          onPageChange={setCurrentPage}
+          onVisiblePageChange={setCurrentPage}
+          onZoomChange={vi.fn()}
+          onSelection={vi.fn()}
+          onActiveChunk={vi.fn()}
+          onChunkFocus={vi.fn()}
+          onPhaseChange={vi.fn()}
+          onDeepInterpret={vi.fn()}
+          onPlainExplain={vi.fn()}
+          onQuestionSubmit={vi.fn()}
+          onSaveHighlight={vi.fn(async () => false)}
+          onOpenHighlight={vi.fn()}
+          onDeleteHighlight={vi.fn()}
+          onOpenInterpretation={vi.fn()}
+          onDeleteInterpretation={vi.fn()}
+          onRegenerate={vi.fn()}
+          onStop={vi.fn()}
+        />
+      )
+    }
+
+    const { container, unmount } = await renderClient(<Harness />)
+    await clickAsync(buttonByText(container, "对照翻译"))
+    await vi.waitFor(() => expect(translationStatus).toHaveBeenCalledWith("book-translation-virtual"))
+    const scroller = container.querySelector("[data-translation-scroller]") as HTMLElement
+    expect(scroller.querySelectorAll("[data-translation-page]").length).toBeLessThan(80)
+    expect(textContent(scroller)).toContain("First loaded source.")
+
+    Object.defineProperty(scroller, "scrollTop", { value: 760 * 50, writable: true, configurable: true })
+    await act(async () => {
+      scroller.dispatchEvent(new Event("scroll"))
+      await new Promise((resolve) => window.setTimeout(resolve, 20))
+    })
+
+    await vi.waitFor(() => {
+      expect(
+        vi.mocked(getConvertedBookPages).mock.calls.some(
+          ([bookId, startPage]) => bookId === "book-translation-virtual" && startPage > 0,
+        ),
+      ).toBe(true)
+    })
     unmount()
   })
 
@@ -1323,13 +2581,179 @@ describe("ReaderShell runtime affordances", () => {
       scroller.dispatchEvent(new Event("scroll"))
     })
 
-    await vi.waitFor(() => expect(textContent(container)).toContain("第 2 / 2 页"))
+    await vi.waitFor(() => expect(textContent(container)).toContain("Second page source."))
+    expect(textContent(container)).not.toContain("第 2 / 2 页")
     expect(scroller.scrollTo).not.toHaveBeenCalled()
     expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled()
     unmount()
   })
 
-  it("smoothly scrolls the translation scroller when footer pagination changes page", async () => {
+  it("does not snap translation scroll after page measurements refresh", async () => {
+    const { ReaderShell } = await import("./ReaderShell")
+    vi.mocked(isTauriRuntime).mockReturnValue(true)
+    const pages: ParsedPage[] = [
+      {
+        pageIndex: 0,
+        text: "First page source.",
+        markdown: "## Page 1\n\nFirst page source.",
+      },
+      {
+        pageIndex: 1,
+        text: "Second page source.",
+        markdown: "## Page 2\n\nSecond page source.",
+      },
+    ]
+    const translation: TranslationStatus = {
+      bookId: "book-measure-scroll",
+      totalPages: 2,
+      completedPages: 2,
+      failedPages: 0,
+      running: false,
+      provider: "deep_seek",
+      model: "deepseek-v4-flash",
+      pages: pages.map((page) => ({
+        pageIndex: page.pageIndex,
+        sourceMarkdown: page.markdown,
+        translatedMarkdown: page.pageIndex === 0 ? "第一页译文。" : "第二页译文。",
+        status: "done",
+        error: "",
+        provider: "deep_seek",
+        model: "deepseek-v4-flash",
+        updatedAt: "2026-06-01T00:00:00Z",
+      })),
+    }
+    vi.mocked(translationStatus).mockResolvedValue(translation)
+
+    function Harness() {
+      const [currentPage, setCurrentPage] = useState(1)
+      const [bookPages, setBookPages] = useState(pages)
+      return (
+        <>
+          <button
+            type="button"
+            onClick={() =>
+              setBookPages((items) =>
+                items.map((page) =>
+                  page.pageIndex === 1
+                    ? { ...page, markdown: `${page.markdown}\n\nExtra measured paragraph.` }
+                    : page,
+                ),
+              )
+            }
+          >
+            mutate measured height
+          </button>
+          <ReaderShell
+            phase="reading"
+            bookId="book-measure-scroll"
+            libraryStatus="indexed"
+            libraryMessage="已打开转换稿"
+            bookTitle="测量滚动测试"
+            currentPage={currentPage}
+            totalPages={2}
+            selectionText=""
+            selectionRects={[]}
+            selectionAnchor={null}
+            evidence={[]}
+            agentTrace={[]}
+            interpretation=""
+            followUps={[]}
+            highlights={[]}
+            interpretationHistory={[]}
+            parsedPages={bookPages}
+            parsedChunks={[]}
+            parserEngine="mineru-layout"
+            coordinateMode="normalized-page-rects"
+            activeChunkId=""
+            textQuality={{
+              charCount: 80,
+              replacementCharRatio: 0,
+              controlCharRatio: 0,
+              looksUsable: true,
+            }}
+            zoom={1}
+            onBookLoaded={vi.fn()}
+            onLibraryStatus={vi.fn()}
+            onParsedDocument={vi.fn()}
+            onPageChange={setCurrentPage}
+            onVisiblePageChange={setCurrentPage}
+            onZoomChange={vi.fn()}
+            onSelection={vi.fn()}
+            onActiveChunk={vi.fn()}
+            onChunkFocus={vi.fn()}
+            onPhaseChange={vi.fn()}
+            onDeepInterpret={vi.fn()}
+            onPlainExplain={vi.fn()}
+            onQuestionSubmit={vi.fn()}
+            onSaveHighlight={vi.fn(async () => false)}
+            onOpenHighlight={vi.fn()}
+            onDeleteHighlight={vi.fn()}
+            onOpenInterpretation={vi.fn()}
+            onDeleteInterpretation={vi.fn()}
+            onRegenerate={vi.fn()}
+            onStop={vi.fn()}
+          />
+        </>
+      )
+    }
+
+    const { container, unmount } = await renderClient(<Harness />)
+    await clickAsync(buttonByText(container, "对照翻译"))
+    await vi.waitFor(() => expect(translationStatus).toHaveBeenCalledWith("book-measure-scroll"))
+    const scroller = container.querySelector("[data-translation-scroller]") as HTMLElement
+    Object.defineProperty(scroller, "scrollTop", { value: 520, writable: true, configurable: true })
+    scroller.getBoundingClientRect = vi.fn(() => ({
+      top: 0,
+      left: 0,
+      bottom: 700,
+      right: 900,
+      width: 900,
+      height: 700,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    }))
+    const articles = scroller.querySelectorAll("article")
+    articles[0]!.getBoundingClientRect = vi.fn(() => ({
+      top: -520,
+      left: 0,
+      bottom: 80,
+      right: 900,
+      width: 900,
+      height: 600,
+      x: 0,
+      y: -520,
+      toJSON: () => ({}),
+    }))
+    articles[1]!.getBoundingClientRect = vi.fn(() => ({
+      top: 120,
+      left: 0,
+      bottom: 720,
+      right: 900,
+      width: 900,
+      height: 600,
+      x: 0,
+      y: 120,
+      toJSON: () => ({}),
+    }))
+
+    act(() => {
+      scroller.dispatchEvent(new Event("scroll"))
+    })
+    await vi.waitFor(() => expect(textContent(container)).toContain("Second page source."))
+    vi.mocked(scroller.scrollTo).mockClear()
+
+    await clickAsync(buttonByText(container, "mutate measured height"))
+    await act(async () => {
+      await new Promise((resolve) => window.requestAnimationFrame(resolve))
+      await Promise.resolve()
+    })
+
+    expect(scroller.scrollTo).not.toHaveBeenCalled()
+    unmount()
+  })
+
+  it("does not expose footer pagination in the translation workflow", async () => {
     const { ReaderShell } = await import("./ReaderShell")
     vi.mocked(isTauriRuntime).mockReturnValue(true)
     const pages: ParsedPage[] = [
@@ -1424,46 +2848,9 @@ describe("ReaderShell runtime affordances", () => {
     const { container, unmount } = await renderClient(<Harness />)
     await clickAsync(buttonByText(container, "对照翻译"))
     await vi.waitFor(() => expect(translationStatus).toHaveBeenCalledWith("book-translation-scroll"))
-    const scroller = container.querySelector("[data-translation-scroller]") as HTMLElement
-    const articles = scroller.querySelectorAll("article")
-    Object.defineProperty(scroller, "scrollTop", { value: 0, writable: true, configurable: true })
-    scroller.getBoundingClientRect = vi.fn(() => ({
-      top: 0,
-      left: 0,
-      bottom: 700,
-      right: 900,
-      width: 900,
-      height: 700,
-      x: 0,
-      y: 0,
-      toJSON: () => ({}),
-    }))
-    articles[0]!.getBoundingClientRect = vi.fn(() => ({
-      top: 0,
-      left: 0,
-      bottom: 600,
-      right: 900,
-      width: 900,
-      height: 600,
-      x: 0,
-      y: 0,
-      toJSON: () => ({}),
-    }))
-    articles[1]!.getBoundingClientRect = vi.fn(() => ({
-      top: 760,
-      left: 0,
-      bottom: 1360,
-      right: 900,
-      width: 900,
-      height: 600,
-      x: 0,
-      y: 760,
-      toJSON: () => ({}),
-    }))
-
-    click(container.querySelector('[aria-label="下一页"]')!)
-
-    expect(scroller.scrollTo).toHaveBeenCalledWith({ top: 760, behavior: "smooth" })
+    expect(container.querySelector("[data-translation-scroller]")).not.toBeNull()
+    expect(container.querySelector('[aria-label="上一页"]')).toBeNull()
+    expect(container.querySelector('[aria-label="下一页"]')).toBeNull()
     expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled()
     unmount()
   })
@@ -1864,9 +3251,9 @@ describe("ReaderShell runtime affordances", () => {
 
     await clickAsync(buttonByText(selectedContainer, "对照翻译"))
     await vi.waitFor(() => expect(selectedContainer.querySelector('[data-testid="selection-toolbar"]')).not.toBeNull())
-    click(buttonByText(selectedContainer, "深度解读"))
-    expect(onDeepInterpret).toHaveBeenCalled()
-    click(buttonByText(selectedContainer, "提问", 0))
+    click(buttonByText(selectedContainer, "解读"))
+    expect(onDeepInterpret).not.toHaveBeenCalled()
+    click(buttonByText(selectedContainer, "追问", 0))
     const questionBox = inputByPlaceholder(selectedContainer, "输入你的问题或解读要求")
     changeInput(questionBox, "解释这个术语在论文中的作用")
     click(buttonByText(selectedContainer, "发送"))
@@ -1882,9 +3269,7 @@ describe("ReaderShell desktop import", () => {
     vi.mocked(open).mockResolvedValue("/tmp/desk-book.pdf")
     vi.mocked(readPdfFile).mockResolvedValue([37, 80, 68, 70])
     const loadedPdf = { numPages: 1, cleanup: vi.fn() } as unknown as PDFDocumentProxy
-    vi.mocked(getDocument).mockReturnValue({
-      promise: Promise.resolve(loadedPdf),
-    } as ReturnType<typeof getDocument>)
+    vi.mocked(loadPdfDocument).mockResolvedValue(loadedPdf)
     vi.mocked(importPdfWithMineru).mockResolvedValue({
       bookId: "book-desktop",
       pageCount: 1,
@@ -1919,12 +3304,12 @@ describe("ReaderShell desktop import", () => {
         rects: [],
       },
     ]
-    vi.mocked(getConvertedBook).mockResolvedValue({
+    vi.mocked(getConvertedBookManifest).mockResolvedValue(storedBook({
       bookId: "book-desktop",
       title: "后端转换书",
       totalPages: 1,
-      text: "后端生成 TXT 内容",
-      markdown: "## Page 1\n\n后端生成 TXT 内容",
+      textCharCount: 10,
+      markdownCharCount: 22,
       textPath: "/tmp/book-desktop/book.txt",
       markdownPath: "/tmp/book-desktop/book.md",
       originalPdfPath: "/tmp/book-desktop/original.pdf",
@@ -1933,6 +3318,15 @@ describe("ReaderShell desktop import", () => {
       parserEngine: "mineru-layout",
       coordinateMode: "normalized-page-rects",
       quality,
+      createdAt: "2026-06-03T02:00:00Z",
+    }))
+    vi.mocked(getConvertedBookPages).mockResolvedValue({
+      bookId: "book-desktop",
+      startPage: 0,
+      endPage: 1,
+      totalPages: 1,
+      text: "后端生成 TXT 内容",
+      markdown: "## Page 1\n\n后端生成 TXT 内容",
       pages,
       chunks,
     })
@@ -2025,7 +3419,8 @@ describe("ReaderShell desktop import", () => {
     }
 
     const { container, unmount } = await renderClient(<Harness />)
-    await clickAsync(buttonByText(container, "导入文件"))
+    await openImportMenu(container)
+    await clickAsync(buttonByLabel(container, "导入本地 PDF"))
 
     await vi.waitFor(() => {
       expect(importPdfWithMineru).toHaveBeenCalledWith(
@@ -2040,7 +3435,9 @@ describe("ReaderShell desktop import", () => {
         },
         1,
       )
-      expect(getConvertedBook).toHaveBeenCalledWith("book-desktop")
+      expect(getConvertedBookManifest).toHaveBeenCalledWith("book-desktop")
+      expect(getConvertedBookPages).toHaveBeenCalledWith("book-desktop", 0, 48)
+      expect(getConvertedBook).not.toHaveBeenCalled()
     })
     expect(open).toHaveBeenCalledWith({
       multiple: false,
@@ -2048,23 +3445,31 @@ describe("ReaderShell desktop import", () => {
     })
     expect(readPdfFile).toHaveBeenCalledWith("/tmp/desk-book.pdf")
     expect(findBookBySourcePdf).toHaveBeenCalledWith("/tmp/desk-book.pdf")
-    expect(onParsedDocument).toHaveBeenCalledWith(pages, chunks, "后端生成 TXT 内容", "## Page 1\n\n后端生成 TXT 内容", {
-      parserEngine: "mineru-layout",
-      coordinateMode: "normalized-page-rects",
-      quality,
-      textPath: "/tmp/book-desktop/book.txt",
-      markdownPath: "/tmp/book-desktop/book.md",
-      originalPdfPath: "/tmp/book-desktop/original.pdf",
-      sourcePdfPath: "/tmp/desk-book.pdf",
-      sourcePdfFingerprint: "pdf-fnv1a64-test",
-    })
+    expect(onParsedDocument).toHaveBeenCalledWith(
+      [{ ...pages[0], loaded: true }],
+      chunks,
+      "后端生成 TXT 内容",
+      "## Page 1\n\n后端生成 TXT 内容",
+      expect.objectContaining({
+        parserEngine: "mineru-layout",
+        coordinateMode: "normalized-page-rects",
+        quality,
+        textPath: "/tmp/book-desktop/book.txt",
+        markdownPath: "/tmp/book-desktop/book.md",
+        originalPdfPath: "/tmp/book-desktop/original.pdf",
+        sourcePdfPath: "/tmp/desk-book.pdf",
+        sourcePdfFingerprint: "pdf-fnv1a64-test",
+        tldrText: null,
+      }),
+    )
     expect(onLibraryStatus).toHaveBeenCalledWith(
       "indexed",
       "MinerU 已解析 10 字，并生成 Markdown 转换稿",
       "book-desktop",
     )
     expect(textContent(container)).toContain("后端生成 TXT 内容")
-    expect(textContent(container)).toContain("目录与索引")
+    expect(textContent(container)).toContain("未识别到章节标题目录")
+    expect(textContent(container)).not.toContain("目录与索引")
     expect(textContent(container)).not.toContain("normalized-page-rects")
     unmount()
   })
@@ -2075,9 +3480,7 @@ describe("ReaderShell desktop import", () => {
     vi.mocked(open).mockResolvedValue("/tmp/new-broken.pdf")
     vi.mocked(readPdfFile).mockResolvedValue([37, 80, 68, 70])
     const loadedPdf = { numPages: 10, cleanup: vi.fn() } as unknown as PDFDocumentProxy
-    vi.mocked(getDocument).mockReturnValue({
-      promise: Promise.resolve(loadedPdf),
-    } as ReturnType<typeof getDocument>)
+    vi.mocked(loadPdfDocument).mockResolvedValue(loadedPdf)
     vi.mocked(importPdfWithMineru).mockRejectedValue(new Error("MinerU token missing"))
 
     const oldPages: ParsedPage[] = [
@@ -2153,7 +3556,8 @@ describe("ReaderShell desktop import", () => {
       />,
     )
 
-    await clickAsync(buttonByText(container, "导入文件"))
+    await openImportMenu(container)
+    await clickAsync(buttonByLabel(container, "导入本地 PDF"))
     await vi.waitFor(() =>
       expect(importPdfWithMineru).toHaveBeenCalledWith(
         "/tmp/new-broken.pdf",
@@ -2170,10 +3574,96 @@ describe("ReaderShell desktop import", () => {
     )
 
     expect(textContent(container)).toContain("旧书仍然应该可读。")
-    expect(textContent(container)).toContain("MinerU 云端解析失败；已保留当前阅读内容")
+    expect(textContent(container)).toContain("MinerU 云端解析失败")
+    expect(textContent(container)).toContain("已保留当前阅读内容")
+    expect(textContent(container)).toContain("MinerU API Token 未配置或无效")
     expect(onParsedDocument).not.toHaveBeenCalled()
     expect(onBookLoaded).not.toHaveBeenCalled()
-    expect(onLibraryStatus).not.toHaveBeenCalledWith("error", "MinerU token missing")
+    expect(onLibraryStatus).not.toHaveBeenCalledWith(
+      "error",
+      "MinerU API Token 未配置或无效。请在设置里填入 MinerU token 后重试。",
+    )
+    expect(loadedPdf.cleanup).toHaveBeenCalled()
+    unmount()
+  })
+
+  it("renders structured import error suggestions in user-facing language", async () => {
+    const { ReaderShell } = await import("./ReaderShell")
+    vi.mocked(isTauriRuntime).mockReturnValue(true)
+    vi.mocked(open).mockResolvedValue("/tmp/network-fail.pdf")
+    vi.mocked(readPdfFile).mockResolvedValue([37, 80, 68, 70])
+    const loadedPdf = { numPages: 3, cleanup: vi.fn() } as unknown as PDFDocumentProxy
+    vi.mocked(loadPdfDocument).mockResolvedValue(loadedPdf)
+    vi.mocked(importPdfWithMineru).mockRejectedValue({
+      code: "network",
+      message: "ECONNRESET while uploading to MinerU",
+      suggestion: "请检查网络、代理或云端服务状态后重试。",
+    })
+    const onLibraryStatus = vi.fn()
+    const onPhaseChange = vi.fn()
+
+    const { container, unmount } = await renderClient(
+      <ReaderShell
+        phase="empty"
+        bookId=""
+        libraryStatus="idle"
+        libraryMessage=""
+        bookTitle="未导入 PDF"
+        currentPage={1}
+        totalPages={0}
+        selectionText=""
+        selectionRects={[]}
+        selectionAnchor={null}
+        evidence={[]}
+        agentTrace={[]}
+        interpretation=""
+        followUps={[]}
+        highlights={[]}
+        interpretationHistory={[]}
+        parsedPages={[]}
+        parsedChunks={[]}
+        parserEngine=""
+        coordinateMode=""
+        activeChunkId=""
+        textQuality={null}
+        zoom={1}
+        onBookLoaded={vi.fn()}
+        onLibraryStatus={onLibraryStatus}
+        onParsedDocument={vi.fn()}
+        onPageChange={vi.fn()}
+        onVisiblePageChange={vi.fn()}
+        onZoomChange={vi.fn()}
+        onSelection={vi.fn()}
+        onActiveChunk={vi.fn()}
+        onChunkFocus={vi.fn()}
+        onPhaseChange={onPhaseChange}
+        onDeepInterpret={vi.fn()}
+        onPlainExplain={vi.fn()}
+        onQuestionSubmit={vi.fn()}
+        onSaveHighlight={vi.fn(async () => false)}
+        onOpenHighlight={vi.fn()}
+        onDeleteHighlight={vi.fn()}
+        onOpenInterpretation={vi.fn()}
+        onDeleteInterpretation={vi.fn()}
+        onRegenerate={vi.fn()}
+        onStop={vi.fn()}
+      />,
+    )
+
+    await openImportMenu(container)
+    await clickAsync(buttonByLabel(container, "导入本地 PDF"))
+
+    await vi.waitFor(() => {
+      expect(importPdfWithMineru).toHaveBeenCalled()
+      expect(onLibraryStatus).toHaveBeenCalledWith(
+        "error",
+        "无法连接云端解析服务。建议：请检查网络、代理或云端服务状态后重试。",
+      )
+      expect(onPhaseChange).toHaveBeenCalledWith("error")
+    })
+    expect(textContent(container)).toContain("无法连接云端解析服务")
+    expect(textContent(container)).toContain("建议：请检查网络、代理或云端服务状态后重试")
+    expect(textContent(container)).not.toContain("ECONNRESET")
     expect(loadedPdf.cleanup).toHaveBeenCalled()
     unmount()
   })
@@ -2215,9 +3705,7 @@ describe("ReaderShell desktop import", () => {
     vi.mocked(importZoteroItem).mockReturnValue(zoteroImport.promise)
     vi.mocked(readPdfFile).mockResolvedValue([37, 80, 68, 70])
     const loadedPdf = { numPages: 2, cleanup: vi.fn() } as unknown as PDFDocumentProxy
-    vi.mocked(getDocument).mockReturnValue({
-      promise: Promise.resolve(loadedPdf),
-    } as ReturnType<typeof getDocument>)
+    vi.mocked(loadPdfDocument).mockResolvedValue(loadedPdf)
     const pages: ParsedPage[] = [
       {
         pageIndex: 0,
@@ -2234,12 +3722,18 @@ describe("ReaderShell desktop import", () => {
         rects: [],
       },
     ]
-    vi.mocked(getConvertedBook).mockResolvedValue({
+    const quality: TextQuality = {
+      charCount: 12,
+      replacementCharRatio: 0,
+      controlCharRatio: 0,
+      looksUsable: true,
+    }
+    vi.mocked(getConvertedBookManifest).mockResolvedValue(storedBook({
       bookId: "book-zotero",
       title: "RiskNet",
       totalPages: 2,
-      text: "Zotero 导入正文。",
-      markdown: "## Page 1\n\nZotero 导入正文。",
+      textCharCount: 12,
+      markdownCharCount: 22,
       textPath: "/tmp/book-zotero/book.txt",
       markdownPath: "/tmp/book-zotero/book.md",
       originalPdfPath: "/tmp/book-zotero/original.pdf",
@@ -2247,12 +3741,16 @@ describe("ReaderShell desktop import", () => {
       sourcePdfFingerprint: "pdf-fnv1a64-zotero",
       parserEngine: "mineru-layout",
       coordinateMode: "normalized-page-rects",
-      quality: {
-        charCount: 12,
-        replacementCharRatio: 0,
-        controlCharRatio: 0,
-        looksUsable: true,
-      },
+      quality,
+      createdAt: "2026-06-03T02:00:00Z",
+    }))
+    vi.mocked(getConvertedBookPages).mockResolvedValue({
+      bookId: "book-zotero",
+      startPage: 0,
+      endPage: 2,
+      totalPages: 2,
+      text: "Zotero 导入正文。",
+      markdown: "## Page 1\n\nZotero 导入正文。",
       pages,
       chunks,
     })
@@ -2306,7 +3804,8 @@ describe("ReaderShell desktop import", () => {
       />,
     )
 
-    await clickAsync(buttonByText(container, "从 Zotero 导入"))
+    await openImportMenu(container)
+    await clickAsync(buttonByLabel(container, "从 Zotero 导入"))
     const queryInput = inputByPlaceholder(container, "输入论文标题或关键词")
     changeInput(queryInput, "RiskNet")
     await clickAsync(buttonByText(container, "搜索"))
@@ -2338,27 +3837,26 @@ describe("ReaderShell desktop import", () => {
       await Promise.resolve()
       await Promise.resolve()
     })
+    expect(getConvertedBookManifest).toHaveBeenCalledWith("book-zotero")
+    expect(getConvertedBookPages).toHaveBeenCalledWith("book-zotero", 0, 48)
+    expect(getConvertedBook).not.toHaveBeenCalled()
     expect(readPdfFile).toHaveBeenCalledWith("/tmp/book-zotero/original.pdf")
     expect(onParsedDocument).toHaveBeenCalledWith(
-      pages,
+      [{ ...pages[0], loaded: true }, { pageIndex: 1, text: "", markdown: "", loaded: false }],
       chunks,
       "Zotero 导入正文。",
       "## Page 1\n\nZotero 导入正文。",
-      {
+      expect.objectContaining({
         parserEngine: "mineru-layout",
         coordinateMode: "normalized-page-rects",
-        quality: {
-          charCount: 12,
-          replacementCharRatio: 0,
-          controlCharRatio: 0,
-          looksUsable: true,
-        },
+        quality,
         textPath: "/tmp/book-zotero/book.txt",
         markdownPath: "/tmp/book-zotero/book.md",
         originalPdfPath: "/tmp/book-zotero/original.pdf",
         sourcePdfPath: "/Users/anbc/Zotero/storage/SICPQR3S/risknet.pdf",
         sourcePdfFingerprint: "pdf-fnv1a64-zotero",
-      },
+        tldrText: null,
+      }),
     )
     expect(onLibraryStatus).toHaveBeenCalledWith(
       "indexed",
@@ -2366,6 +3864,69 @@ describe("ReaderShell desktop import", () => {
       "book-zotero",
     )
     expect(unlistenProgress).toHaveBeenCalled()
+    unmount()
+  })
+
+  it("explains how to recover when Zotero search finds no local PDF items", async () => {
+    const { ReaderShell } = await import("./ReaderShell")
+    vi.mocked(isTauriRuntime).mockReturnValue(true)
+    vi.mocked(searchZoteroItems).mockResolvedValue([])
+    const { container, unmount } = await renderClient(
+      <ReaderShell
+        phase="empty"
+        bookId=""
+        libraryStatus="idle"
+        libraryMessage=""
+        bookTitle="未导入 PDF"
+        currentPage={1}
+        totalPages={0}
+        selectionText=""
+        selectionRects={[]}
+        selectionAnchor={null}
+        evidence={[]}
+        agentTrace={[]}
+        interpretation=""
+        followUps={[]}
+        highlights={[]}
+        interpretationHistory={[]}
+        parsedPages={[]}
+        parsedChunks={[]}
+        parserEngine=""
+        coordinateMode=""
+        activeChunkId=""
+        zoom={1}
+        onBookLoaded={vi.fn()}
+        onLibraryStatus={vi.fn()}
+        onParsedDocument={vi.fn()}
+        onPageChange={vi.fn()}
+        onVisiblePageChange={vi.fn()}
+        onZoomChange={vi.fn()}
+        onSelection={vi.fn()}
+        onActiveChunk={vi.fn()}
+        onChunkFocus={vi.fn()}
+        onPhaseChange={vi.fn()}
+        onDeepInterpret={vi.fn()}
+        onPlainExplain={vi.fn()}
+        onQuestionSubmit={vi.fn()}
+        onSaveHighlight={vi.fn(async () => false)}
+        onOpenHighlight={vi.fn()}
+        onDeleteHighlight={vi.fn()}
+        onOpenInterpretation={vi.fn()}
+        onDeleteInterpretation={vi.fn()}
+        onRegenerate={vi.fn()}
+        onStop={vi.fn()}
+      />,
+    )
+
+    await openImportMenu(container)
+    await clickAsync(buttonByLabel(container, "从 Zotero 导入"))
+    changeInput(inputByPlaceholder(container, "输入论文标题或关键词"), "missing paper")
+    await clickAsync(buttonByText(container, "搜索"))
+
+    await vi.waitFor(() => expect(searchZoteroItems).toHaveBeenCalledWith("missing paper", 8))
+    expect(textContent(container)).toContain("Zotero 已打开")
+    expect(textContent(container)).toContain("PDF 附件仍在本机")
+    expect(textContent(container)).toContain("本地 PDF 导入")
     unmount()
   })
 })
@@ -2447,7 +4008,7 @@ describe("ReaderShell approximate coordinates", () => {
     expect(textContent(container)).not.toContain("坐标锚点")
     const toolbar = container.querySelector('[data-testid="selection-toolbar"]')
     expect(textContent(toolbar)).toContain("近似")
-    expect(buttonByText(container, "深度解读").disabled).toBe(false)
+    expect(buttonByText(container, "解读").disabled).toBe(false)
     unmount()
   })
 })
@@ -2523,7 +4084,8 @@ describe("ReaderShell highlight navigation", () => {
       />,
     )
 
-    expect(textContent(container)).toContain("Markdown")
+    expect(textContent(container)).not.toContain("Markdown")
+    expect(textContent(container)).not.toContain("Page 1")
     expect(textContent(container)).not.toContain("PDF 坐标")
     expect(onOpenHighlight).not.toHaveBeenCalled()
     expect(textContent(container)).toContain("几何高亮应该默认回到转换稿。")
@@ -2566,7 +4128,7 @@ describe("ReaderShell product interaction chain", () => {
     ]
     const evidence: EvidencePreview[] = [{ chunkId: chunkA, title: `Chunk ${chunkA}`, pageIndex: 0 }]
     const trace: AgentTraceStep[] = [
-      { phase: "retrieve", query: "复利 长期", chunkIds: [chunkA], note: "检索焦点 chunk" },
+      { phase: "retrieve", query: "llm_tool_round_1", chunkIds: [chunkA], note: `检索焦点 [${chunkA}]` },
     ]
     const followUps: FollowUpTurn[] = [
       {
@@ -2651,14 +4213,17 @@ describe("ReaderShell product interaction chain", () => {
 
     const toolbars = container.querySelectorAll('[data-testid="selection-toolbar"]')
     expect(toolbars).toHaveLength(1)
-    expect(textContent(toolbars[0])).toContain("深度解读")
+    expect(textContent(toolbars[0])).toContain("解读")
     expect(textContent(container)).toContain("复利来自长期坚持")
     expect(textContent(container)).toContain("风险控制让长期计划不被短期波动打断。")
+    expect(textContent(container)).toContain("检索轨迹 · 1 步")
+    expect(textContent(container)).toContain("模型检索第 1 轮")
+    expect(textContent(container)).not.toContain(chunkA)
 
-    click(buttonByText(container, "第 2 页 · 引用"))
+    click(buttonByText(container, "引用"))
     expect(onCitationClick).toHaveBeenCalledWith(chunkB)
 
-    click(buttonByText(container, "提问"))
+    click(buttonByText(container, "继续追问"))
     const questionBox = inputByPlaceholder(
       container,
       "输入你的问题或解读要求；会围绕当前选区继续检索证据",
@@ -2667,7 +4232,7 @@ describe("ReaderShell product interaction chain", () => {
     click(buttonByText(container, "发送"))
     expect(onQuestionSubmit).toHaveBeenCalledWith("那短期波动怎么处理？")
 
-    await clickAsync(buttonByText(container, "保存"))
+    await clickAsync(buttonByLabel(container, "保存标记"))
     await vi.waitFor(() => expect(onSaveHighlight).toHaveBeenCalled())
 
     expect(buttonByText(container, "文本锚点")).toBeUndefined()

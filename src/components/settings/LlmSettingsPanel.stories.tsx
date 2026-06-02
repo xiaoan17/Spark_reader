@@ -13,7 +13,13 @@ const meta = {
 export default meta
 type Story = StoryObj<typeof meta>
 
-export const Open: Story = {}
+export const Recommended: Story = {}
+
+export const Advanced: Story = {
+  args: {
+    defaultAdvancedOpen: true,
+  },
+}
 
 export const Closed: Story = {
   args: {

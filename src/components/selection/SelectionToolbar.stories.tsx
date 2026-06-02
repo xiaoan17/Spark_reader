@@ -8,6 +8,7 @@ const meta = {
   args: {
     approximate: false,
     askOpen: false,
+    visible: true,
     question: "",
   },
 } satisfies Meta<typeof SelectionToolbar>
@@ -27,5 +28,11 @@ export const AskExpanded: Story = {
 export const OcrApproximate: Story = {
   args: {
     approximate: true,
+  },
+}
+
+export const Hidden: Story = {
+  args: {
+    visible: false,
   },
 }

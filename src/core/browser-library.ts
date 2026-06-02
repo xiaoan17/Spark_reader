@@ -65,6 +65,10 @@ export async function saveBrowserBook(
     parserEngine: request.parserEngine || "pdfjs",
     coordinateMode: request.coordinateMode || "text-only",
     quality: request.quality,
+    tldrText: null,
+    tldrGeneratedAt: null,
+    tldrModel: null,
+    tldrSourceVersion: null,
     pages: request.pages,
     chunks,
     chunkCount: chunks.length,
@@ -148,7 +152,8 @@ export async function saveBrowserInterpretation(
   request: SaveInterpretationRequest,
 ): Promise<SavedInterpretation> {
   const now = new Date().toISOString()
-  const id = `browser-interpretation-${hashString(`${request.bookId}\u001f${request.selectionText}\u001f${request.question ?? ""}\u001f${request.answer}\u001f${Date.now()}\u001f${Math.random()}`)}`
+  const kind = request.kind ?? "interpretation"
+  const id = `browser-interpretation-${hashString(`${kind}\u001f${request.bookId}\u001f${request.selectionText}\u001f${request.question ?? ""}\u001f${request.answer}\u001f${Date.now()}\u001f${Math.random()}`)}`
   const hasQuestion = Boolean(request.question?.trim())
   const interpretation: SavedInterpretation = {
     id,
@@ -166,6 +171,8 @@ export async function saveBrowserInterpretation(
     question: request.question ?? null,
     answer: request.answer,
     answerSource: request.answerSource ?? "llm",
+    kind,
+    evidenceChunkSnapshots: request.evidenceChunkSnapshots ?? [],
     createdAt: now,
   }
   const db = await openBrowserLibrary()
@@ -366,6 +373,10 @@ function summaryFromRecord(record: BrowserBookRecord): StoredBookSummary {
     parserEngine: record.parserEngine,
     coordinateMode: record.coordinateMode,
     quality: record.quality,
+    tldrText: record.tldrText ?? null,
+    tldrGeneratedAt: record.tldrGeneratedAt ?? null,
+    tldrModel: record.tldrModel ?? null,
+    tldrSourceVersion: record.tldrSourceVersion ?? null,
     createdAt: new Date(record.createdAt).toISOString(),
   }
 }

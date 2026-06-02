@@ -210,7 +210,7 @@ export const ZoteroImportEmpty: Story = {
   parameters: {
     docs: {
       description: {
-        story: "顶部提供从 Zotero 导入入口；实际搜索和导入需要 Tauri 桌面端后端。",
+        story: "顶部提供从 Zotero 导入入口；实际搜索和导入需要桌面版读取本机 Zotero 库。",
       },
     },
   },

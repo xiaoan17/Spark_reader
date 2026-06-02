@@ -3,7 +3,7 @@ import type { StoredBookSummary } from "@/core/library-api"
 
 export const READER_SESSION_STORAGE_KEY = "focused-reading.reader-session.v1"
 
-export type StartupReaderView = "text" | "pdf" | "translation"
+export type StartupReaderView = "text" | "tldr" | "pdf" | "translation"
 
 export type ReaderStartupSession = {
   bookId: string
@@ -75,6 +75,8 @@ export function parseStartupSession(raw: string | null): ReaderStartupSession | 
     const readerView =
       parsed.readerView === "pdf"
         ? "pdf"
+        : parsed.readerView === "tldr"
+          ? "tldr"
         : parsed.readerView === "translation"
           ? "translation"
           : "text"
@@ -106,6 +108,8 @@ export function serializeStartupSession(session: ReaderStartupSession) {
     readerView:
       session.readerView === "pdf"
         ? "pdf"
+        : session.readerView === "tldr"
+          ? "tldr"
         : session.readerView === "translation"
           ? "translation"
           : "text",

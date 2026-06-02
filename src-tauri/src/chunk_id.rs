@@ -33,6 +33,10 @@ pub fn make_chunk_id(
     )
 }
 
+pub fn content_hash(text: &str) -> String {
+    hash_hex8(&normalize_for_hash(text))
+}
+
 pub fn rewrite_chunk_markdown(markdown: &str, old_chunk_id: &str, new_chunk_id: &str) -> String {
     markdown.replace(&format!("[{old_chunk_id}]"), &format!("[{new_chunk_id}]"))
 }

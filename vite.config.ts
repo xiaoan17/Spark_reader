@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react"
 import { fileURLToPath, URL } from "node:url"
 
 export default defineConfig({
+  base: "./",
   plugins: [react()],
   resolve: {
     alias: {
@@ -10,6 +11,9 @@ export default defineConfig({
     },
   },
   clearScreen: false,
+  build: {
+    target: "safari14",
+  },
   server: {
     port: 1420,
     strictPort: true,

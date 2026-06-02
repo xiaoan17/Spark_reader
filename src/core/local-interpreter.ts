@@ -25,7 +25,7 @@ export function makeLocalEvidence(
 
   return pageIndexes.map((pageIndex, index) => ({
       chunkId: `local-p${pageIndex + 1}-${index + 1}`,
-      title: pageTextByIndex(pages, pageIndex) ? `文本页 · 第 ${pageIndex + 1} 页` : `当前选区 · 第 ${pageIndex + 1} 页`,
+      title: pageTextByIndex(pages, pageIndex) ? "转换稿上下文" : "当前选区",
       pageIndex,
     }))
 }
@@ -47,7 +47,7 @@ export function makeLocalInterpretation(
     : []
   const citation = localCitationId(pageIndex, nearbyChunks)
   const context = pageText
-    ? `\n\n已从转换稿的本页文本中找到上下文 ${citation}：${pageText.slice(0, 220)}${pageText.length > 220 ? "…" : ""}`
+    ? `\n\n已从转换稿附近文本中找到上下文 ${citation}：${pageText.slice(0, 220)}${pageText.length > 220 ? "…" : ""}`
     : ""
   const chunkContext =
     nearbyChunks.length > 0
@@ -90,14 +90,14 @@ export function makeLocalFollowUpAnswer(
       ? `这段原文的关键内容是“${compactSelection.slice(0, 90)}${compactSelection.length > 90 ? "…" : ""}”。如果你的问题是在问它的含义，第一层可以先看它在句内强调的因果、转折或定义关系。`
       : "还没有检测到选中文本，请先在转换稿上框选一段文字。",
     pageText
-      ? `本页转换文本上下文 ${citation}：${pageText.slice(0, 180)}${pageText.length > 180 ? "…" : ""}`
-      : "当前页还没有可用的转换文本。",
+      ? `转换稿附近上下文 ${citation}：${pageText.slice(0, 180)}${pageText.length > 180 ? "…" : ""}`
+      : "当前位置还没有可用的转换文本。",
     chunkText
       ? `相关段落 ${citation}：${chunkText.slice(0, 180)}${chunkText.length > 180 ? "…" : ""}`
-      : "当前页还没有生成可用正文。",
+      : "当前位置还没有生成可用正文。",
     hasBackendIndex
-      ? "这次追问已优先调用后端文本索引检索相关段落，再基于命中的证据回答。"
-      : "当前运行环境没有可用的后端索引，已回退到浏览器内存文本检索。",
+      ? "这次追问已优先使用桌面书库索引检索相关段落，再基于命中的证据回答。"
+      : "当前运行环境没有可用的桌面书库索引，已回退到浏览器内存文本检索。",
   ].join("\n\n")
 }
 

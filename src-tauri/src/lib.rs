@@ -29,9 +29,12 @@ pub fn run() {
             commands::delete_interpretation,
             commands::find_book_by_source_pdf,
             commands::get_converted_book,
+            commands::get_converted_book_manifest,
+            commands::get_converted_book_pages,
             commands::get_chunk,
             commands::get_embedding_settings,
             commands::get_mineru_settings,
+            commands::get_or_generate_document_tldr,
             commands::get_neighbors,
             commands::get_llm_settings,
             commands::import_mineru_output,
@@ -128,6 +131,6 @@ fn bundled_resource_dir_for_cli() -> Option<std::path::PathBuf> {
 
 fn print_cli_help() {
     println!(
-        "框选精读\n\nUsage:\n  focused-reading                  Launch desktop app\n  focused-reading --product-self-check [base_dir]\n      Run the offline product self-check and print JSON.\n"
+        "Spark\n\nUsage:\n  focused-reading                  Launch desktop app\n  focused-reading --product-self-check [base_dir]\n      Run the offline product self-check and print JSON.\n"
     );
 }

@@ -1,12 +1,12 @@
 import {
   AlertCircle,
+  ChevronDown,
   Copy,
+  KeyRound,
   RefreshCcw,
   Save,
-  SearchCheck,
-  Sparkles,
   Square,
-  Undo2,
+  MessageSquareText,
 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -15,6 +15,7 @@ import {
   MarkdownContent,
   renderMarkdownTextWithCitations,
 } from "@/components/markdown/MarkdownContent"
+import { shouldSubmitTextarea } from "@/components/reader/textarea-submit"
 import type {
   AgentTraceStep,
   AnswerSource,
@@ -47,12 +48,11 @@ type InterpretationCardProps = {
   onQuestionChange?: (question: string) => void
   onQuestionSubmit?: () => void
   onCopy?: () => void
-  onExplain?: () => void
-  onPlainExplain?: () => void
   onSave?: () => void
   onCitationClick?: (chunkId: string) => void
   onRegenerate?: () => void
   onStop?: () => void
+  onOpenSettings?: () => void
   runtimeHint?: string
   className?: string
 }
@@ -74,12 +74,11 @@ export function InterpretationCard({
   onQuestionChange,
   onQuestionSubmit,
   onCopy,
-  onExplain,
-  onPlainExplain,
   onSave,
   onCitationClick,
   onRegenerate,
   onStop,
+  onOpenSettings,
   runtimeHint,
   className,
 }: InterpretationCardProps) {
@@ -88,7 +87,7 @@ export function InterpretationCard({
       <CardHeader className="border-b bg-muted/30">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <CardTitle>深度解读</CardTitle>
+            <CardTitle>解读</CardTitle>
             <blockquote className="mt-3 border-l-2 border-primary/50 pl-3 font-reading text-sm leading-7 text-muted-foreground">
               {selectionText || "尚未选择文本"}
             </blockquote>
@@ -113,8 +112,9 @@ export function InterpretationCard({
           errorMessage={errorMessage}
           followUps={followUps}
           onCitationClick={onCitationClick}
+          onOpenSettings={onOpenSettings}
         />
-        {runtimeHint ? (
+        {runtimeHint && !selectionText ? (
           <p className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
             {sanitizeInternalReferenceText(runtimeHint)}
           </p>
@@ -127,7 +127,8 @@ export function InterpretationCard({
               value={question}
               onChange={(event) => onQuestionChange?.(event.target.value)}
               onKeyDown={(event) => {
-                if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                if (shouldSubmitTextarea(event)) {
+                  event.preventDefault()
                   onQuestionSubmit?.()
                 }
               }}
@@ -137,31 +138,22 @@ export function InterpretationCard({
             </Button>
           </div>
         ) : null}
-        <div className="flex flex-wrap gap-2 border-t pt-3">
-          <Button size="sm" onClick={onExplain} disabled={!selectionText}>
-            <Sparkles className="mr-1.5 h-4 w-4" />
-            深度解读
+        <div className="flex items-center justify-between gap-2 border-t pt-3">
+          <Button size="sm" onClick={onAskToggle} disabled={!selectionText}>
+            <MessageSquareText className="mr-1.5 h-4 w-4" />
+            继续追问
           </Button>
-          <Button size="sm" variant="ghost" onClick={onPlainExplain} disabled={!selectionText}>
-            <SearchCheck className="mr-1.5 h-4 w-4" />
-            它在说什么
-          </Button>
-          <Button size="sm" variant="ghost" onClick={onAskToggle} disabled={!selectionText}>
-            <Undo2 className="mr-1.5 h-4 w-4" />
-            提问
-          </Button>
-          <Button size="sm" variant="ghost" onClick={onCopy} disabled={!selectionText}>
-            <Copy className="mr-1.5 h-4 w-4" />
-            复制
-          </Button>
-          <Button size="sm" variant="ghost" onClick={onSave} disabled={!selectionText}>
-            <Save className="mr-1.5 h-4 w-4" />
-            保存
-          </Button>
-          <Button size="sm" variant="ghost" onClick={onRegenerate} disabled={!selectionText}>
-            <RefreshCcw className="mr-1.5 h-4 w-4" />
-            重新解读
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button size="icon" variant="ghost" aria-label="复制解读" onClick={onCopy} disabled={!selectionText}>
+              <Copy className="h-4 w-4" />
+            </Button>
+            <Button size="icon" variant="ghost" aria-label="保存标记" onClick={onSave} disabled={!selectionText}>
+              <Save className="h-4 w-4" />
+            </Button>
+            <Button size="icon" variant="ghost" aria-label="重新生成解读" onClick={onRegenerate} disabled={!selectionText}>
+              <RefreshCcw className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
       </CardContent>
     </Card>
@@ -180,6 +172,7 @@ function PhaseBody({
   followUps,
   errorMessage,
   onCitationClick,
+  onOpenSettings,
 }: Pick<
   InterpretationCardProps,
   | "phase"
@@ -193,10 +186,11 @@ function PhaseBody({
   | "errorMessage"
   | "followUps"
   | "onCitationClick"
+  | "onOpenSettings"
 >) {
   if (phase === "planning") {
     return (
-      <div className="space-y-3">
+      <div className="animate-fade-in space-y-3">
         <SkeletonLine className="w-2/3" />
         <SkeletonLine />
         <SkeletonLine className="w-5/6" />
@@ -205,12 +199,21 @@ function PhaseBody({
   }
 
   if (phase === "retrieving") {
+    const visibleEvidence =
+      evidence.length > 0
+        ? evidence
+        : [{ chunkId: "local-selection", title: "当前选区", pageIndex: 0 }]
     return (
-      <div className="space-y-3">
+      <div className="animate-fade-in space-y-3">
         <p className="text-sm text-muted-foreground">正在书中查找相关证据</p>
         <div className="flex flex-wrap gap-2">
-          {(evidence.length > 0 ? evidence : [{ chunkId: "local-selection", title: "当前选区", pageIndex: 0 }]).map((item) => (
-            <Badge key={item.chunkId} variant="secondary">
+          {visibleEvidence.map((item, index) => (
+            <Badge
+              key={item.chunkId}
+              variant="secondary"
+              className="animate-slide-in-up"
+              style={staggerStyle(index)}
+            >
               {evidenceLabel(item, evidence)}
             </Badge>
           ))}
@@ -221,9 +224,15 @@ function PhaseBody({
 
   if ((phase === "streaming" || phase === "reading") && interpretation) {
     return (
-      <div className="space-y-4 text-sm leading-7">
+      <div className="animate-fade-in space-y-4 text-sm leading-7">
         {answerSource === "local_fallback" ? (
-          <Badge variant="secondary">本地模板兜底</Badge>
+          <LocalFallbackNotice message={errorMessage} onOpenSettings={onOpenSettings} />
+        ) : null}
+        {phase === "streaming" ? (
+          <p className="inline-flex items-center gap-1.5 rounded-md bg-muted px-2.5 py-1 text-xs text-muted-foreground">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
+            正在生成
+          </p>
         ) : null}
         <MarkdownContent
           content={interpretation}
@@ -237,7 +246,8 @@ function PhaseBody({
             {evidence.map((item, index) => (
               <button
                 key={item.chunkId}
-                className="rounded-md border bg-background px-2 py-1 text-xs hover:bg-muted"
+                className="animate-slide-in-up rounded-md border bg-background px-2 py-1 text-xs transition-[background-color,box-shadow,transform] duration-interactive ease-reader hover:bg-muted hover:shadow-sm active:scale-[0.98]"
+                style={staggerStyle(index)}
                 onClick={() => onCitationClick?.(item.chunkId)}
               >
                 {evidenceLabel(item, evidence, index)}
@@ -247,8 +257,8 @@ function PhaseBody({
         ) : null}
         {followUps.length > 0 ? (
           <div className="space-y-3 border-t pt-3">
-            {followUps.map((turn) => (
-              <div key={turn.id} className="space-y-2">
+            {followUps.map((turn, index) => (
+              <div key={turn.id} className="animate-slide-in-up space-y-2" style={staggerStyle(index)}>
                 <div className="rounded-md bg-accent px-3 py-2 text-accent-foreground">
                   {turn.question}
                 </div>
@@ -265,13 +275,8 @@ function PhaseBody({
             ))}
           </div>
         ) : null}
-        {selectionRects.length > 0 ? (
-          <CoordinateList selectionRects={selectionRects} />
-        ) : (
-          <p className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
-            当前选区来自转换稿，会保存为文本锚点；引用可点击回到原文。
-          </p>
-        )}
+        {selectionRects.length > 0 ? <CoordinateList selectionRects={selectionRects} /> : null}
+        <TraceList agentTrace={agentTrace} />
       </div>
     )
   }
@@ -279,16 +284,14 @@ function PhaseBody({
   if ((phase === "streaming" || phase === "reading") && selectionRects.length === 0) {
     if (selectionText) {
       return (
-        <div className="space-y-3">
-          <p className="text-sm text-muted-foreground">
-            已从转换稿选中文字，可以解读、追问并保存为文本高亮；原 PDF 坐标只用于版面校对。
-          </p>
+        <div className="animate-fade-in space-y-3">
           {evidence.length > 0 ? (
             <div className="mt-3 flex flex-wrap gap-2">
-              {evidence.map((item) => (
+              {evidence.map((item, index) => (
                 <button
                   key={item.chunkId}
-                  className="rounded-md border bg-background px-2 py-1 text-xs hover:bg-muted"
+                  className="animate-slide-in-up rounded-md border bg-background px-2 py-1 text-xs transition-[background-color,box-shadow,transform] duration-interactive ease-reader hover:bg-muted hover:shadow-sm active:scale-[0.98]"
+                  style={staggerStyle(index)}
                   onClick={() => onCitationClick?.(item.chunkId)}
                 >
                   {evidenceLabel(item, evidence)}
@@ -304,6 +307,7 @@ function PhaseBody({
               onCitationClick={onCitationClick}
             />
           ) : null}
+          <TraceList agentTrace={agentTrace} />
         </div>
       )
     }
@@ -312,10 +316,7 @@ function PhaseBody({
 
   if (phase === "streaming" || phase === "reading") {
     return (
-      <div className="space-y-3 text-sm leading-7">
-        <p className="text-muted-foreground">
-          已捕获带几何坐标的 PDF 选区；解读会使用转换稿文字，坐标用于高亮回跳。
-        </p>
+      <div className="animate-fade-in space-y-3 text-sm leading-7">
         {followUps.length > 0 ? (
           <FollowUpList
             followUps={followUps}
@@ -324,6 +325,7 @@ function PhaseBody({
             onCitationClick={onCitationClick}
           />
         ) : null}
+        <TraceList agentTrace={agentTrace} />
         <CoordinateList selectionRects={selectionRects} />
       </div>
     )
@@ -331,12 +333,12 @@ function PhaseBody({
 
   if (phase === "error") {
     return (
-      <div className="flex gap-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-950">
+      <div className="flex animate-fade-in gap-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-950">
         <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
         <div>
           <p className="font-medium">解读失败</p>
           <p className="mt-1 text-red-900/80">
-            {errorMessage || "LLM 后端暂时不可用，已保留当前选区和检索证据。"}
+            {errorMessage || "完整 LLM 解读暂时不可用，已保留当前选区和检索证据。"}
           </p>
         </div>
       </div>
@@ -359,8 +361,8 @@ function FollowUpList({
 }) {
   return (
     <div className="space-y-3 border-t pt-3 text-sm leading-7">
-      {followUps.map((turn) => (
-        <div key={turn.id} className="space-y-2">
+      {followUps.map((turn, index) => (
+        <div key={turn.id} className="animate-slide-in-up space-y-2" style={staggerStyle(index)}>
           <div className="rounded-md bg-accent px-3 py-2 text-accent-foreground">
             {turn.question}
           </div>
@@ -379,16 +381,61 @@ function FollowUpList({
   )
 }
 
+function LocalFallbackNotice({
+  message,
+  onOpenSettings,
+}: {
+  message?: string
+  onOpenSettings?: () => void
+}) {
+  return (
+    <div className="flex gap-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-6 text-amber-950">
+      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+      <div className="space-y-1">
+        <Badge variant="secondary" className="bg-amber-100 text-amber-950">
+          本地模板兜底
+        </Badge>
+        <p>
+          {message?.trim() ||
+            "已使用本地转换稿和可回跳证据生成回答；完整 LLM 解读需要桌面版、API Key 和网络连接可用。"}
+        </p>
+        {onOpenSettings ? (
+          <Button
+            size="sm"
+            variant="outline"
+            className="mt-1 h-7 border-amber-300 bg-amber-100 px-2 text-xs text-amber-950 hover:bg-amber-200"
+            onClick={onOpenSettings}
+          >
+            <KeyRound className="mr-1.5 h-3.5 w-3.5" />
+            打开设置
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
 function CoordinateList({ selectionRects }: { selectionRects: NormalizedPageRect[] }) {
   return (
-    <div className="max-h-52 space-y-2 overflow-auto rounded-md border bg-background p-2 font-mono text-[11px] leading-5">
-      {selectionRects.map((rect, index) => (
-        <div key={index}>
-          p{rect.pageIndex + 1}: [{rect.x0.toFixed(4)}, {rect.y0.toFixed(4)},{" "}
-          {rect.x1.toFixed(4)}, {rect.y1.toFixed(4)}]
-        </div>
-      ))}
-    </div>
+    <details className="group rounded-md border bg-background text-xs text-muted-foreground">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 marker:hidden">
+        <span>
+          PDF 坐标选区（校对）· 归一化页坐标 · {selectionRects.length} 个矩形
+        </span>
+        <ChevronDown className="h-3.5 w-3.5 transition-transform duration-subtle ease-reader group-open:rotate-180" />
+      </summary>
+      <div className="max-h-52 space-y-2 overflow-auto border-t p-2 font-mono text-[11px] leading-5">
+        <p className="font-sans text-[11px] leading-5 text-muted-foreground">
+          扫描版或 OCR 结果可能近似；以转换稿文本和引用回跳作为核对入口。
+        </p>
+        {selectionRects.map((rect, index) => (
+          <div key={index}>
+            p{rect.pageIndex + 1}: [{rect.x0.toFixed(4)}, {rect.y0.toFixed(4)},{" "}
+            {rect.x1.toFixed(4)}, {rect.y1.toFixed(4)}]
+          </div>
+        ))}
+      </div>
+    </details>
   )
 }
 
@@ -398,18 +445,27 @@ function TraceList({ agentTrace }: { agentTrace: AgentTraceStep[] }) {
   }
 
   return (
-    <div className="space-y-2 rounded-md border bg-background p-2 text-xs">
-      <div className="font-medium text-muted-foreground">检索轨迹</div>
-      {agentTrace.slice(0, 6).map((step, index) => (
-        <div key={`${step.phase}-${index}`} className="rounded bg-muted/60 px-2 py-1.5">
-          <div className="font-medium">
-            {tracePhaseLabel(step.phase)}
-            {step.query ? <span className="ml-1 text-muted-foreground">· {step.query}</span> : null}
+    <details className="group rounded-md border bg-background text-xs text-muted-foreground">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 marker:hidden">
+        <span>检索轨迹 · {agentTrace.length} 步</span>
+        <ChevronDown className="h-3.5 w-3.5 transition-transform duration-subtle ease-reader group-open:rotate-180" />
+      </summary>
+      <div className="space-y-2 border-t p-2">
+        {agentTrace.slice(0, 6).map((step, index) => (
+          <div key={`${step.phase}-${index}`} className="rounded bg-muted/60 px-2 py-1.5">
+            <div className="font-medium text-foreground/80">
+              {tracePhaseLabel(step.phase)}
+              {traceQueryLabel(step.query) ? (
+                <span className="ml-1 text-muted-foreground">· {traceQueryLabel(step.query)}</span>
+              ) : null}
+            </div>
+            <div className="mt-0.5 text-muted-foreground">
+              {sanitizeInternalReferenceText(step.note)}
+            </div>
           </div>
-          <div className="mt-0.5 text-muted-foreground">{step.note}</div>
-        </div>
-      ))}
-    </div>
+        ))}
+      </div>
+    </details>
   )
 }
 
@@ -426,6 +482,35 @@ function tracePhaseLabel(phase: AgentTraceStep["phase"]) {
   }
 }
 
+function traceQueryLabel(query?: string | null) {
+  if (!query) {
+    return ""
+  }
+  if (query.startsWith("llm_tool_round_")) {
+    const round = query.replace("llm_tool_round_", "")
+    return `模型检索第 ${round} 轮`
+  }
+  if (query === "llm_tools") {
+    return "模型检索"
+  }
+  if (query === "deterministic_fallback") {
+    return "本地补检索"
+  }
+  if (query === "focus_chunk_ids") {
+    return "当前选区"
+  }
+  if (query === "prior_evidence") {
+    return "上一轮证据"
+  }
+  if (query === "list_structure") {
+    return "章节结构"
+  }
+  if (query.includes("chunk_id") || query.includes("chunkId")) {
+    return sanitizeInternalReferenceText(query)
+  }
+  return query
+}
+
 export function renderCitations(
   text: string,
   onCitationClick?: (chunkId: string) => void,
@@ -436,5 +521,9 @@ export function renderCitations(
 }
 
 function SkeletonLine({ className }: { className?: string }) {
-  return <div className={cn("h-3 rounded bg-muted", className)} />
+  return <div className={cn("reader-shimmer h-3 animate-shimmer rounded bg-muted", className)} />
+}
+
+function staggerStyle(index: number) {
+  return { animationDelay: `${Math.min(index, 8) * 50}ms` }
 }

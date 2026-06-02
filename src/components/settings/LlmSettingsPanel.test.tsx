@@ -65,6 +65,9 @@ vi.mock("@/core/library-api", async (importOriginal) => {
 beforeEach(() => {
   document.body.replaceChildren()
   vi.mocked(isTauriRuntime).mockReturnValue(false)
+  vi.mocked(getEmbeddingSettings).mockClear()
+  vi.mocked(getLlmSettings).mockClear()
+  vi.mocked(getMineruSettings).mockClear()
   vi.mocked(productSelfCheck).mockReset()
   vi.mocked(saveEmbeddingSettings).mockClear()
   vi.mocked(saveLlmSettings).mockClear()
@@ -103,6 +106,22 @@ function buttonByText(container: ParentNode, text: string) {
   return button
 }
 
+function inputByPlaceholder(container: ParentNode, placeholder: string) {
+  const input = [...container.querySelectorAll("input")].find((element) =>
+    element.placeholder.includes(placeholder),
+  )
+  if (!(input instanceof HTMLInputElement)) {
+    throw new Error(`missing input placeholder: ${placeholder}`)
+  }
+  return input
+}
+
+function statusMessages(container: ParentNode) {
+  return [...container.querySelectorAll(".rounded-md.bg-muted, .border-b.bg-muted\\/45")]
+    .map((element) => textContent(element))
+    .join(" ")
+}
+
 async function click(element: Element) {
   await act(async () => {
     element.dispatchEvent(new MouseEvent("click", { bubbles: true }))
@@ -112,19 +131,64 @@ async function click(element: Element) {
 }
 
 describe("LlmSettingsPanel defaults", () => {
-  it("prefills DeepSeek and external SiliconFlow embedding settings without exposing keys", () => {
+  it("starts in recommended mode with provider presets and no advanced fields", () => {
     const html = renderToStaticMarkup(
       <LlmSettingsPanel open onClose={() => undefined} />,
     )
 
+    expect(html).toContain("推荐模式")
     expect(html).toContain("deepseek-v4-flash")
-    expect(html).toContain("siliconflow")
-    expect(html).toContain("https://api.siliconflow.cn/v1/embeddings")
-    expect(html).toContain("Qwen/Qwen3-Embedding-4B")
+    expect(html).toContain("OpenAI")
+    expect(html).toContain("Anthropic")
+    expect(html).toContain("本地文本检索")
+    expect(html).toContain("语义向量检索")
     expect(html).toContain("https://mineru.net")
     expect(html).toContain("MinerU 云端解析")
-    expect(html).toContain('value="2560"')
+    expect(html).toContain("获取 DeepSeek key")
+    expect(html).toContain("https://platform.deepseek.com/api_keys")
+    expect(html).toContain("获取 MinerU token")
+    expect(html).toContain("https://mineru.net/apiManage/docs")
+    expect(html).toContain("获取 SiliconFlow key")
+    expect(html).toContain("https://cloud.siliconflow.cn/account/ak")
+    expect(html).not.toContain("Provider ID")
+    expect(html).not.toContain("Embedding URL")
+    expect(html).not.toContain('value="2560"')
+    expect(html).not.toContain("开发诊断")
+    expect(html).not.toContain("运行自检")
     expect(html).not.toContain("sk-")
+  })
+
+  it("updates the provider key link when switching LLM presets", async () => {
+    vi.mocked(isTauriRuntime).mockReturnValue(true)
+
+    const { container, unmount } = await renderClient(
+      <LlmSettingsPanel open onClose={() => undefined} />,
+    )
+
+    expect(textContent(container)).toContain("获取 DeepSeek key")
+    expect(
+      container.querySelector<HTMLAnchorElement>(
+        'a[href="https://platform.deepseek.com/api_keys"]',
+      ),
+    ).toBeInstanceOf(HTMLAnchorElement)
+
+    await click(buttonByText(container, "OpenAI"))
+    expect(textContent(container)).toContain("获取 OpenAI key")
+    expect(
+      container.querySelector<HTMLAnchorElement>(
+        'a[href="https://platform.openai.com/api-keys"]',
+      ),
+    ).toBeInstanceOf(HTMLAnchorElement)
+
+    await click(buttonByText(container, "Anthropic"))
+    expect(textContent(container)).toContain("获取 Anthropic key")
+    expect(
+      container.querySelector<HTMLAnchorElement>(
+        'a[href="https://console.anthropic.com/settings/keys"]',
+      ),
+    ).toBeInstanceOf(HTMLAnchorElement)
+    expect(textContent(container)).not.toContain("sk-")
+    unmount()
   })
 
   it("saves MinerU token from the settings panel without rendering the secret", async () => {
@@ -134,12 +198,7 @@ describe("LlmSettingsPanel defaults", () => {
       <LlmSettingsPanel open onClose={() => undefined} />,
     )
 
-    const tokenInput = [...container.querySelectorAll("input")].find((input) =>
-      input.placeholder.includes("MinerU token"),
-    )
-    if (!(tokenInput instanceof HTMLInputElement)) {
-      throw new Error("missing MinerU token input")
-    }
+    const tokenInput = inputByPlaceholder(container, "MinerU token")
     await act(async () => {
       const descriptor = Object.getOwnPropertyDescriptor(
         Object.getPrototypeOf(tokenInput),
@@ -198,6 +257,117 @@ describe("LlmSettingsPanel defaults", () => {
     unmount()
   })
 
+  it("renders structured command error suggestions when saving fails", async () => {
+    vi.mocked(isTauriRuntime).mockReturnValue(true)
+    vi.mocked(saveLlmSettings).mockRejectedValueOnce({
+      code: "authentication",
+      message: "DeepSeek API key 无效。",
+      suggestion: "请重新生成 API key 后保存。",
+    })
+
+    const { container, unmount } = await renderClient(
+      <LlmSettingsPanel open onClose={() => undefined} />,
+    )
+
+    await click(buttonByText(container, "保存 LLM"))
+
+    await vi.waitFor(() => {
+      expect(textContent(container)).toContain("DeepSeek API key 无效")
+      expect(textContent(container)).toContain("建议：请重新生成 API key 后保存。")
+    })
+    expect(textContent(container)).not.toContain("authentication")
+    unmount()
+  })
+
+  it("reveals advanced provider fields only after switching modes", async () => {
+    vi.mocked(isTauriRuntime).mockReturnValue(true)
+
+    const { container, unmount } = await renderClient(
+      <LlmSettingsPanel open onClose={() => undefined} />,
+    )
+
+    expect(textContent(container)).not.toContain("Provider ID")
+    expect(textContent(container)).not.toContain("开发诊断")
+
+    await click(buttonByText(container, "高级"))
+
+    expect(textContent(container)).toContain("Provider ID")
+    expect(textContent(container)).toContain("Embedding URL")
+    expect(textContent(container)).toContain("向量维度")
+    expect(textContent(container)).toContain("开发诊断")
+    expect(textContent(container)).toContain("模型服务地址")
+    expect(textContent(container)).toContain("自定义模型")
+    expect(textContent(container)).toContain("兼容 OpenAI embeddings 协议")
+    expect(textContent(container)).toContain("必须匹配模型输出维度")
+    unmount()
+  })
+
+  it("can save local text search mode without requiring an embedding key", async () => {
+    vi.mocked(isTauriRuntime).mockReturnValue(true)
+    vi.mocked(saveEmbeddingSettings).mockResolvedValueOnce({
+      provider: "disabled",
+      baseUrl: "https://api.siliconflow.cn/v1/embeddings",
+      model: "Qwen/Qwen3-Embedding-4B",
+      expectedDimension: 2560,
+      apiKeyConfigured: false,
+      enabled: false,
+    })
+
+    const { container, unmount } = await renderClient(
+      <LlmSettingsPanel open onClose={() => undefined} />,
+    )
+
+    await click(buttonByText(container, "本地文本检索"))
+    await click(buttonByText(container, "保存 Embedding"))
+
+    await vi.waitFor(() => {
+      expect(saveEmbeddingSettings).toHaveBeenCalledWith({
+        provider: "siliconflow",
+        baseUrl: "https://api.siliconflow.cn/v1/embeddings",
+        model: "Qwen/Qwen3-Embedding-4B",
+        expectedDimension: 2560,
+        enabled: false,
+        apiKey: undefined,
+      })
+    })
+    expect(textContent(container)).toContain("FTS 文本搜索")
+    unmount()
+  })
+
+  it("describes browser mode without exposing Tauri backend wording", async () => {
+    vi.mocked(isTauriRuntime).mockReturnValue(false)
+
+    const { container, unmount } = await renderClient(
+      <LlmSettingsPanel open onClose={() => undefined} />,
+    )
+
+    expect(textContent(container)).toContain("浏览器版可查看界面")
+    expect(textContent(container)).toContain("保存密钥和测试连接请使用桌面版")
+    expect(statusMessages(container)).not.toContain("Tauri")
+    expect(statusMessages(container)).not.toContain("后端")
+    expect(getLlmSettings).not.toHaveBeenCalled()
+    expect(getEmbeddingSettings).not.toHaveBeenCalled()
+    expect(getMineruSettings).not.toHaveBeenCalled()
+
+    await click(buttonByText(container, "测试"))
+    expect(textContent(container)).toContain("连接测试请使用桌面版")
+    expect(statusMessages(container)).not.toContain("Tauri")
+    expect(statusMessages(container)).not.toContain("后端")
+
+    await click(buttonByText(container, "保存全部"))
+    expect(textContent(container)).toContain("保存设置请使用桌面版")
+    expect(textContent(container)).toContain("MinerU 云端解析设置请使用桌面版保存")
+    expect(statusMessages(container)).not.toContain("Tauri")
+    expect(statusMessages(container)).not.toContain("后端")
+
+    await click(buttonByText(container, "高级"))
+    await click(buttonByText(container, "运行自检"))
+    expect(textContent(container)).toContain("开发诊断仅桌面版可运行")
+    expect(statusMessages(container)).not.toContain("Tauri")
+    expect(statusMessages(container)).not.toContain("后端")
+    unmount()
+  })
+
   it("runs product self-check from the settings panel and renders the result", async () => {
     vi.mocked(isTauriRuntime).mockReturnValue(true)
     vi.mocked(productSelfCheck).mockResolvedValue({
@@ -237,7 +407,9 @@ describe("LlmSettingsPanel defaults", () => {
       <LlmSettingsPanel open onClose={() => undefined} />,
     )
 
-    expect(textContent(container)).toContain("产品自检")
+    expect(textContent(container)).not.toContain("产品自检")
+    await click(buttonByText(container, "高级"))
+    expect(textContent(container)).toContain("开发诊断")
     await click(buttonByText(container, "运行自检"))
 
     await vi.waitFor(() => {

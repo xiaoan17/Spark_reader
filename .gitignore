@@ -46,6 +46,13 @@ agent-host/dist/
 # Storybook
 storybook-static/
 
+# 内部交接/评审/规划文档(不随公开仓库发布)
+_internal/
+
+# logo 设计候选图(根目录散落),仅正式 logo 进 docs/assets/
+/logo-spark-*.png
+!docs/assets/logo.png
+
 # 测试/覆盖率/日志
 coverage/
 *.log

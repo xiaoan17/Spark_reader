@@ -6,6 +6,14 @@
 - `pnpm health:bundle`: 在 `pnpm health` 基础上构建 debug `.app`，并运行包内 `--product-self-check`。
 - `pnpm eval:rag`: 小型中文 fixture，输出 baseline 与 query rewrite 后的 `recall@1/3/5`。
 
+## 发布包白屏防线
+
+1. 打开本次生成的目标 `.app`，不要只看构建日志或自检命令。
+2. 用 Appshot / Computer Use / 窗口可访问树确认主界面真实出现。
+3. 如果出现白屏，先看 `index.html` 的 `boot-diagnostics` 文案，再判断是资源加载失败还是 React runtime 崩溃。
+4. 保留启动诊断；不要在没有错误信息时先猜缓存、路径或旧包。
+5. React production minified error 先还原错误码；`#185` 优先排查 ref/effect/render 期间同步 `setState` 导致的最大更新深度。
+
 ## 真实窗口 E2E
 
 1. 运行 `pnpm health:bundle`。
