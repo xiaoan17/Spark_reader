@@ -43,6 +43,27 @@ pnpm tauri dev
 
 > 🔒 `.env` 已被 `.gitignore` 忽略,所有密钥只在 Rust 后端读取,绝不进前端、绝不打包进客户端。
 
+### API Key 从哪里拿
+
+| 服务 | 获取/管理入口 | 备注 |
+|---|---|---|
+| MinerU | [mineru.net/apiManage](https://mineru.net/apiManage/docs) | 用于云端解析 PDF、公式、表格和扫描件。 |
+| DeepSeek | [platform.deepseek.com/api_keys](https://platform.deepseek.com/api_keys) | 默认 LLM provider,OpenAI-compatible 格式。 |
+| OpenAI | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) | 需要 OpenAI Platform API key;ChatGPT 订阅不等于 API 额度。 |
+| Anthropic | [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys) | 需要 Anthropic Console API key;Claude 订阅不等于 API 额度。 |
+| SiliconFlow | [cloud.siliconflow.cn/account/ak](https://cloud.siliconflow.cn/account/ak) | 仅用于可选的 embedding 语义检索。 |
+
+### 自定义 LLM 接入
+
+应用内「设置」→「高级」支持为当前 provider 自定义 `Base URL` 和 `Model`:
+
+| 格式 | 选择 | Base URL 怎么填 |
+|---|---|---|
+| OpenAI-compatible Chat Completions | OpenAI | 填到会与 `/chat/completions` 拼接的前缀,常见为 `https://api.openai.com/v1` 或你的网关 `/v1` 地址。 |
+| Anthropic Messages API | Anthropic | 填到会与 `/v1/messages` 拼接的前缀,例如 `https://api.anthropic.com` 或你的 Anthropic-format 网关根地址。 |
+
+切换 provider 时,每个 provider 的自定义 `Base URL` / `Model` / 已保存 key 状态会分别保留。点「测试并记录」会用界面里尚未保存的 key、URL 和模型做连通测试,成功后写入本机设置和 `.env`;点「保存 LLM」可不测试直接保存。
+
 ## 常用命令
 
 ```bash

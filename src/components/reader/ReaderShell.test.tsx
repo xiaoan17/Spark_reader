@@ -34,12 +34,15 @@ import {
   getConvertedBookManifest,
   getConvertedBookPages,
   importPdfWithMineru,
+  importPlainBook,
   importZoteroItem,
   isTauriRuntime,
   listenMineruProgress,
+  listenSearchIndexProgress,
   listBooks,
   openBookAsset,
   readPdfFile,
+  rebuildSearchIndexAsync,
   searchIndexSummary,
   searchZoteroItems,
   startTranslation,
@@ -79,12 +82,18 @@ vi.mock("@/core/library-api", async (importOriginal) => {
     getConvertedBookManifest: vi.fn(),
     getConvertedBookPages: vi.fn(),
     importPdfWithMineru: vi.fn(),
+    importPlainBook: vi.fn(),
     importZoteroItem: vi.fn(),
     isTauriRuntime: vi.fn(() => false),
     listenMineruProgress: vi.fn(async () => null),
+    listenSearchIndexProgress: vi.fn(async () => null),
     listBooks: vi.fn(async () => []),
     openBookAsset: vi.fn(),
     readPdfFile: vi.fn(),
+    rebuildSearchIndexAsync: vi.fn(async (bookId: string, taskId?: string) => ({
+      taskId: taskId ?? `search-index-${bookId}`,
+      bookId,
+    })),
     searchZoteroItems: vi.fn(async () => []),
     startTranslation: vi.fn(),
     translationStatus: vi.fn(),
@@ -286,11 +295,17 @@ beforeEach(() => {
   vi.mocked(getConvertedBookManifest).mockReset()
   vi.mocked(getConvertedBookPages).mockReset()
   vi.mocked(importPdfWithMineru).mockReset()
+  vi.mocked(importPlainBook).mockReset()
   vi.mocked(importZoteroItem).mockReset()
   vi.mocked(listenMineruProgress).mockResolvedValue(null)
+  vi.mocked(listenSearchIndexProgress).mockResolvedValue(null)
   vi.mocked(listBooks).mockResolvedValue([])
   vi.mocked(openBookAsset).mockResolvedValue({ path: "/tmp/original.pdf" })
   vi.mocked(readPdfFile).mockResolvedValue([])
+  vi.mocked(rebuildSearchIndexAsync).mockImplementation(async (bookId: string, taskId?: string) => ({
+    taskId: taskId ?? `search-index-${bookId}`,
+    bookId,
+  }))
   vi.mocked(searchZoteroItems).mockResolvedValue([])
   vi.mocked(startTranslation).mockReset()
   vi.mocked(translationStatus).mockReset()
@@ -3584,6 +3599,195 @@ describe("ReaderShell desktop import", () => {
       "MinerU API Token 未配置或无效。请在设置里填入 MinerU token 后重试。",
     )
     expect(loadedPdf.cleanup).toHaveBeenCalled()
+    unmount()
+  })
+
+  it("imports a TXT or EPUB book through the Rust backend without MinerU", async () => {
+    const { ReaderShell } = await import("./ReaderShell")
+    vi.mocked(isTauriRuntime).mockReturnValue(true)
+    vi.mocked(open).mockResolvedValue("/tmp/novel.epub")
+    vi.mocked(importPlainBook).mockResolvedValue({
+      bookId: "book-epub",
+      pageCount: 2,
+      chunkCount: 2,
+      textCharCount: 18,
+      markdownCharCount: 32,
+      textPath: "/tmp/book-epub/novel.txt",
+      markdownPath: "/tmp/book-epub/novel.md",
+      originalPdfPath: "/tmp/book-epub/novel.epub",
+      sourcePdfPath: "/tmp/novel.epub",
+      sourcePdfFingerprint: "pdf-fnv1a64-epub",
+    })
+    const pages: ParsedPage[] = [
+      {
+        pageIndex: 0,
+        text: "第一章\n电子书正文",
+        markdown: "# 第一章\n\n电子书正文",
+      },
+      {
+        pageIndex: 1,
+        text: "第二章\n继续阅读",
+        markdown: "# 第二章\n\n继续阅读",
+      },
+    ]
+    const chunks: ParsedChunk[] = [
+      {
+        chunkId: "p1-c1",
+        pageIndex: 0,
+        text: "第一章\n电子书正文",
+        markdown: "### [p1-c1] Page 1\n\n# 第一章\n\n电子书正文",
+        rects: [],
+      },
+      {
+        chunkId: "p2-c1",
+        pageIndex: 1,
+        text: "第二章\n继续阅读",
+        markdown: "### [p2-c1] Page 2\n\n# 第二章\n\n继续阅读",
+        rects: [],
+      },
+    ]
+    const quality: TextQuality = {
+      charCount: 18,
+      replacementCharRatio: 0,
+      controlCharRatio: 0,
+      looksUsable: true,
+    }
+    vi.mocked(getConvertedBookManifest).mockResolvedValue(storedBook({
+      bookId: "book-epub",
+      title: "novel",
+      totalPages: 2,
+      textCharCount: 18,
+      markdownCharCount: 32,
+      textPath: "/tmp/book-epub/novel.txt",
+      markdownPath: "/tmp/book-epub/novel.md",
+      originalPdfPath: "/tmp/book-epub/novel.epub",
+      sourcePdfPath: "/tmp/novel.epub",
+      sourcePdfFingerprint: "pdf-fnv1a64-epub",
+      parserEngine: "text-import-epub",
+      coordinateMode: "text-only",
+      quality,
+      createdAt: "2026-06-03T02:00:00Z",
+    }))
+    vi.mocked(getConvertedBookPages).mockResolvedValue({
+      bookId: "book-epub",
+      startPage: 0,
+      endPage: 2,
+      totalPages: 2,
+      text: "第一章\n电子书正文\n\n第二章\n继续阅读",
+      markdown: "# 第一章\n\n电子书正文\n\n# 第二章\n\n继续阅读",
+      pages,
+      chunks,
+    })
+    const onParsedDocument = vi.fn()
+    const onLibraryStatus = vi.fn()
+
+    function Harness() {
+      const [phase, setPhase] = useState<ReaderPhase>("empty")
+      const [bookId, setBookId] = useState("")
+      const [libraryStatus, setLibraryStatus] = useState<LibraryStatus>("idle")
+      const [bookTitle, setBookTitle] = useState("未导入书籍")
+      const [totalPages, setTotalPages] = useState(0)
+      const [loadedPages, setLoadedPages] = useState<ParsedPage[]>([])
+      const [loadedChunks, setLoadedChunks] = useState<ParsedChunk[]>([])
+      const [parserEngine, setParserEngine] = useState("")
+      const [coordinateMode, setCoordinateMode] = useState("")
+
+      return (
+        <ReaderShell
+          phase={phase}
+          bookId={bookId}
+          libraryStatus={libraryStatus}
+          libraryMessage=""
+          bookTitle={bookTitle}
+          currentPage={1}
+          totalPages={totalPages}
+          selectionText=""
+          selectionRects={[]}
+          selectionAnchor={null}
+          evidence={[]}
+          agentTrace={[]}
+          interpretation=""
+          followUps={[]}
+          highlights={[]}
+          interpretationHistory={[]}
+          parsedPages={loadedPages}
+          parsedChunks={loadedChunks}
+          parserEngine={parserEngine}
+          coordinateMode={coordinateMode}
+          activeChunkId=""
+          zoom={1}
+          onBookLoaded={(title, pageCount) => {
+            setBookTitle(title)
+            setTotalPages(pageCount)
+          }}
+          onLibraryStatus={(status, message = "", nextBookId) => {
+            onLibraryStatus(status, message, nextBookId)
+            setLibraryStatus(status)
+            if (nextBookId) setBookId(nextBookId)
+          }}
+          onParsedDocument={(nextPages, nextChunks, text, markdown, metadata) => {
+            onParsedDocument(nextPages, nextChunks, text, markdown, metadata)
+            setLoadedPages(nextPages)
+            setLoadedChunks(nextChunks)
+            setParserEngine(metadata?.parserEngine ?? "")
+            setCoordinateMode(metadata?.coordinateMode ?? "")
+          }}
+          onPageChange={vi.fn()}
+          onVisiblePageChange={vi.fn()}
+          onZoomChange={vi.fn()}
+          onSelection={vi.fn()}
+          onActiveChunk={vi.fn()}
+          onChunkFocus={vi.fn()}
+          onPhaseChange={setPhase}
+          onDeepInterpret={vi.fn()}
+          onPlainExplain={vi.fn()}
+          onQuestionSubmit={vi.fn()}
+          onSaveHighlight={vi.fn(async () => false)}
+          onOpenHighlight={vi.fn()}
+          onDeleteHighlight={vi.fn()}
+          onOpenInterpretation={vi.fn()}
+          onDeleteInterpretation={vi.fn()}
+          onRegenerate={vi.fn()}
+          onStop={vi.fn()}
+        />
+      )
+    }
+
+    const { container, unmount } = await renderClient(<Harness />)
+    const readPdfFileCallsBeforeImport = vi.mocked(readPdfFile).mock.calls.length
+    await openImportMenu(container)
+    await clickAsync(buttonByLabel(container, "导入 TXT 或 EPUB 电子书"))
+
+    await vi.waitFor(() => {
+      expect(importPlainBook).toHaveBeenCalledWith("/tmp/novel.epub", "novel")
+      expect(getConvertedBookManifest).toHaveBeenCalledWith("book-epub")
+      expect(getConvertedBookPages).toHaveBeenCalledWith("book-epub", 0, 48)
+    })
+    expect(open).toHaveBeenCalledWith({
+      multiple: false,
+      filters: [{ name: "Text / EPUB", extensions: ["txt", "text", "epub"] }],
+    })
+    expect(importPdfWithMineru).not.toHaveBeenCalled()
+    expect(vi.mocked(readPdfFile).mock.calls.length).toBe(readPdfFileCallsBeforeImport)
+    expect(onParsedDocument).toHaveBeenCalledWith(
+      pages.map((page) => ({ ...page, loaded: true })),
+      chunks,
+      "第一章\n电子书正文\n\n第二章\n继续阅读",
+      "# 第一章\n\n电子书正文\n\n# 第二章\n\n继续阅读",
+      expect.objectContaining({
+        parserEngine: "text-import-epub",
+        coordinateMode: "text-only",
+        originalPdfPath: "/tmp/book-epub/novel.epub",
+        sourcePdfPath: "/tmp/novel.epub",
+      }),
+    )
+    expect(onLibraryStatus).toHaveBeenCalledWith(
+      "indexed",
+      "已导入电子书：18 字、2 个 chunk",
+      "book-epub",
+    )
+    expect(textContent(container)).toContain("电子书正文")
+    expect(buttonByText(container, "PDF").hasAttribute("disabled")).toBe(true)
     unmount()
   })
 

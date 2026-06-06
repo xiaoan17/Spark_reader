@@ -219,7 +219,7 @@ type ReaderState = {
 
 export const useReaderStore = create<ReaderState>((set) => ({
   phase: "empty",
-  bookTitle: "未导入 PDF",
+  bookTitle: "未导入书籍",
   bookId: "",
   libraryStatus: "idle",
   libraryMessage: "",

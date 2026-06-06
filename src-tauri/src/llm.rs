@@ -226,6 +226,7 @@ pub fn active_model_label() -> Result<String, LlmError> {
 struct ChatCompletionResponse {
     id: Option<String>,
     choices: Vec<OpenAiChoice>,
+    usage: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -256,6 +257,7 @@ struct OpenAiDelta {
 #[derive(Debug, Deserialize)]
 struct AnthropicMessageResponse {
     content: Vec<AnthropicContentBlock>,
+    usage: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -270,7 +272,19 @@ struct AnthropicContentBlock {
 
 pub async fn test_connection() -> Result<ConnectionTestResponse, LlmError> {
     let config = config::llm_config()?;
+    test_connection_for_config(config).await
+}
 
+pub async fn test_connection_with_settings(
+    request: config::SaveLlmSettingsRequest,
+) -> Result<ConnectionTestResponse, LlmError> {
+    let config = config::llm_config_from_request(&request)?;
+    test_connection_for_config(config).await
+}
+
+async fn test_connection_for_config(
+    config: config::LlmConfig,
+) -> Result<ConnectionTestResponse, LlmError> {
     match config.provider {
         LlmProviderKind::DeepSeek | LlmProviderKind::OpenAi => {
             test_openai_compat(&config).await?;
@@ -376,6 +390,7 @@ async fn test_openai_compat(config: &config::LlmConfig) -> Result<(), LlmError> 
             body: text.clone(),
         })?;
     let _ = parsed.id;
+    log_llm_usage(config.provider, parsed.usage.as_ref());
     Ok(())
 }
 
@@ -408,6 +423,7 @@ async fn chat_openai_compat(
             status: status.as_u16(),
             body: text.clone(),
         })?;
+    log_llm_usage(config.provider, parsed.usage.as_ref());
 
     parsed
         .choices
@@ -449,6 +465,7 @@ async fn chat_openai_compat_with_tools(
         status: status.as_u16(),
         body: text.clone(),
     })?;
+    log_llm_usage(config.provider, parsed.get("usage"));
     parse_openai_tool_response(&parsed).ok_or_else(|| LlmError::Provider {
         status: status.as_u16(),
         body: text,
@@ -584,6 +601,7 @@ async fn chat_anthropic(
             status: status.as_u16(),
             body: text.clone(),
         })?;
+    log_llm_usage(config.provider, parsed.usage.as_ref());
     let answer = parsed
         .content
         .into_iter()
@@ -650,6 +668,7 @@ async fn chat_anthropic_with_tools(
             status: status.as_u16(),
             body: text.clone(),
         })?;
+    log_llm_usage(config.provider, parsed.usage.as_ref());
     Ok(parse_anthropic_tool_response(parsed.content))
 }
 
@@ -884,6 +903,55 @@ fn parse_anthropic_tool_response(content: Vec<AnthropicContentBlock>) -> ChatToo
     }
 }
 
+fn log_llm_usage(provider: LlmProviderKind, usage: Option<&Value>) {
+    let Some(usage) = usage else {
+        return;
+    };
+    let input_tokens = usage_token(usage, &["prompt_tokens", "input_tokens"]);
+    let output_tokens = usage_token(usage, &["completion_tokens", "output_tokens"]);
+    let total_tokens = usage_token(usage, &["total_tokens"]);
+    let cache_creation_input_tokens = usage_token(usage, &["cache_creation_input_tokens"]);
+    let cache_read_input_tokens = usage_token(usage, &["cache_read_input_tokens"]);
+    let cached_prompt_tokens = usage_nested_token(usage, "prompt_tokens_details", "cached_tokens");
+    if input_tokens
+        .or(output_tokens)
+        .or(total_tokens)
+        .or(cache_creation_input_tokens)
+        .or(cache_read_input_tokens)
+        .or(cached_prompt_tokens)
+        .is_none()
+    {
+        return;
+    }
+    eprintln!(
+        "llm usage provider={provider:?} input_tokens={} output_tokens={} total_tokens={} cache_creation_input_tokens={} cache_read_input_tokens={} cached_prompt_tokens={}",
+        usage_token_label(input_tokens),
+        usage_token_label(output_tokens),
+        usage_token_label(total_tokens),
+        usage_token_label(cache_creation_input_tokens),
+        usage_token_label(cache_read_input_tokens),
+        usage_token_label(cached_prompt_tokens),
+    );
+}
+
+fn usage_token(usage: &Value, keys: &[&str]) -> Option<u64> {
+    keys.iter()
+        .find_map(|key| usage.get(*key).and_then(Value::as_u64))
+}
+
+fn usage_nested_token(usage: &Value, object_key: &str, token_key: &str) -> Option<u64> {
+    usage
+        .get(object_key)
+        .and_then(|value| value.get(token_key))
+        .and_then(Value::as_u64)
+}
+
+fn usage_token_label(value: Option<u64>) -> String {
+    value
+        .map(|tokens| tokens.to_string())
+        .unwrap_or_else(|| "-".to_string())
+}
+
 fn find_sse_event_end(buffer: &str) -> Option<usize> {
     buffer.find("\n\n").or_else(|| buffer.find("\r\n\r\n"))
 }
@@ -946,6 +1014,7 @@ fn bearer_headers(api_key: &str) -> Result<HeaderMap, LlmError> {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
     use crate::config::{LlmConfig, LlmProviderKind};
@@ -1063,6 +1132,56 @@ mod tests {
         let tool_result = &body["messages"][2]["content"][0];
         assert_eq!(tool_result["type"], "tool_result");
         assert!(tool_result.get("cache_control").is_none());
+    }
+
+    #[test]
+    fn parses_anthropic_cache_usage_tokens() {
+        let usage = json!({
+            "input_tokens": 120,
+            "output_tokens": 30,
+            "cache_creation_input_tokens": 80,
+            "cache_read_input_tokens": 40
+        });
+
+        assert_eq!(
+            usage_token(&usage, &["prompt_tokens", "input_tokens"]),
+            Some(120)
+        );
+        assert_eq!(
+            usage_token(&usage, &["completion_tokens", "output_tokens"]),
+            Some(30)
+        );
+        assert_eq!(
+            usage_token(&usage, &["cache_creation_input_tokens"]),
+            Some(80)
+        );
+        assert_eq!(usage_token(&usage, &["cache_read_input_tokens"]), Some(40));
+    }
+
+    #[test]
+    fn parses_openai_cached_prompt_tokens() {
+        let usage = json!({
+            "prompt_tokens": 200,
+            "completion_tokens": 25,
+            "total_tokens": 225,
+            "prompt_tokens_details": {
+                "cached_tokens": 150
+            }
+        });
+
+        assert_eq!(
+            usage_token(&usage, &["prompt_tokens", "input_tokens"]),
+            Some(200)
+        );
+        assert_eq!(
+            usage_token(&usage, &["completion_tokens", "output_tokens"]),
+            Some(25)
+        );
+        assert_eq!(usage_token(&usage, &["total_tokens"]), Some(225));
+        assert_eq!(
+            usage_nested_token(&usage, "prompt_tokens_details", "cached_tokens"),
+            Some(150)
+        );
     }
 
     #[test]

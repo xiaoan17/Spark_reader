@@ -441,7 +441,7 @@ fn write_minimal_text_pdf(path: &Path, text: &str) -> std::io::Result<()> {
         .replace('(', "\\(")
         .replace(')', "\\)");
     let stream = format!("BT /F1 18 Tf 72 720 Td ({escaped}) Tj ET");
-    let objects = vec![
+    let objects = [
         "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>".to_string(),
@@ -524,6 +524,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn product_self_check_covers_core_reading_chain_without_provider_embeddings() {
         let _guard = crate::TEST_ENV_LOCK.lock().expect("env lock");
         std::env::set_var("EMBEDDING_PROVIDER", "disabled");

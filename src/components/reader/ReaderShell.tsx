@@ -100,24 +100,31 @@ import {
   findBookBySourcePdf,
   importMineruOutput,
   importPdfWithMineru,
+  importPlainBook,
   importZoteroItem,
   isTauriRuntime,
   listenMineruProgress,
+  listenSearchIndexProgress,
   listBooks,
   openBookAsset,
   readPdfFile,
-  rebuildSearchIndex,
+  rebuildSearchIndexAsync,
   searchBook,
   searchZoteroItems,
   startTranslation,
   translationStatus,
   cancelTranslation,
+  getLlmSettings,
   type SearchBookHit,
   type StoredBookSummary,
   type ConvertedBookManifest,
   type ConvertedBookPageWindow,
   type MinerUProgressEvent,
+  type SearchIndexProgressEvent,
+  type SearchIndexSummary,
   type ZoteroSearchResult,
+  type LlmSettings,
+  type LlmProviderKind,
   type TranslationStatus,
 } from "@/core/library-api"
 import { readerChunkSearchResults } from "./search-results"
@@ -128,6 +135,12 @@ import { friendlyImportErrorMessage } from "./import-errors"
 
 const STORED_BOOK_INITIAL_PAGE_WINDOW = 48
 const ONBOARDING_SEEN_STORAGE_KEY = "focused-reading.onboarding.seen.v1"
+
+const llmProviderLabels: Record<LlmProviderKind, string> = {
+  deep_seek: "DeepSeek",
+  open_ai: "OpenAI",
+  anthropic: "Anthropic",
+}
 
 type ReaderShellProps = {
   phase: ReaderPhase
@@ -257,7 +270,7 @@ export function ReaderShell({
   interpretationHistory,
   parsedPages,
   parsedChunks,
-  parserEngine: _parserEngine,
+  parserEngine,
   coordinateMode,
   activeChunkId,
   textQuality,
@@ -300,6 +313,14 @@ export function ReaderShell({
   const inputRef = useRef<HTMLInputElement | null>(null)
   const originalPdfLoadingPathRef = useRef("")
   const loadingPageWindowsRef = useRef(new Set<string>())
+  const searchIndexProgressHandlerRef = useRef<(event: SearchIndexProgressEvent) => void>(() => undefined)
+  const searchIndexTaskRef = useRef<{
+    taskId: string
+    bookId: string
+    successPrefix: string
+    failureMessage: string
+    notify: boolean
+  } | null>(null)
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null)
   const [loadError, setLoadError] = useState("")
   const [pdfLoadStatus, setPdfLoadStatus] = useState<"idle" | "loading" | "error">("idle")
@@ -335,6 +356,8 @@ export function ReaderShell({
   const [translation, setTranslation] = useState<TranslationStatus | null>(null)
   const [translationBusy, setTranslationBusy] = useState(false)
   const [translationMessage, setTranslationMessage] = useState("")
+  const [llmSettings, setLlmSettings] = useState<LlmSettings | null>(null)
+  const [llmSettingsError, setLlmSettingsError] = useState("")
   const canUseLibrary = isTauriRuntime() || browserLibraryAvailable()
 
   useEffect(() => {
@@ -356,6 +379,50 @@ export function ReaderShell({
       void pdf?.cleanup()
     }
   }, [pdf])
+
+  useEffect(() => {
+    void refreshLlmSettings()
+  }, [])
+
+  async function refreshLlmSettings() {
+    if (!isTauriRuntime()) {
+      setLlmSettings(null)
+      setLlmSettingsError("")
+      return null
+    }
+
+    try {
+      const settings = await getLlmSettings()
+      setLlmSettings(settings)
+      setLlmSettingsError("")
+      return settings
+    } catch (error) {
+      setLlmSettings(null)
+      setLlmSettingsError(error instanceof Error ? error.message : "AI provider 读取失败")
+      return null
+    }
+  }
+
+  searchIndexProgressHandlerRef.current = handleSearchIndexProgress
+
+  useEffect(() => {
+    let cancelled = false
+    let unlisten: (() => void) | null = null
+    void listenSearchIndexProgress((event) => {
+      if (cancelled) return
+      searchIndexProgressHandlerRef.current(event)
+    }).then((cleanup) => {
+      if (cancelled) {
+        cleanup?.()
+      } else {
+        unlisten = cleanup
+      }
+    })
+    return () => {
+      cancelled = true
+      unlisten?.()
+    }
+  }, [])
 
   useEffect(() => {
     if (
@@ -611,6 +678,76 @@ export function ReaderShell({
     }
   }
 
+  async function handleTextBookImportAction() {
+    setPanelOpen("importMenuOpen", false)
+    if (!isTauriRuntime()) {
+      pushNotice("TXT / EPUB 导入需要桌面版读取本地文件")
+      return
+    }
+
+    setLoadError("")
+    setIsExtracting(true)
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: "Text / EPUB", extensions: ["txt", "text", "epub"] }],
+      })
+      if (!selected || Array.isArray(selected)) {
+        return
+      }
+
+      const filePath = selected
+      const title =
+        filePath
+          .split(/[\\/]/)
+          .pop()
+          ?.replace(/\.(txt|text|epub)$/i, "") || "电子书"
+      const cachedBook = await findBookBySourcePdf(filePath)
+      if (cachedBook?.parserEngine.startsWith("text-import-")) {
+        pushNotice("已在本地书库找到同源电子书，正在打开")
+        const restoredBookId = await handleOpenStoredBook(cachedBook.bookId)
+        if (restoredBookId) {
+          pushNotice("已从本地书库打开，无需重新导入")
+          return
+        }
+      }
+      pushNotice(`正在导入《${title}》`)
+      const saved = await importPlainBook(filePath, title)
+      const asset = await loadStoredBookInitialWindow(saved.bookId, 1)
+      await pdf?.cleanup()
+      setPdf(null)
+      setLoadedPdfPath("")
+      setOriginalPdfPath("")
+      setPdfLoadStatus("idle")
+      setPdfLoadError("")
+      onBookLoaded(asset.title, asset.totalPages)
+      onParsedDocument(asset.pages, asset.chunks, asset.text, asset.markdown, {
+        parserEngine: asset.parserEngine,
+        coordinateMode: asset.coordinateMode,
+        quality: asset.quality,
+        textPath: asset.textPath,
+        markdownPath: asset.markdownPath,
+        originalPdfPath: asset.originalPdfPath,
+        sourcePdfPath: asset.sourcePdfPath,
+        sourcePdfFingerprint: asset.sourcePdfFingerprint,
+        ...tldrMetadataFromAsset(asset),
+      })
+      setReaderView("text")
+      onLibraryStatus(
+        "indexed",
+        `已导入电子书：${saved.textCharCount} 字、${saved.chunkCount} 个 chunk`,
+        saved.bookId,
+      )
+      void refreshStoredBooks()
+      onPhaseChange("reading")
+      pushNotice("已导入 TXT / EPUB，可搜索、翻译和框选解读")
+    } catch (error) {
+      handleImportFailure(error, "电子书导入失败")
+    } finally {
+      setIsExtracting(false)
+    }
+  }
+
   async function handleZoteroSearch() {
     if (!isTauriRuntime()) {
       setZoteroStatus("error")
@@ -831,18 +968,47 @@ export function ReaderShell({
 
     pushNotice(progressMessage)
     try {
-      const summary = await rebuildSearchIndex(bookId)
-      if (notify) {
-        pushNotice(
-          summary.vectorCount > 0 && summary.embeddingMatchesConfig
-            ? `${successPrefix}：向量索引已就绪`
-            : `${successPrefix}：当前使用 FTS 文本检索`,
-        )
+      const taskId = createSearchIndexTaskId()
+      searchIndexTaskRef.current = {
+        taskId,
+        bookId,
+        successPrefix,
+        failureMessage,
+        notify,
       }
-      return summary
+      const task = await rebuildSearchIndexAsync(bookId, taskId)
+      searchIndexTaskRef.current = {
+        taskId: task.taskId,
+        bookId,
+        successPrefix,
+        failureMessage,
+        notify,
+      }
+      return task
     } catch {
       if (notify) pushNotice(failureMessage)
       return null
+    }
+  }
+
+  function handleSearchIndexProgress(event: SearchIndexProgressEvent) {
+    const activeTask = searchIndexTaskRef.current
+    if (!activeTask || event.taskId !== activeTask.taskId) {
+      return
+    }
+    if (event.stage === "completed") {
+      if (activeTask.notify && event.summary) {
+        pushNotice(searchIndexSuccessMessage(activeTask.successPrefix, event.summary))
+      }
+      searchIndexTaskRef.current = null
+      void refreshStoredBooks()
+      return
+    }
+    if (event.stage === "failed") {
+      if (activeTask.notify) {
+        pushNotice(activeTask.failureMessage)
+      }
+      searchIndexTaskRef.current = null
     }
   }
 
@@ -864,7 +1030,8 @@ export function ReaderShell({
       setLoadedPdfPath("")
       setPdfLoadStatus("idle")
       setPdfLoadError("")
-      setOriginalPdfPath(asset.originalPdfPath)
+      const hasPdfSource = assetHasPdfSource(asset)
+      setOriginalPdfPath(hasPdfSource ? asset.originalPdfPath : "")
       onBookLoaded(asset.title, asset.totalPages)
       onParsedDocument(asset.pages, asset.chunks, asset.text, asset.markdown, {
         parserEngine: asset.parserEngine,
@@ -880,7 +1047,7 @@ export function ReaderShell({
       const textCharCount = "textCharCount" in asset ? asset.textCharCount : asset.text.length
       onLibraryStatus(
         "indexed",
-        `已打开 Markdown 转换稿：${textCharCount} 字正文${asset.originalPdfPath ? "，原 PDF 可校对" : ""}`,
+        `已打开 Markdown 转换稿：${textCharCount} 字正文${hasPdfSource ? "，原 PDF 可校对" : ""}`,
         asset.bookId,
       )
       const restoredPage = clampPage(options.page ?? 1, asset.totalPages)
@@ -889,7 +1056,7 @@ export function ReaderShell({
         onZoomChange(options.zoom)
       }
       const restoredView =
-        options.readerView === "pdf" && asset.originalPdfPath
+        options.readerView === "pdf" && hasPdfSource
           ? "pdf"
           : options.readerView === "tldr"
             ? "tldr"
@@ -899,7 +1066,7 @@ export function ReaderShell({
       setReaderView(restoredView)
       if (!options.silent) {
         pushNotice(
-          asset.originalPdfPath
+          hasPdfSource
             ? "已打开转换稿；原 PDF 可用于校对坐标"
             : "已打开转换稿；搜索、解读和追问会直接使用转换文字",
         )
@@ -929,7 +1096,7 @@ export function ReaderShell({
         setOriginalPdfPath("")
         setPdfLoadStatus("idle")
         setPdfLoadError("")
-        onBookLoaded("未导入 PDF", 0)
+        onBookLoaded("未导入书籍", 0)
         onParsedDocument([], [], "", "", null)
         onLibraryStatus("idle", "")
         setReaderView("text")
@@ -1081,7 +1248,9 @@ export function ReaderShell({
 
   const canShowConvertedText = parsedPages.length > 0
   const canRead = Boolean(pdf && totalPages > 0)
-  const canOpenPdfView = totalPages > 0 && (canRead || (isTauriRuntime() && Boolean(originalPdfPath)))
+  const currentBookHasPdfSource = bookHasPdfParser(parserEngine) && originalPdfPath.toLowerCase().endsWith(".pdf")
+  const canOpenPdfView =
+    totalPages > 0 && (canRead || (isTauriRuntime() && currentBookHasPdfSource))
   const { safePage } = useReaderPageNavigation({
     currentPage,
     totalPages,
@@ -1106,6 +1275,16 @@ export function ReaderShell({
     ? "桌面版会使用完整多轮证据检索：检索本地文本索引、调用 LLM，并把引用回跳到转换稿。"
     : "浏览器版会使用已转换文本做本地兜底解读；完整 LLM 解读、云端向量检索、MinerU 云端解析和开发诊断请使用桌面版。"
   const importButtonLabel = isExtracting ? "导入中" : "导入"
+  const llmProviderText = llmSettings
+    ? `${llmProviderLabels[llmSettings.provider]} / ${llmSettings.model}`
+    : isTauriRuntime()
+      ? llmSettingsError || "provider 未读取"
+      : "本地兜底"
+  const llmProviderTitle = llmSettings
+    ? `当前 LLM provider: ${llmProviderLabels[llmSettings.provider]}；模型: ${llmSettings.model}`
+    : isTauriRuntime()
+      ? llmSettingsError || "尚未读取当前 LLM provider"
+      : "浏览器版不会读取本机 LLM provider"
   const searchResults = searchParsedPages(searchQuery, parsedPages)
   const localChunkResults = searchParsedChunks(searchQuery, parsedChunks).map((result) => ({
     ...result,
@@ -1470,6 +1649,14 @@ export function ReaderShell({
             <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
               <span>{totalPages > 0 ? readerViewLabel(readerView) : "等待导入"}</span>
               <Badge variant="secondary">{runtimeLabel}</Badge>
+              <Badge
+                variant="secondary"
+                className="max-w-[240px] truncate"
+                title={llmProviderTitle}
+                data-testid="llm-provider-badge"
+              >
+                AI: {llmProviderText}
+              </Badge>
             </div>
           </div>
         </div>
@@ -1575,7 +1762,7 @@ export function ReaderShell({
             aria-label="搜索"
             onClick={() => {
               togglePanel("searchOpen")
-              pushNotice(parsedPages.length > 0 ? "搜索面板已切换" : "PDF 转换成文本后才能搜索")
+              pushNotice(parsedPages.length > 0 ? "搜索面板已切换" : "导入书籍并生成转换稿后才能搜索")
             }}
           >
             <Search className="h-4 w-4" />
@@ -1599,6 +1786,10 @@ export function ReaderShell({
       <LlmSettingsPanel
         open={settingsOpen}
         onClose={() => setPanelOpen("settingsOpen", false)}
+        onLlmSettingsSaved={(settings) => {
+          setLlmSettings(settings)
+          setLlmSettingsError("")
+        }}
         onEmbeddingSettingsSaved={() => void handleEmbeddingSettingsSaved()}
       />
       <OnboardingFlow
@@ -1615,6 +1806,7 @@ export function ReaderShell({
         hasSampleBook={Boolean(onOpenSampleBook)}
         onClose={() => setPanelOpen("importMenuOpen", false)}
         onImportPdf={() => void handlePdfImportAction()}
+        onImportTextBook={() => void handleTextBookImportAction()}
         onImportZotero={() => {
           if (!isTauriRuntime()) {
             pushNotice("从 Zotero 导入需要桌面版读取本机 Zotero 库")
@@ -1751,7 +1943,7 @@ export function ReaderShell({
             ) : null}
             {readerView !== "pdf" && readerView !== "tldr" && readerOutline.length === 0 ? (
               <div className="min-h-0 flex-1 rounded-md border border-dashed bg-background px-3 py-8 text-center text-xs text-muted-foreground">
-                {parsedPages.length > 0 ? "未识别到章节标题目录" : "导入 PDF 后显示目录"}
+                {parsedPages.length > 0 ? "未识别到章节标题目录" : "导入书籍后显示目录"}
               </div>
             ) : null}
         </aside>
@@ -2141,6 +2333,24 @@ function coordinateModeIsApproximate(coordinateMode: string) {
   return coordinateMode
     .split(/[-_\s]+/)
     .some((part) => part.toLowerCase() === "approx" || part.toLowerCase() === "approximate")
+}
+
+function bookHasPdfParser(parserEngine: string) {
+  return !parserEngine.startsWith("text-import-")
+}
+
+function assetHasPdfSource(asset: { parserEngine: string; originalPdfPath: string }) {
+  return bookHasPdfParser(asset.parserEngine) && asset.originalPdfPath.toLowerCase().endsWith(".pdf")
+}
+
+function searchIndexSuccessMessage(successPrefix: string, summary: SearchIndexSummary) {
+  return summary.vectorCount > 0 && summary.embeddingMatchesConfig
+    ? `${successPrefix}：向量索引已就绪`
+    : `${successPrefix}：当前使用 FTS 文本检索`
+}
+
+function createSearchIndexTaskId() {
+  return `search-index-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 }
 
 type PdfUnavailablePanelProps = {

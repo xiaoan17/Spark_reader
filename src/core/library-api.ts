@@ -116,6 +116,20 @@ export type SearchIndexSummary = {
   ftsReady: boolean
 }
 
+export type SearchIndexTask = {
+  taskId: string
+  bookId: string
+}
+
+export type SearchIndexProgressEvent = {
+  taskId: string
+  bookId: string
+  stage: "started" | "completed" | "failed"
+  message: string
+  summary?: SearchIndexSummary | null
+  error?: CommandErrorPayload | null
+}
+
 export type StoredBookSummary = {
   bookId: string
   title: string
@@ -291,6 +305,13 @@ export type LlmSettings = {
   baseUrl: string
   model: string
   apiKeyConfigured: boolean
+  providers?: Partial<Record<LlmProviderKind, LlmProviderSettings>>
+}
+
+export type LlmProviderSettings = {
+  baseUrl: string
+  model: string
+  apiKeyConfigured: boolean
 }
 
 export type SaveLlmSettingsRequest = {
@@ -311,6 +332,7 @@ export type EmbeddingSettings = {
   baseUrl: string
   model: string
   expectedDimension?: number | null
+  batchSize: number
   apiKeyConfigured: boolean
   enabled: boolean
 }
@@ -321,6 +343,7 @@ export type SaveEmbeddingSettingsRequest = {
   baseUrl: string
   model: string
   expectedDimension?: number | null
+  batchSize?: number | null
   enabled: boolean
 }
 
@@ -469,6 +492,10 @@ export async function importMineruOutput(outputDir: string, title?: string | nul
   return invokeCommand<SaveParsedBookResponse>("import_mineru_output", { outputDir, title })
 }
 
+export async function importPlainBook(filePath: string, title?: string | null) {
+  return invokeCommand<SaveParsedBookResponse>("import_plain_book", { filePath, title })
+}
+
 export async function importPdfWithMineru(
   pdfPath: string,
   options?: MinerUParseOptions,
@@ -488,6 +515,17 @@ export async function listenMineruProgress(
   })
 }
 
+export async function listenSearchIndexProgress(
+  handler: (event: SearchIndexProgressEvent) => void,
+): Promise<UnlistenFn | null> {
+  if (!isTauriRuntime()) {
+    return null
+  }
+  return listen<SearchIndexProgressEvent>("search-index://progress", (event) => {
+    handler(event.payload)
+  })
+}
+
 export async function readPdfFile(pdfPath: string) {
   return invokeCommand<number[]>("read_pdf_file", { pdfPath })
 }
@@ -502,6 +540,10 @@ export async function searchBook(bookId: string, query: string, limit = 12) {
 
 export async function rebuildSearchIndex(bookId: string) {
   return invokeCommand<SearchIndexSummary>("rebuild_search_index", { bookId })
+}
+
+export async function rebuildSearchIndexAsync(bookId: string, taskId?: string) {
+  return invokeCommand<SearchIndexTask>("rebuild_search_index_async", { bookId, taskId })
 }
 
 export async function searchIndexSummary(bookId: string) {
@@ -611,6 +653,12 @@ export async function testLlmConnection() {
   return invokeCommand<LlmConnectionTestResponse>("test_llm_connection")
 }
 
+export async function testLlmConnectionWithSettings(request: SaveLlmSettingsRequest) {
+  return invokeCommand<LlmConnectionTestResponse>("test_llm_connection_with_settings", {
+    request,
+  })
+}
+
 export async function getEmbeddingSettings() {
   return invokeCommand<EmbeddingSettings>("get_embedding_settings")
 }
@@ -655,8 +703,8 @@ export async function saveInterpretation(request: SaveInterpretationRequest) {
   return invokeCommand<SavedInterpretation>("save_interpretation", { request })
 }
 
-export async function listInterpretations(bookId: string) {
-  return invokeCommand<SavedInterpretation[]>("list_interpretations", { bookId })
+export async function listInterpretations(bookId: string, limit = 50, offset = 0) {
+  return invokeCommand<SavedInterpretation[]>("list_interpretations", { bookId, limit, offset })
 }
 
 export function searchHitToChunk(hit: SearchBookHit): ParsedChunk {

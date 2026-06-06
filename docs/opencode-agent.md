@@ -1,5 +1,10 @@
 # OpenCode Reader Agent
 
+> Status: experimental and not wired into the shipped product. The current
+> product RAG loop runs inside the Rust process through `src-tauri/src/interpretation.rs`;
+> this OpenCode host is not started by Tauri, is not bundled in release builds,
+> and has no Rust book-tool HTTP server connected today.
+
 This project embeds OpenCode as a constrained agent host for selected-passage PDF interpretation.
 
 ## Isolation

@@ -211,8 +211,7 @@ fn representative_tldr_hits(structure: &[storage::SearchHit]) -> Vec<&storage::S
 }
 
 fn clean_tldr_text(text: &str) -> String {
-    text
-        .lines()
+    text.lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
@@ -3089,6 +3088,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn interpret_returns_grounded_fallback_when_llm_is_unconfigured() {
         let _guard = crate::TEST_ENV_LOCK.lock().expect("env lock");
         let config_dir = std::env::temp_dir().join(format!(
@@ -3202,6 +3202,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn backend_reading_chain_saves_searches_interprets_and_persists_history() {
         let _guard = crate::TEST_ENV_LOCK.lock().expect("env lock");
         let config_dir =

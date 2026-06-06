@@ -11,6 +11,7 @@ const meta = {
     hasSampleBook: true,
     onClose: () => undefined,
     onImportPdf: () => undefined,
+    onImportTextBook: () => undefined,
     onImportZotero: () => undefined,
     onImportMineruOutput: () => undefined,
     onOpenSample: () => undefined,

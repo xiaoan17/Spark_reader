@@ -9,7 +9,10 @@ use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 
 use crate::{
-    coordinates::{mineru_bbox_to_normalized, PageSize, COORDINATE_VERSION},
+    coordinates::{
+        mineru_bbox_to_normalized, top_left_points_to_normalized_with_rotation, PageSize,
+        COORDINATE_VERSION,
+    },
     storage::{NormalizedRectInput, ParsedChunkInput, ParsedPageInput, TextQuality},
 };
 
@@ -460,7 +463,7 @@ fn parse_layout_text_document(
     layout: &MinerULayout,
     markdown: &str,
 ) -> Result<MinerUParsedDocument> {
-    let page_markdown = split_markdown_by_pages(&markdown, layout.pdf_info.len());
+    let page_markdown = split_markdown_by_pages(markdown, layout.pdf_info.len());
 
     let mut pages = Vec::new();
     let mut chunks = Vec::new();
@@ -944,11 +947,11 @@ fn collect_page_blocks(
         if text.trim().is_empty() {
             continue;
         }
-        let rect = mineru_bbox_to_normalized(page.page_idx, block.bbox, page_size)
+        let (rect, approximate_angle) = normalized_block_rect(page, block, page_size)
             .with_context(|| format!("invalid MinerU bbox on page {}", page.page_idx + 1))?;
         blocks.push(PageBlock {
             text,
-            approximate_angle: block_has_non_zero_angle(block),
+            approximate_angle,
             rect: NormalizedRectInput {
                 page_index: rect.page_index,
                 x0: rect.x0,
@@ -959,6 +962,26 @@ fn collect_page_blocks(
         });
     }
     Ok(blocks)
+}
+
+fn normalized_block_rect(
+    page: &MinerUPage,
+    block: &MinerUBlock,
+    page_size: PageSize,
+) -> Result<(crate::coordinates::NormalizedPageRect, bool)> {
+    let Some(rotation) = right_angle_rotation(block.angle) else {
+        // MinerU can return arbitrary text angles. NormalizedPageRect is axis-aligned,
+        // so non-right-angle text remains a best-effort bbox and is surfaced as approximate.
+        let rect = mineru_bbox_to_normalized(page.page_idx, block.bbox, page_size)?;
+        return Ok((rect, block_has_non_right_angle(block)));
+    };
+    let rect = top_left_points_to_normalized_with_rotation(
+        page.page_idx,
+        block.bbox,
+        page_size,
+        rotation,
+    )?;
+    Ok((rect, false))
 }
 
 #[derive(Debug)]
@@ -1195,6 +1218,21 @@ fn block_has_non_zero_angle(block: &MinerUBlock) -> bool {
     block
         .angle
         .is_some_and(|angle| angle.is_finite() && angle.abs() > ANGLE_EPSILON)
+}
+
+fn block_has_non_right_angle(block: &MinerUBlock) -> bool {
+    block_has_non_zero_angle(block) && right_angle_rotation(block.angle).is_none()
+}
+
+fn right_angle_rotation(angle: Option<f64>) -> Option<i32> {
+    let angle = angle?;
+    if !angle.is_finite() {
+        return None;
+    }
+    let normalized = angle.rem_euclid(360.0);
+    [0, 90, 180, 270]
+        .into_iter()
+        .find(|&candidate| (normalized - f64::from(candidate)).abs() <= ANGLE_EPSILON)
 }
 
 fn mineru_coordinate_mode(has_approximate_coordinates: bool) -> &'static str {
@@ -1771,6 +1809,53 @@ mod tests {
         assert_eq!(parsed.chunks[0].rects.len(), 1);
         assert_eq!(parsed.chunks[0].rects[0].x0, 60.0 / 600.0);
         assert_eq!(parsed.chunks[0].rects[0].y0, 80.0 / 800.0);
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn applies_mineru_right_angle_rotation_precisely() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "focused-reading-mineru-parser-right-angle-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+        fs::write(
+            temp_dir.join("layout.json"),
+            r#"{
+              "pdf_info": [
+                {
+                  "page_idx": 0,
+                  "page_size": [200, 400],
+                  "para_blocks": [
+                    {
+                      "bbox": [10, 20, 110, 120],
+                      "angle": 90,
+                      "type": "text",
+                      "lines": [
+                        {
+                          "spans": [
+                            {"type": "text", "content": "直角旋转文本"}
+                          ]
+                        }
+                      ]
+                    }
+                  ],
+                  "preproc_blocks": []
+                }
+              ]
+            }"#,
+        )
+        .unwrap();
+        fs::write(temp_dir.join("full.md"), "直角旋转文本").unwrap();
+
+        let parsed = parse_mineru_output_dir(&temp_dir).unwrap();
+        assert_eq!(parsed.coordinate_mode, "normalized-page-rects");
+        assert_eq!(parsed.chunks[0].rects.len(), 1);
+        assert_eq!(parsed.chunks[0].rects[0].x0, 280.0 / 400.0);
+        assert_eq!(parsed.chunks[0].rects[0].y0, 10.0 / 200.0);
+        assert_eq!(parsed.chunks[0].rects[0].x1, 380.0 / 400.0);
+        assert_eq!(parsed.chunks[0].rects[0].y1, 110.0 / 200.0);
         let _ = fs::remove_dir_all(&temp_dir);
     }
 

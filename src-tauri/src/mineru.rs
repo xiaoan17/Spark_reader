@@ -6,7 +6,10 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
+use reqwest::{
+    header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE},
+    Url,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use thiserror::Error;
@@ -119,6 +122,10 @@ pub enum MinerUError {
     Timeout,
     #[error("unsafe zip entry path")]
     UnsafeZipPath,
+    #[error("unsafe MinerU zip download URL: {0}")]
+    UnsafeZipUrl(String),
+    #[error("MinerU zip response has unexpected Content-Type: {0}")]
+    UnexpectedZipContentType(String),
 }
 
 #[derive(Debug, Deserialize)]
@@ -494,13 +501,72 @@ impl MinerUProgressEvent {
 }
 
 pub async fn download_and_extract_zip(url: &str, output_dir: &Path) -> Result<(), MinerUError> {
+    validate_mineru_zip_url(url)?;
     let client = mineru_http_client(MINERU_UPLOAD_TIMEOUT)?;
-    let bytes = client.get(url).send().await?.bytes().await?;
+    let response = client.get(url).send().await?.error_for_status()?;
+    let content_type = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    if !zip_content_type_is_allowed(url, &content_type) {
+        return Err(MinerUError::UnexpectedZipContentType(content_type));
+    }
+    let bytes = response.bytes().await?;
     extract_zip_bytes(&bytes, output_dir)
+}
+
+fn validate_mineru_zip_url(url: &str) -> Result<(), MinerUError> {
+    let parsed = Url::parse(url).map_err(|err| MinerUError::UnsafeZipUrl(err.to_string()))?;
+    if parsed.scheme() != "https" {
+        return Err(MinerUError::UnsafeZipUrl(
+            "zip download URL must use https".to_string(),
+        ));
+    }
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| MinerUError::UnsafeZipUrl("zip download URL has no host".to_string()))?;
+    if !mineru_zip_host_is_allowed(host) {
+        return Err(MinerUError::UnsafeZipUrl(format!(
+            "zip download host is not allowed: {host}"
+        )));
+    }
+    Ok(())
+}
+
+fn mineru_zip_host_is_allowed(host: &str) -> bool {
+    let normalized = host.to_ascii_lowercase();
+    if normalized == "mineru.net" || normalized.ends_with(".mineru.net") {
+        return true;
+    }
+    std::env::var("MINERU_ALLOWED_ZIP_HOSTS")
+        .ok()
+        .map(|hosts| {
+            hosts.split(',').any(|allowed| {
+                let allowed = allowed.trim().trim_start_matches('.').to_ascii_lowercase();
+                !allowed.is_empty()
+                    && (normalized == allowed || normalized.ends_with(&format!(".{allowed}")))
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn zip_content_type_is_allowed(url: &str, content_type: &str) -> bool {
+    let content_type = content_type.to_ascii_lowercase();
+    content_type.contains("zip")
+        || content_type.contains("octet-stream")
+        || url
+            .to_ascii_lowercase()
+            .split('?')
+            .next()
+            .unwrap_or("")
+            .ends_with(".zip")
 }
 
 fn mineru_http_client(timeout: Duration) -> Result<reqwest::Client, MinerUError> {
     reqwest::Client::builder()
+        .https_only(true)
         .connect_timeout(MINERU_CONNECT_TIMEOUT)
         .timeout(timeout)
         .build()

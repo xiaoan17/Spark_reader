@@ -3,8 +3,10 @@ use tauri::{command, AppHandle, Emitter, Manager};
 
 use crate::{
     coordinates::COORDINATE_VERSION, embeddings, interpretation, llm, mineru, mineru_parser,
-    product_self_check, storage, translation, zotero,
+    plain_book_parser, product_self_check, storage, translation, zotero,
 };
+
+pub const SEARCH_INDEX_PROGRESS_EVENT: &str = "search-index://progress";
 
 #[derive(Debug, Serialize)]
 pub struct HealthResponse {
@@ -25,6 +27,32 @@ pub enum BookAssetKind {
 #[serde(rename_all = "camelCase")]
 pub struct OpenBookAssetResponse {
     pub path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchIndexTaskResponse {
+    pub task_id: String,
+    pub book_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchIndexProgressEvent {
+    pub task_id: String,
+    pub book_id: String,
+    pub stage: SearchIndexProgressStage,
+    pub message: String,
+    pub summary: Option<storage::SearchIndexSummary>,
+    pub error: Option<CommandError>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SearchIndexProgressStage {
+    Started,
+    Completed,
+    Failed,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -87,6 +115,14 @@ impl From<&str> for CommandError {
 
 fn command_error(error: impl std::fmt::Display) -> CommandError {
     CommandError::from_message(error.to_string())
+}
+
+fn generate_task_id(prefix: &str) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    format!("{prefix}-{now}")
 }
 
 fn classify_command_error(message: &str) -> (&'static str, Option<&'static str>) {
@@ -170,6 +206,15 @@ pub fn coordinate_version() -> u32 {
 #[command]
 pub async fn test_llm_connection() -> CommandResult<llm::ConnectionTestResponse> {
     llm::test_connection().await.map_err(command_error)
+}
+
+#[command]
+pub async fn test_llm_connection_with_settings(
+    request: crate::config::SaveLlmSettingsRequest,
+) -> CommandResult<llm::ConnectionTestResponse> {
+    llm::test_connection_with_settings(request)
+        .await
+        .map_err(command_error)
 }
 
 #[command]
@@ -340,6 +385,49 @@ pub async fn import_pdf_with_mineru(
         page_count,
     )
     .await
+}
+
+#[command]
+pub fn import_plain_book(
+    app: AppHandle,
+    file_path: String,
+    title: Option<String>,
+) -> CommandResult<storage::SaveBookResponse> {
+    let path = std::path::Path::new(&file_path);
+    if !plain_book_parser::supported_plain_book_extension(path) {
+        return Err(CommandError::validation(
+            "只支持导入 TXT 文本和 EPUB 电子书",
+        ));
+    }
+    let db_path = library_db_path(&app)?;
+    if let Some(cached) =
+        storage::find_book_by_source_pdf_with_engine(&db_path, path, |parser_engine| {
+            parser_engine == "text-import-txt" || parser_engine == "text-import-epub"
+        })
+        .map_err(command_error)?
+    {
+        return Ok(storage::SaveBookResponse::from_cached_book(cached));
+    }
+    let parsed = plain_book_parser::parse_plain_book(path, title).map_err(command_error)?;
+    storage::save_book_with_options(
+        &db_path,
+        storage::SaveBookRequest {
+            title: parsed.title,
+            total_pages: parsed.pages.len() as u32,
+            parser_engine: parsed.engine,
+            coordinate_mode: parsed.coordinate_mode,
+            quality: Some(parsed.quality),
+            source_pdf_path: Some(file_path),
+            source_asset_dir: None,
+            source_asset_dirs: Vec::new(),
+            pages: parsed.pages,
+            chunks: parsed.chunks,
+        },
+        storage::SaveBookOptions {
+            skip_embedding_rebuild: true,
+        },
+    )
+    .map_err(command_error)
 }
 
 async fn import_pdf_with_mineru_impl(
@@ -549,6 +637,62 @@ pub fn rebuild_search_index(
 }
 
 #[command]
+pub fn rebuild_search_index_async(
+    app: AppHandle,
+    book_id: String,
+    task_id: Option<String>,
+) -> CommandResult<SearchIndexTaskResponse> {
+    let db_path = library_db_path(&app)?;
+    let task_id = task_id
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| generate_task_id("search-index"));
+    let task_book_id = book_id.clone();
+    let task_id_for_thread = task_id.clone();
+    std::thread::spawn(move || {
+        let _ = app.emit(
+            SEARCH_INDEX_PROGRESS_EVENT,
+            SearchIndexProgressEvent {
+                task_id: task_id_for_thread.clone(),
+                book_id: task_book_id.clone(),
+                stage: SearchIndexProgressStage::Started,
+                message: "正在后台重建当前书索引".to_string(),
+                summary: None,
+                error: None,
+            },
+        );
+        match storage::rebuild_search_index(&db_path, &task_book_id) {
+            Ok(summary) => {
+                let _ = app.emit(
+                    SEARCH_INDEX_PROGRESS_EVENT,
+                    SearchIndexProgressEvent {
+                        task_id: task_id_for_thread,
+                        book_id: task_book_id,
+                        stage: SearchIndexProgressStage::Completed,
+                        message: "当前书索引已重建".to_string(),
+                        summary: Some(summary),
+                        error: None,
+                    },
+                );
+            }
+            Err(err) => {
+                let _ = app.emit(
+                    SEARCH_INDEX_PROGRESS_EVENT,
+                    SearchIndexProgressEvent {
+                        task_id: task_id_for_thread,
+                        book_id: task_book_id,
+                        stage: SearchIndexProgressStage::Failed,
+                        message: "当前书索引重建失败".to_string(),
+                        summary: None,
+                        error: Some(command_error(err)),
+                    },
+                );
+            }
+        }
+    });
+    Ok(SearchIndexTaskResponse { task_id, book_id })
+}
+
+#[command]
 pub fn search_index_summary(
     app: AppHandle,
     book_id: String,
@@ -674,9 +818,11 @@ pub fn save_interpretation(
 pub fn list_interpretations(
     app: AppHandle,
     book_id: String,
+    limit: Option<u32>,
+    offset: Option<u32>,
 ) -> CommandResult<Vec<storage::SavedInterpretation>> {
     let db_path = library_db_path(&app)?;
-    storage::list_interpretations(&db_path, &book_id).map_err(command_error)
+    storage::list_interpretations_page(&db_path, &book_id, limit, offset).map_err(command_error)
 }
 
 #[command]

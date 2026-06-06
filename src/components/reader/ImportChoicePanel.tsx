@@ -1,4 +1,4 @@
-import { BookOpen, FolderOpen, Library, Upload } from "lucide-react"
+import { BookOpen, FileText, FolderOpen, Library, Upload } from "lucide-react"
 import type { ReactNode } from "react"
 import { Button } from "@/components/ui/button"
 
@@ -9,6 +9,7 @@ type ImportChoicePanelProps = {
   hasSampleBook: boolean
   onClose: () => void
   onImportPdf: () => void
+  onImportTextBook: () => void
   onImportZotero: () => void
   onImportMineruOutput: () => void
   onOpenSample: () => void
@@ -21,6 +22,7 @@ export function ImportChoicePanel({
   hasSampleBook,
   onClose,
   onImportPdf,
+  onImportTextBook,
   onImportZotero,
   onImportMineruOutput,
   onOpenSample,
@@ -36,7 +38,7 @@ export function ImportChoicePanel({
           <div>
             <div className="text-base font-semibold">选择导入方式</div>
             <div className="mt-1 text-xs text-muted-foreground">
-              先打开示例书体验框选，也可以导入本地 PDF、Zotero 文献或 MinerU 输出目录。
+              先打开示例书体验框选，也可以导入本地 PDF、TXT / EPUB 电子书、Zotero 文献或 MinerU 输出目录。
             </div>
           </div>
           <Button size="sm" variant="ghost" onClick={onClose}>
@@ -51,6 +53,15 @@ export function ImportChoicePanel({
             description={isDesktop ? "选择文件后上传 MinerU 云端解析。" : "浏览器版会在本地抽取可检索文本。"}
             disabled={isBusy}
             onClick={onImportPdf}
+          />
+          <ImportChoiceButton
+            icon={<FileText className="h-4 w-4" />}
+            title="TXT / EPUB"
+            ariaLabel="导入 TXT 或 EPUB 电子书"
+            description={isDesktop ? "本地解析为可检索转换稿，不消耗 MinerU 配额。" : "桌面版可导入 TXT / EPUB 电子书。"}
+            tooltip={isDesktop ? undefined : "此功能需要桌面版"}
+            disabled={isBusy || !isDesktop}
+            onClick={onImportTextBook}
           />
           <ImportChoiceButton
             icon={<Library className="h-4 w-4" />}

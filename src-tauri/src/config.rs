@@ -1,7 +1,11 @@
 use std::{
+    collections::BTreeMap,
     env, fs,
     path::{Path, PathBuf},
 };
+
+#[cfg(not(unix))]
+use std::process::Command;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -13,6 +17,9 @@ const DEFAULT_EMBEDDING_PROVIDER: &str = "siliconflow";
 const DEFAULT_EMBEDDING_BASE_URL: &str = "https://api.siliconflow.cn/v1/embeddings";
 const DEFAULT_EMBEDDING_MODEL: &str = "Qwen/Qwen3-Embedding-4B";
 const DEFAULT_EMBEDDING_DIMENSION: usize = 2560;
+pub const DEFAULT_EMBEDDING_BATCH_SIZE: usize = 64;
+const MIN_EMBEDDING_BATCH_SIZE: usize = 1;
+const MAX_EMBEDDING_BATCH_SIZE: usize = 256;
 const APP_CONFIG_DIR_NAME: &str = "com.anbc.focused-reading";
 const SETTINGS_FILE_NAME: &str = "llm-settings.json";
 const DOTENV_FILE_NAME: &str = ".env";
@@ -60,6 +67,7 @@ pub struct EmbeddingConfig {
     pub base_url: String,
     pub model: String,
     pub expected_dimension: Option<usize>,
+    pub batch_size: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,6 +77,7 @@ pub struct EmbeddingSettingsResponse {
     pub base_url: String,
     pub model: String,
     pub expected_dimension: Option<usize>,
+    pub batch_size: usize,
     pub api_key_configured: bool,
     pub enabled: bool,
 }
@@ -81,6 +90,7 @@ pub struct SaveEmbeddingSettingsRequest {
     pub base_url: String,
     pub model: String,
     pub expected_dimension: Option<usize>,
+    pub batch_size: Option<usize>,
     pub enabled: bool,
 }
 
@@ -88,6 +98,15 @@ pub struct SaveEmbeddingSettingsRequest {
 #[serde(rename_all = "camelCase")]
 pub struct LlmSettingsResponse {
     pub provider: LlmProviderKind,
+    pub base_url: String,
+    pub model: String,
+    pub api_key_configured: bool,
+    pub providers: BTreeMap<String, LlmProviderSettingsResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LlmProviderSettingsResponse {
     pub base_url: String,
     pub model: String,
     pub api_key_configured: bool,
@@ -133,6 +152,7 @@ struct StoredEmbeddingSettings {
     base_url: Option<String>,
     model: Option<String>,
     expected_dimension: Option<usize>,
+    batch_size: Option<usize>,
     enabled: Option<bool>,
 }
 
@@ -182,49 +202,31 @@ pub fn load_dotenv() {
 pub fn llm_config() -> Result<LlmConfig, ConfigError> {
     load_dotenv();
     let stored = load_stored_settings()?;
+    let provider = active_llm_provider(&stored);
+    llm_config_for_provider(&stored, provider)
+}
 
-    let provider = stored.provider.unwrap_or_else(|| {
-        env::var("LLM_PROVIDER")
-            .ok()
-            .and_then(|value| parse_provider(&value).ok())
-            .unwrap_or(LlmProviderKind::DeepSeek)
-    });
+pub fn llm_config_from_request(request: &SaveLlmSettingsRequest) -> Result<LlmConfig, ConfigError> {
+    load_dotenv();
+    let stored = load_stored_settings()?;
+    let saved = provider_settings(&stored, request.provider);
+    let request_key = request.api_key.as_deref().unwrap_or_default().trim();
+    let api_key = if request_key.is_empty() {
+        env_key(request.provider)?
+    } else {
+        request_key.to_string()
+    };
+    let base_url = normalize_base_url(&request.base_url)
+        .unwrap_or_else(|| active_base_url(saved, request.provider));
+    let model =
+        normalize_model(&request.model).unwrap_or_else(|| active_model(saved, request.provider));
 
-    match provider {
-        LlmProviderKind::DeepSeek => Ok(LlmConfig {
-            provider: LlmProviderKind::DeepSeek,
-            api_key: env_key(LlmProviderKind::DeepSeek)?,
-            base_url: stored.deepseek.base_url.unwrap_or_else(|| {
-                env::var("DEEPSEEK_BASE_URL")
-                    .unwrap_or_else(|_| "https://api.deepseek.com".to_string())
-            }),
-            model: stored.deepseek.model.unwrap_or_else(|| {
-                env::var("DEEPSEEK_MODEL").unwrap_or_else(|_| "deepseek-v4-flash".to_string())
-            }),
-        }),
-        LlmProviderKind::OpenAi => Ok(LlmConfig {
-            provider: LlmProviderKind::OpenAi,
-            api_key: env_key(LlmProviderKind::OpenAi)?,
-            base_url: stored.openai.base_url.unwrap_or_else(|| {
-                env::var("OPENAI_BASE_URL")
-                    .unwrap_or_else(|_| "https://api.openai.com/v1".to_string())
-            }),
-            model: stored.openai.model.unwrap_or_else(|| {
-                env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-5-mini".to_string())
-            }),
-        }),
-        LlmProviderKind::Anthropic => Ok(LlmConfig {
-            provider: LlmProviderKind::Anthropic,
-            api_key: env_key(LlmProviderKind::Anthropic)?,
-            base_url: stored.anthropic.base_url.unwrap_or_else(|| {
-                env::var("ANTHROPIC_BASE_URL")
-                    .unwrap_or_else(|_| "https://api.anthropic.com".to_string())
-            }),
-            model: stored.anthropic.model.unwrap_or_else(|| {
-                env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-4-5-sonnet".to_string())
-            }),
-        }),
-    }
+    Ok(LlmConfig {
+        provider: request.provider,
+        api_key,
+        base_url,
+        model,
+    })
 }
 
 pub fn mineru_config() -> Result<MinerUConfig, ConfigError> {
@@ -279,6 +281,7 @@ pub fn embedding_config() -> Result<Option<EmbeddingConfig>, ConfigError> {
     let base_url = active_embedding_base_url(&stored.embedding);
     let model = active_embedding_model(&stored.embedding)?;
     let expected_dimension = active_embedding_dimension(&stored.embedding)?;
+    let batch_size = active_embedding_batch_size(&stored.embedding);
 
     Ok(Some(EmbeddingConfig {
         provider,
@@ -286,6 +289,7 @@ pub fn embedding_config() -> Result<Option<EmbeddingConfig>, ConfigError> {
         base_url,
         model,
         expected_dimension,
+        batch_size,
     }))
 }
 
@@ -301,6 +305,7 @@ pub fn get_embedding_settings() -> Result<EmbeddingSettingsResponse, ConfigError
         base_url: active_embedding_base_url(&stored.embedding),
         model: active_embedding_model(&stored.embedding).unwrap_or_default(),
         expected_dimension: active_embedding_dimension(&stored.embedding)?,
+        batch_size: active_embedding_batch_size(&stored.embedding),
         api_key_configured: required_env("EMBEDDING_API_KEY").is_ok(),
         enabled,
     })
@@ -328,6 +333,9 @@ pub fn save_embedding_settings(
     stored.embedding.expected_dimension = request
         .expected_dimension
         .filter(|dimension| *dimension > 0);
+    stored.embedding.batch_size = Some(clamp_embedding_batch_size(
+        request.batch_size.unwrap_or(DEFAULT_EMBEDDING_BATCH_SIZE),
+    ));
 
     write_stored_settings(&stored)?;
     get_embedding_settings()
@@ -336,12 +344,7 @@ pub fn save_embedding_settings(
 pub fn get_llm_settings() -> Result<LlmSettingsResponse, ConfigError> {
     load_dotenv();
     let stored = load_stored_settings()?;
-    let provider = stored.provider.unwrap_or_else(|| {
-        env::var("LLM_PROVIDER")
-            .ok()
-            .and_then(|value| parse_provider(&value).ok())
-            .unwrap_or(LlmProviderKind::DeepSeek)
-    });
+    let provider = active_llm_provider(&stored);
     let active = provider_settings(&stored, provider);
 
     Ok(LlmSettingsResponse {
@@ -349,6 +352,7 @@ pub fn get_llm_settings() -> Result<LlmSettingsResponse, ConfigError> {
         base_url: active_base_url(active, provider),
         model: active_model(active, provider),
         api_key_configured: env_key(provider).is_ok(),
+        providers: all_provider_settings(&stored),
     })
 }
 
@@ -363,9 +367,13 @@ pub fn save_llm_settings(
     if !trimmed_key.is_empty() {
         save_secret_to_dotenv(env_key_name(request.provider), &trimmed_key)?;
     }
+    let base_url = normalize_base_url(&request.base_url)
+        .unwrap_or_else(|| active_base_url(target, request.provider));
+    let model =
+        normalize_model(&request.model).unwrap_or_else(|| active_model(target, request.provider));
     target.api_key = None;
-    target.base_url = Some(request.base_url.trim().to_string());
-    target.model = Some(request.model.trim().to_string());
+    target.base_url = Some(base_url);
+    target.model = Some(model);
 
     write_stored_settings(&stored)?;
 
@@ -473,10 +481,32 @@ fn legacy_settings_path() -> Option<PathBuf> {
         .map(|dir| dir.join("data").join(SETTINGS_FILE_NAME))
 }
 
+fn active_llm_provider(stored: &StoredLlmSettings) -> LlmProviderKind {
+    stored.provider.unwrap_or_else(|| {
+        env::var("LLM_PROVIDER")
+            .ok()
+            .and_then(|value| parse_provider(&value).ok())
+            .unwrap_or(LlmProviderKind::DeepSeek)
+    })
+}
+
+fn llm_config_for_provider(
+    stored: &StoredLlmSettings,
+    provider: LlmProviderKind,
+) -> Result<LlmConfig, ConfigError> {
+    let settings = provider_settings(stored, provider);
+    Ok(LlmConfig {
+        provider,
+        api_key: env_key(provider)?,
+        base_url: active_base_url(settings, provider),
+        model: active_model(settings, provider),
+    })
+}
+
 fn parse_provider(value: &str) -> Result<LlmProviderKind, ConfigError> {
-    match value {
-        "deepseek" => Ok(LlmProviderKind::DeepSeek),
-        "openai" => Ok(LlmProviderKind::OpenAi),
+    match value.trim() {
+        "deepseek" | "deep_seek" => Ok(LlmProviderKind::DeepSeek),
+        "openai" | "open_ai" => Ok(LlmProviderKind::OpenAi),
         "anthropic" => Ok(LlmProviderKind::Anthropic),
         other => Err(ConfigError::UnsupportedProvider(other.to_string())),
     }
@@ -505,30 +535,85 @@ fn provider_settings_mut(
 }
 
 fn active_base_url(settings: &StoredProviderSettings, provider: LlmProviderKind) -> String {
-    settings.base_url.clone().unwrap_or_else(|| match provider {
-        LlmProviderKind::DeepSeek => {
-            env::var("DEEPSEEK_BASE_URL").unwrap_or_else(|_| "https://api.deepseek.com".to_string())
-        }
-        LlmProviderKind::OpenAi => {
-            env::var("OPENAI_BASE_URL").unwrap_or_else(|_| "https://api.openai.com/v1".to_string())
-        }
-        LlmProviderKind::Anthropic => env::var("ANTHROPIC_BASE_URL")
-            .unwrap_or_else(|_| "https://api.anthropic.com".to_string()),
-    })
+    settings
+        .base_url
+        .as_deref()
+        .and_then(normalize_base_url)
+        .unwrap_or_else(|| match provider {
+            LlmProviderKind::DeepSeek => env::var("DEEPSEEK_BASE_URL")
+                .unwrap_or_else(|_| "https://api.deepseek.com".to_string()),
+            LlmProviderKind::OpenAi => env::var("OPENAI_BASE_URL")
+                .unwrap_or_else(|_| "https://api.openai.com/v1".to_string()),
+            LlmProviderKind::Anthropic => env::var("ANTHROPIC_BASE_URL")
+                .unwrap_or_else(|_| "https://api.anthropic.com".to_string()),
+        })
 }
 
 fn active_model(settings: &StoredProviderSettings, provider: LlmProviderKind) -> String {
-    settings.model.clone().unwrap_or_else(|| match provider {
-        LlmProviderKind::DeepSeek => {
-            env::var("DEEPSEEK_MODEL").unwrap_or_else(|_| "deepseek-v4-flash".to_string())
-        }
-        LlmProviderKind::OpenAi => {
-            env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-5-mini".to_string())
-        }
-        LlmProviderKind::Anthropic => {
-            env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-4-5-sonnet".to_string())
-        }
+    settings
+        .model
+        .as_deref()
+        .and_then(normalize_model)
+        .unwrap_or_else(|| match provider {
+            LlmProviderKind::DeepSeek => {
+                env::var("DEEPSEEK_MODEL").unwrap_or_else(|_| "deepseek-v4-flash".to_string())
+            }
+            LlmProviderKind::OpenAi => {
+                env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-5-mini".to_string())
+            }
+            LlmProviderKind::Anthropic => {
+                env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-sonnet-4-5".to_string())
+            }
+        })
+}
+
+fn all_provider_settings(
+    stored: &StoredLlmSettings,
+) -> BTreeMap<String, LlmProviderSettingsResponse> {
+    [
+        LlmProviderKind::DeepSeek,
+        LlmProviderKind::OpenAi,
+        LlmProviderKind::Anthropic,
+    ]
+    .into_iter()
+    .map(|provider| {
+        let settings = provider_settings(stored, provider);
+        (
+            provider_key(provider).to_string(),
+            LlmProviderSettingsResponse {
+                base_url: active_base_url(settings, provider),
+                model: active_model(settings, provider),
+                api_key_configured: env_key(provider).is_ok(),
+            },
+        )
     })
+    .collect()
+}
+
+fn provider_key(provider: LlmProviderKind) -> &'static str {
+    match provider {
+        LlmProviderKind::DeepSeek => "deep_seek",
+        LlmProviderKind::OpenAi => "open_ai",
+        LlmProviderKind::Anthropic => "anthropic",
+    }
+}
+
+fn normalize_base_url(value: &str) -> Option<String> {
+    let trimmed = value.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn normalize_model(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 fn env_key(provider: LlmProviderKind) -> Result<String, ConfigError> {
@@ -614,7 +699,31 @@ fn restrict_secret_file_permissions(path: &Path) -> Result<(), ConfigError> {
 }
 
 #[cfg(not(unix))]
-fn restrict_secret_file_permissions(_path: &Path) -> Result<(), ConfigError> {
+fn restrict_secret_file_permissions(path: &Path) -> Result<(), ConfigError> {
+    if !cfg!(windows) {
+        return Ok(());
+    }
+    let path_arg = path.to_string_lossy().to_string();
+    let current_user = env::var("USERNAME")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| env::var("USER").ok())
+        .unwrap_or_else(|| "%USERNAME%".to_string());
+    let status = Command::new("icacls")
+        .arg(&path_arg)
+        .arg("/inheritance:r")
+        .arg("/grant:r")
+        .arg(format!("{current_user}:(R,W)"))
+        .arg("/remove:g")
+        .arg("Everyone")
+        .arg("Users")
+        .status()
+        .map_err(|err| ConfigError::WriteSettings(err.to_string()))?;
+    if !status.success() {
+        return Err(ConfigError::WriteSettings(format!(
+            "failed to restrict secret file ACL with icacls: {status}"
+        )));
+    }
     Ok(())
 }
 
@@ -692,6 +801,19 @@ fn active_embedding_dimension(
         .map(|dimension| dimension.or(Some(DEFAULT_EMBEDDING_DIMENSION)))
 }
 
+fn active_embedding_batch_size(settings: &StoredEmbeddingSettings) -> usize {
+    env::var("EMBEDDING_BATCH_SIZE")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .or(settings.batch_size)
+        .map(clamp_embedding_batch_size)
+        .unwrap_or(DEFAULT_EMBEDDING_BATCH_SIZE)
+}
+
+fn clamp_embedding_batch_size(value: usize) -> usize {
+    value.clamp(MIN_EMBEDDING_BATCH_SIZE, MAX_EMBEDDING_BATCH_SIZE)
+}
+
 fn active_mineru_base_url(settings: &StoredMinerUSettings) -> String {
     settings
         .base_url
@@ -749,6 +871,7 @@ mod tests {
             base_url: "https://api.siliconflow.cn/v1/embeddings".to_string(),
             model: "Qwen/Qwen3-Embedding-4B".to_string(),
             expected_dimension: Some(2560),
+            batch_size: Some(DEFAULT_EMBEDDING_BATCH_SIZE),
             enabled: true,
         })
         .expect("settings should save");
@@ -887,6 +1010,7 @@ mod tests {
             base_url: DEFAULT_EMBEDDING_BASE_URL.to_string(),
             model: DEFAULT_EMBEDDING_MODEL.to_string(),
             expected_dimension: Some(DEFAULT_EMBEDDING_DIMENSION),
+            batch_size: Some(DEFAULT_EMBEDDING_BATCH_SIZE),
             enabled: true,
         })
         .expect("settings should save outside readonly cwd");
@@ -902,13 +1026,23 @@ mod tests {
         assert!(!cwd.join(DOTENV_FILE_NAME).exists());
 
         env::set_current_dir(previous_dir).expect("restore cwd");
-        let mut writable_permissions = fs::metadata(&cwd).expect("metadata").permissions();
-        writable_permissions.set_readonly(false);
-        fs::set_permissions(&cwd, writable_permissions).expect("restore writable");
+        restore_writable_permissions(&cwd);
         let _ = fs::remove_dir_all(&dir);
         restore_home(previous_home);
         clear_config_path_env();
         env::remove_var("EMBEDDING_API_KEY");
+    }
+
+    #[cfg(unix)]
+    fn restore_writable_permissions(path: &Path) {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).expect("restore writable");
+    }
+
+    #[cfg(not(unix))]
+    fn restore_writable_permissions(path: &Path) {
+        let mut writable_permissions = fs::metadata(path).expect("metadata").permissions();
+        writable_permissions.set_readonly(false);
+        fs::set_permissions(path, writable_permissions).expect("restore writable");
     }
 
     #[test]
@@ -974,6 +1108,97 @@ mod tests {
         env::remove_var("FOCUSED_READING_CONFIG_DIR");
         env::remove_var("FOCUSED_READING_ENV_PATH");
         env::remove_var("DEEPSEEK_API_KEY");
+    }
+
+    #[test]
+    fn llm_settings_roundtrip_custom_openai_compatible_provider() {
+        let _guard = crate::TEST_ENV_LOCK.lock().expect("env lock");
+        let dir = config_dir("llm-openai-compatible");
+        let _ = fs::remove_dir_all(&dir);
+        env::set_var("FOCUSED_READING_CONFIG_DIR", &dir);
+        env::remove_var("OPENAI_API_KEY");
+        env::remove_var("OPENAI_BASE_URL");
+        env::remove_var("OPENAI_MODEL");
+        let env_path = isolated_env_path(&dir);
+
+        let saved = save_llm_settings(SaveLlmSettingsRequest {
+            provider: LlmProviderKind::OpenAi,
+            api_key: Some("openai-compatible-key".to_string()),
+            base_url: " https://gateway.example.com/openai/v1/ ".to_string(),
+            model: " custom-openai-model ".to_string(),
+        })
+        .expect("settings should save");
+
+        assert_eq!(saved.provider, LlmProviderKind::OpenAi);
+        assert_eq!(saved.base_url, "https://gateway.example.com/openai/v1");
+        assert_eq!(saved.model, "custom-openai-model");
+        assert!(saved.api_key_configured);
+        assert_eq!(
+            saved
+                .providers
+                .get("open_ai")
+                .expect("openai provider settings")
+                .base_url,
+            "https://gateway.example.com/openai/v1"
+        );
+        assert_eq!(
+            saved
+                .providers
+                .get("anthropic")
+                .expect("anthropic provider settings")
+                .base_url,
+            "https://api.anthropic.com"
+        );
+
+        let config = llm_config().expect("LLM config should load");
+        assert_eq!(config.provider, LlmProviderKind::OpenAi);
+        assert_eq!(config.api_key, "openai-compatible-key");
+        assert_eq!(config.base_url, "https://gateway.example.com/openai/v1");
+        assert_eq!(config.model, "custom-openai-model");
+        let dotenv = fs::read_to_string(&env_path).expect("dotenv should exist");
+        assert!(dotenv.contains("OPENAI_API_KEY=openai-compatible-key"));
+        let json = fs::read_to_string(dir.join("llm-settings.json")).expect("settings JSON");
+        assert!(json.contains("https://gateway.example.com/openai/v1"));
+        assert!(!json.contains("openai-compatible-key"));
+
+        let _ = fs::remove_dir_all(&dir);
+        env::remove_var("FOCUSED_READING_CONFIG_DIR");
+        env::remove_var("FOCUSED_READING_ENV_PATH");
+        env::remove_var("OPENAI_API_KEY");
+    }
+
+    #[test]
+    fn llm_config_from_request_uses_unsaved_anthropic_draft() {
+        let _guard = crate::TEST_ENV_LOCK.lock().expect("env lock");
+        let dir = config_dir("llm-unsaved-anthropic-draft");
+        let _ = fs::remove_dir_all(&dir);
+        env::set_var("FOCUSED_READING_CONFIG_DIR", &dir);
+        env::remove_var("ANTHROPIC_API_KEY");
+        env::remove_var("ANTHROPIC_BASE_URL");
+        env::remove_var("ANTHROPIC_MODEL");
+        let _ = isolated_env_path(&dir);
+
+        let config = llm_config_from_request(&SaveLlmSettingsRequest {
+            provider: LlmProviderKind::Anthropic,
+            api_key: Some("unsaved-anthropic-key".to_string()),
+            base_url: " https://gateway.example.com/anthropic/ ".to_string(),
+            model: " custom-anthropic-model ".to_string(),
+        })
+        .expect("draft config should load");
+
+        assert_eq!(config.provider, LlmProviderKind::Anthropic);
+        assert_eq!(config.api_key, "unsaved-anthropic-key");
+        assert_eq!(config.base_url, "https://gateway.example.com/anthropic");
+        assert_eq!(config.model, "custom-anthropic-model");
+        assert!(
+            !dir.join(".env").exists(),
+            "testing a draft config must not persist the draft key"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+        env::remove_var("FOCUSED_READING_CONFIG_DIR");
+        env::remove_var("FOCUSED_READING_ENV_PATH");
+        env::remove_var("ANTHROPIC_API_KEY");
     }
 
     #[test]

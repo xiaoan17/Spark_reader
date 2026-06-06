@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Spark logo concept: S glyph">
+  <defs>
+    <linearGradient id="bg4" x1="150" y1="110" x2="890" y2="910" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fbf7ec"/>
+      <stop offset="1" stop-color="#ece0ce"/>
+    </linearGradient>
+    <linearGradient id="s4" x1="305" y1="210" x2="725" y2="810" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2f9a91"/>
+      <stop offset=".58" stop-color="#247a73"/>
+      <stop offset="1" stop-color="#1d5552"/>
+    </linearGradient>
+    <filter id="shadow4" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="32" stdDeviation="34" flood-color="#132224" flood-opacity=".18"/>
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#132224" flood-opacity=".08"/>
+    </filter>
+    <filter id="glow4" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="12" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect width="1024" height="1024" rx="224" fill="url(#bg4)"/>
+  <path d="M279 183h448c30 0 54 24 54 54v550c0 30-24 54-54 54H279c-30 0-54-24-54-54V237c0-30 24-54 54-54Z" fill="#fffdf6" filter="url(#shadow4)"/>
+  <path d="M682 183v130c0 24 19 43 43 43h56" fill="none" stroke="#decdb0" stroke-width="26" stroke-linecap="round"/>
+  <path d="M384 338h238M352 512h238M426 687h230" fill="none" stroke="#253134" stroke-width="24" stroke-linecap="round" opacity=".28"/>
+  <path d="M690 315c-38-52-111-79-188-62-77 17-127 67-125 124 2 69 79 88 170 102 97 15 160 42 161 111 1 72-73 128-172 135-76 5-145-22-183-73" fill="none" stroke="url(#s4)" stroke-width="82" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M318 462v-54h72M664 408h72v54M736 574v54h-72M390 628h-72v-54" fill="none" stroke="#263235" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M669 471l13 34 34 13-34 13-13 34-13-34-34-13 34-13 13-34Z" fill="#e2a33b" filter="url(#glow4)"/>
+  <circle cx="708" cy="590" r="19" fill="#fffdf6" stroke="#247a73" stroke-width="14"/>
+</svg>
+

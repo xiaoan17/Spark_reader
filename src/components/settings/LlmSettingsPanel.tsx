@@ -20,8 +20,9 @@ import {
   saveLlmSettings,
   saveMineruSettings,
   testEmbeddingConnection,
-  testLlmConnection,
+  testLlmConnectionWithSettings,
   normalizeCommandError,
+  type LlmSettings,
   type LlmProviderKind,
   type ProductSelfCheckResponse,
 } from "@/core/library-api"
@@ -33,6 +34,7 @@ import {
 type LlmSettingsPanelProps = {
   open: boolean
   onClose: () => void
+  onLlmSettingsSaved?: (settings: LlmSettings) => void
   onEmbeddingSettingsSaved?: () => void
   defaultAdvancedOpen?: boolean
 }
@@ -41,6 +43,13 @@ const providerLabels: Record<LlmProviderKind, string> = {
   deep_seek: "DeepSeek",
   open_ai: "OpenAI",
   anthropic: "Anthropic",
+}
+
+type ProviderDraft = {
+  baseUrl: string
+  model: string
+  apiKey: string
+  apiKeyConfigured: boolean
 }
 
 const defaultSettings: Record<LlmProviderKind, { baseUrl: string; model: string }> = {
@@ -54,7 +63,7 @@ const defaultSettings: Record<LlmProviderKind, { baseUrl: string; model: string 
   },
   anthropic: {
     baseUrl: "https://api.anthropic.com",
-    model: "claude-4-5-sonnet",
+    model: "claude-sonnet-4-5",
   },
 }
 
@@ -81,11 +90,30 @@ const providerKeyLinks: Record<LlmProviderKind, { label: string; href: string }>
   },
 }
 
+const initialProviderDrafts: Record<LlmProviderKind, ProviderDraft> = {
+  deep_seek: {
+    ...defaultSettings.deep_seek,
+    apiKey: "",
+    apiKeyConfigured: false,
+  },
+  open_ai: {
+    ...defaultSettings.open_ai,
+    apiKey: "",
+    apiKeyConfigured: false,
+  },
+  anthropic: {
+    ...defaultSettings.anthropic,
+    apiKey: "",
+    apiKeyConfigured: false,
+  },
+}
+
 const defaultEmbeddingSettings = {
   provider: "siliconflow",
   baseUrl: "https://api.siliconflow.cn/v1/embeddings",
   model: "Qwen/Qwen3-Embedding-4B",
   expectedDimension: 2560,
+  batchSize: 64,
 }
 
 const defaultMineruSettings = {
@@ -113,14 +141,12 @@ const browserModeSelfCheckMessage = "开发诊断仅桌面版可运行；浏览�
 export function LlmSettingsPanel({
   open,
   onClose,
+  onLlmSettingsSaved,
   onEmbeddingSettingsSaved,
   defaultAdvancedOpen = false,
 }: LlmSettingsPanelProps) {
   const [provider, setProvider] = useState<LlmProviderKind>("deep_seek")
-  const [baseUrl, setBaseUrl] = useState(defaultSettings.deep_seek.baseUrl)
-  const [model, setModel] = useState(defaultSettings.deep_seek.model)
-  const [apiKey, setApiKey] = useState("")
-  const [apiKeyConfigured, setApiKeyConfigured] = useState(false)
+  const [providerDrafts, setProviderDrafts] = useState(initialProviderDrafts)
   const [status, setStatus] = useState<"idle" | "loading" | "saving" | "testing" | "ok" | "error">("idle")
   const [message, setMessage] = useState("")
   const [embeddingEnabled, setEmbeddingEnabled] = useState(true)
@@ -128,6 +154,7 @@ export function LlmSettingsPanel({
   const [embeddingBaseUrl, setEmbeddingBaseUrl] = useState(defaultEmbeddingSettings.baseUrl)
   const [embeddingModel, setEmbeddingModel] = useState(defaultEmbeddingSettings.model)
   const [embeddingDimension, setEmbeddingDimension] = useState(String(defaultEmbeddingSettings.expectedDimension))
+  const [embeddingBatchSize, setEmbeddingBatchSize] = useState(String(defaultEmbeddingSettings.batchSize))
   const [embeddingApiKey, setEmbeddingApiKey] = useState("")
   const [embeddingApiKeyConfigured, setEmbeddingApiKeyConfigured] = useState(false)
   const [embeddingStatus, setEmbeddingStatus] = useState<"idle" | "saving" | "testing" | "ok" | "error">("idle")
@@ -159,15 +186,13 @@ export function LlmSettingsPanel({
       .then(([settings, embedding, mineru]) => {
         if (cancelled) return
         setProvider(settings.provider)
-        setBaseUrl(settings.baseUrl)
-        setModel(settings.model)
-        setApiKeyConfigured(settings.apiKeyConfigured)
-        setApiKey("")
+        setProviderDrafts(() => providerDraftsFromSettings(settings))
         setEmbeddingEnabled(embedding.enabled)
         setEmbeddingProvider(embedding.provider === "disabled" ? defaultEmbeddingSettings.provider : embedding.provider)
         setEmbeddingBaseUrl(embedding.baseUrl || defaultEmbeddingSettings.baseUrl)
         setEmbeddingModel(embedding.model || defaultEmbeddingSettings.model)
         setEmbeddingDimension(String(embedding.expectedDimension ?? defaultEmbeddingSettings.expectedDimension))
+        setEmbeddingBatchSize(String(embedding.batchSize ?? defaultEmbeddingSettings.batchSize))
         setEmbeddingApiKeyConfigured(embedding.apiKeyConfigured)
         setEmbeddingApiKey("")
         setEmbeddingStatus("idle")
@@ -198,12 +223,34 @@ export function LlmSettingsPanel({
     return null
   }
 
+  const activeDraft = providerDrafts[provider]
+  const baseUrl = activeDraft.baseUrl
+  const model = activeDraft.model
+  const apiKey = activeDraft.apiKey
+  const apiKeyConfigured = activeDraft.apiKeyConfigured
+
   function handleProviderChange(nextProvider: LlmProviderKind) {
     setProvider(nextProvider)
-    setBaseUrl(defaultSettings[nextProvider].baseUrl)
-    setModel(defaultSettings[nextProvider].model)
-    setApiKey("")
-    setApiKeyConfigured(false)
+    setMessage("")
+  }
+
+  function updateProviderDraft(nextPatch: Partial<ProviderDraft>) {
+    setProviderDrafts((current) => ({
+      ...current,
+      [provider]: {
+        ...current[provider],
+        ...nextPatch,
+      },
+    }))
+  }
+
+  function activeLlmRequest() {
+    return {
+      provider,
+      baseUrl,
+      model,
+      apiKey: apiKey.trim() || undefined,
+    }
   }
 
   async function handleSave() {
@@ -215,16 +262,12 @@ export function LlmSettingsPanel({
     setStatus("saving")
     setMessage("")
     try {
-      const settings = await saveLlmSettings({
-        provider,
-        baseUrl,
-        model,
-        apiKey: apiKey.trim() || undefined,
-      })
-      setApiKeyConfigured(settings.apiKeyConfigured)
-      setApiKey("")
+      const settings = await saveLlmSettings(activeLlmRequest())
+      setProvider(settings.provider)
+      setProviderDrafts(() => providerDraftsFromSettings(settings))
       setStatus("ok")
       setMessage("设置已保存")
+      onLlmSettingsSaved?.(settings)
     } catch (error) {
       setStatus("error")
       setMessage(settingsErrorMessage(error))
@@ -243,6 +286,12 @@ export function LlmSettingsPanel({
       setEmbeddingMessage("向量维度必须是正整数")
       return
     }
+    const batchSize = parseOptionalPositiveInt(embeddingBatchSize)
+    if (embeddingBatchSize.trim() && batchSize === null) {
+      setEmbeddingStatus("error")
+      setEmbeddingMessage("批大小必须是正整数")
+      return
+    }
 
     setEmbeddingStatus("saving")
     setEmbeddingMessage("")
@@ -252,6 +301,7 @@ export function LlmSettingsPanel({
         baseUrl: embeddingBaseUrl,
         model: embeddingModel,
         expectedDimension,
+        batchSize,
         enabled: embeddingEnabled,
         apiKey: embeddingApiKey.trim() || undefined,
       })
@@ -260,6 +310,7 @@ export function LlmSettingsPanel({
       setEmbeddingBaseUrl(settings.baseUrl)
       setEmbeddingModel(settings.model)
       setEmbeddingDimension(String(settings.expectedDimension ?? ""))
+      setEmbeddingBatchSize(String(settings.batchSize ?? defaultEmbeddingSettings.batchSize))
       setEmbeddingApiKeyConfigured(settings.apiKeyConfigured)
       setEmbeddingApiKey("")
       setEmbeddingStatus("ok")
@@ -303,9 +354,19 @@ export function LlmSettingsPanel({
     setStatus("testing")
     setMessage("")
     try {
-      const result = await testLlmConnection()
-      setStatus(result.ok ? "ok" : "error")
-      setMessage(result.ok ? `${providerLabels[result.provider]} ${result.model} 连通正常` : "连通失败")
+      const request = activeLlmRequest()
+      const result = await testLlmConnectionWithSettings(request)
+      if (result.ok) {
+        const settings = await saveLlmSettings(request)
+        setProvider(settings.provider)
+        setProviderDrafts(() => providerDraftsFromSettings(settings))
+        setStatus("ok")
+        setMessage(`${providerLabels[result.provider]} ${result.model} 连通正常，已记录为当前 LLM 设置`)
+        onLlmSettingsSaved?.(settings)
+        return
+      }
+      setStatus("error")
+      setMessage("连通失败")
     } catch (error) {
       setStatus("error")
       setMessage(settingsErrorMessage(error))
@@ -433,7 +494,7 @@ export function LlmSettingsPanel({
             <div className="flex shrink-0 gap-2">
               <Button variant="outline" size="sm" disabled={busy} onClick={handleTest}>
                 {status === "testing" ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}
-                测试
+                测试并记录
               </Button>
               <Button
                 size="sm"
@@ -461,7 +522,7 @@ export function LlmSettingsPanel({
               >
                 <span className="block text-sm font-medium">{providerLabels[preset]}</span>
                 <span className="mt-1 block truncate text-xs text-muted-foreground">
-                  {defaultSettings[preset].model}
+                  {providerDrafts[preset].model || defaultSettings[preset].model}
                 </span>
               </button>
             ))}
@@ -475,7 +536,7 @@ export function LlmSettingsPanel({
               type="password"
               value={apiKey}
               placeholder={apiKeyConfigured ? "留空则沿用已保存密钥" : "输入密钥后保存"}
-              onChange={(event) => setApiKey(event.target.value)}
+              onChange={(event) => updateProviderDraft({ apiKey: event.target.value })}
             />
           </label>
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-muted/60 px-3 py-2 text-xs leading-5 text-muted-foreground">
@@ -493,10 +554,10 @@ export function LlmSettingsPanel({
                 <input
                   className="h-9 w-full rounded-md border bg-background px-3 outline-none focus:ring-2 focus:ring-ring"
                   value={baseUrl}
-                  onChange={(event) => setBaseUrl(event.target.value)}
+                  onChange={(event) => updateProviderDraft({ baseUrl: event.target.value })}
                 />
                 <span className="block text-[11px] leading-4 text-muted-foreground">
-                  模型服务地址；使用官方预设时保持默认即可。
+                  OpenAI 兼容服务填到 /v1，Anthropic 服务填到主机根地址。
                 </span>
               </label>
               <label className="block space-y-1.5">
@@ -504,7 +565,7 @@ export function LlmSettingsPanel({
                 <input
                   className="h-9 w-full rounded-md border bg-background px-3 outline-none focus:ring-2 focus:ring-ring"
                   value={model}
-                  onChange={(event) => setModel(event.target.value)}
+                  onChange={(event) => updateProviderDraft({ model: event.target.value })}
                 />
                 <span className="block text-[11px] leading-4 text-muted-foreground">
                   具体模型 ID；只有切换到自定义模型时需要修改。
@@ -714,6 +775,18 @@ export function LlmSettingsPanel({
                   必须匹配模型输出维度；不确定时使用默认值。
                 </span>
               </label>
+              <label className="block space-y-1.5">
+                <span className="text-xs font-medium text-muted-foreground">批大小</span>
+                <input
+                  className="h-9 w-full rounded-md border bg-background px-3 outline-none focus:ring-2 focus:ring-ring"
+                  inputMode="numeric"
+                  value={embeddingBatchSize}
+                  onChange={(event) => setEmbeddingBatchSize(event.target.value)}
+                />
+                <span className="block text-[11px] leading-4 text-muted-foreground">
+                  每次请求的文本数量；provider 限流时后端会自动减半重试。
+                </span>
+              </label>
             </div>
           ) : null}
           {embeddingMessage ? (
@@ -813,6 +886,32 @@ function ExternalHelpLink({
       {children}
       <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
     </a>
+  )
+}
+
+function providerDraftsFromSettings(settings: LlmSettings): Record<LlmProviderKind, ProviderDraft> {
+  return providerOrder.reduce(
+    (drafts, providerKind) => {
+      const saved = settings.providers?.[providerKind]
+      const activeFallback =
+        providerKind === settings.provider
+          ? {
+              baseUrl: settings.baseUrl,
+              model: settings.model,
+              apiKeyConfigured: settings.apiKeyConfigured,
+            }
+          : undefined
+      const providerSettings = saved ?? activeFallback
+
+      drafts[providerKind] = {
+        baseUrl: providerSettings?.baseUrl || defaultSettings[providerKind].baseUrl,
+        model: providerSettings?.model || defaultSettings[providerKind].model,
+        apiKey: "",
+        apiKeyConfigured: providerSettings?.apiKeyConfigured ?? false,
+      }
+      return drafts
+    },
+    {} as Record<LlmProviderKind, ProviderDraft>,
   )
 }
 

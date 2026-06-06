@@ -1,0 +1,34 @@
+{
+  "jobs": 1,
+  "tasks": [
+    {
+      "id": "selection-frame",
+      "promptFiles": ["prompts/shared.md", "prompts/01-selection-frame.md"],
+      "image": "out/spark-logo-01-selection-frame.png",
+      "provider": "codex-cli",
+      "ar": "1:1"
+    },
+    {
+      "id": "citation-anchor",
+      "promptFiles": ["prompts/shared.md", "prompts/02-citation-anchor.md"],
+      "image": "out/spark-logo-02-citation-anchor.png",
+      "provider": "codex-cli",
+      "ar": "1:1"
+    },
+    {
+      "id": "yin-abstract",
+      "promptFiles": ["prompts/shared.md", "prompts/03-yin-abstract.md"],
+      "image": "out/spark-logo-03-yin-abstract.png",
+      "provider": "codex-cli",
+      "ar": "1:1"
+    },
+    {
+      "id": "spark-s-glyph",
+      "promptFiles": ["prompts/shared.md", "prompts/04-spark-s-glyph.md"],
+      "image": "out/spark-logo-04-s-glyph.png",
+      "provider": "codex-cli",
+      "ar": "1:1"
+    }
+  ]
+}
+

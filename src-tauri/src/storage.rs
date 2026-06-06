@@ -5,6 +5,7 @@ use std::{
     hash::{Hash, Hasher},
     io::Read,
     path::{Component, Path, PathBuf},
+    sync::OnceLock,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -13,6 +14,11 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::{chunk_id, config, coordinates::COORDINATE_VERSION, embeddings};
+
+const DEFAULT_INTERPRETATION_HISTORY_LIMIT: u32 = 50;
+const MAX_INTERPRETATION_HISTORY_LIMIT: u32 = 200;
+const VECTOR_SEARCH_MAX_CANDIDATES: u32 = 5000;
+static COORDINATE_VERSION_WARNED: OnceLock<()> = OnceLock::new();
 
 #[derive(Debug, Deserialize)]
 pub struct SaveBookRequest {
@@ -234,7 +240,7 @@ pub struct StoredBookPageSourceWindow {
     pub pages: Vec<ParsedPageInput>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchIndexSummary {
     pub book_id: String,
@@ -563,7 +569,7 @@ pub fn save_book_with_options(
             asset_paths.text_path.to_string_lossy(),
             asset_paths.markdown_path.to_string_lossy(),
             asset_paths
-                .original_pdf_path
+                .original_source_path
                 .as_ref()
                 .map(|path| path.to_string_lossy().to_string())
                 .unwrap_or_default(),
@@ -660,7 +666,7 @@ pub fn save_book_with_options(
         text_path: asset_paths.text_path.to_string_lossy().to_string(),
         markdown_path: asset_paths.markdown_path.to_string_lossy().to_string(),
         original_pdf_path: asset_paths
-            .original_pdf_path
+            .original_source_path
             .map(|path| path.to_string_lossy().to_string())
             .unwrap_or_default(),
         source_pdf_path: source_pdf_metadata
@@ -931,7 +937,7 @@ pub fn chunks_for_pages(
                     text,
                     markdown: row.get(3)?,
                     rects,
-                    coordinate_version: row.get(5)?,
+                    coordinate_version: checked_coordinate_version(row.get(5)?),
                     score: 0.0,
                 })
             })
@@ -966,7 +972,7 @@ pub fn get_chunk(db_path: &Path, book_id: &str, chunk_id: &str) -> Result<Option
                 text,
                 markdown: row.get(3)?,
                 rects,
-                coordinate_version: row.get(5)?,
+                coordinate_version: checked_coordinate_version(row.get(5)?),
                 score: 0.0,
             })
         },
@@ -1035,7 +1041,7 @@ pub fn get_neighbors(
                     text,
                     markdown: row.get(3)?,
                     rects,
-                    coordinate_version: row.get(5)?,
+                    coordinate_version: checked_coordinate_version(row.get(5)?),
                     score: if row.get::<_, u32>(1)? == page_index {
                         0.0
                     } else {
@@ -1071,7 +1077,7 @@ pub fn list_structure(db_path: &Path, book_id: &str) -> Result<Vec<SearchHit>> {
                 text,
                 markdown: row.get(3)?,
                 rects,
-                coordinate_version: row.get(5)?,
+                coordinate_version: checked_coordinate_version(row.get(5)?),
                 score: 0.0,
             })
         })?
@@ -1647,34 +1653,58 @@ pub fn save_interpretation(
 }
 
 pub fn list_interpretations(db_path: &Path, book_id: &str) -> Result<Vec<SavedInterpretation>> {
+    list_interpretations_page(db_path, book_id, None, None)
+}
+
+pub fn list_interpretations_page(
+    db_path: &Path,
+    book_id: &str,
+    limit: Option<u32>,
+    offset: Option<u32>,
+) -> Result<Vec<SavedInterpretation>> {
     let conn = open_database(db_path)?;
+    let limit = limit
+        .unwrap_or(DEFAULT_INTERPRETATION_HISTORY_LIMIT)
+        .clamp(1, MAX_INTERPRETATION_HISTORY_LIMIT);
+    let offset = offset.unwrap_or(0);
     let mut stmt = conn
         .prepare(
-            "SELECT id,
-                    book_id,
-                    selection_text,
-                    session_id,
-                    turn_index,
-                    prefix,
-                    suffix,
-                    page_index,
-                    position_start,
-                    position_end,
-                    page_indexes_json,
-                    evidence_chunk_ids_json,
-                    question,
-                    answer,
-                    answer_source,
-                    kind,
-                    evidence_chunk_snapshots_json,
-                    created_at
-             FROM interpretations
-             WHERE book_id = ?1
-             ORDER BY session_id DESC, turn_index ASC, created_at ASC",
+            "WITH recent_sessions AS (
+               SELECT COALESCE(NULLIF(session_id, ''), id) AS session_key,
+                      MAX(created_at) AS latest_created_at
+               FROM interpretations
+               WHERE book_id = ?1
+               GROUP BY session_key
+               ORDER BY latest_created_at DESC
+               LIMIT ?2 OFFSET ?3
+             )
+             SELECT i.id,
+                    i.book_id,
+                    i.selection_text,
+                    i.session_id,
+                    i.turn_index,
+                    i.prefix,
+                    i.suffix,
+                    i.page_index,
+                    i.position_start,
+                    i.position_end,
+                    i.page_indexes_json,
+                    i.evidence_chunk_ids_json,
+                    i.question,
+                    i.answer,
+                    i.answer_source,
+                    i.kind,
+                    i.evidence_chunk_snapshots_json,
+                    i.created_at
+             FROM interpretations i
+             JOIN recent_sessions r
+               ON r.session_key = COALESCE(NULLIF(i.session_id, ''), i.id)
+             WHERE i.book_id = ?1
+             ORDER BY r.latest_created_at DESC, i.turn_index ASC, i.created_at ASC",
         )
         .context("failed to prepare interpretation list")?;
     let interpretations = stmt
-        .query_map(params![book_id], row_to_interpretation)?
+        .query_map(params![book_id, limit, offset], row_to_interpretation)?
         .collect::<rusqlite::Result<Vec<_>>>()
         .context("failed to map interpretations")?;
     Ok(interpretations)
@@ -2707,7 +2737,7 @@ struct TextAssetPaths {
     asset_dir: PathBuf,
     text_path: PathBuf,
     markdown_path: PathBuf,
-    original_pdf_path: Option<PathBuf>,
+    original_source_path: Option<PathBuf>,
 }
 
 fn write_book_assets(
@@ -2744,15 +2774,21 @@ fn write_book_assets(
     {
         copy_mineru_asset_resources(source_asset_dir, &asset_dir, namespace_asset_dirs)?;
     }
-    let original_pdf_path = source_pdf_path
+    let original_source_path = source_pdf_path
         .filter(|path| !path.trim().is_empty())
         .map(Path::new)
         .filter(|path| path.exists())
         .map(|source| {
-            let target = asset_dir.join(format!("{file_stem}.pdf"));
+            let extension = source
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .map(|extension| extension.trim().trim_start_matches('.'))
+                .filter(|extension| !extension.is_empty())
+                .unwrap_or("source");
+            let target = asset_dir.join(format!("{file_stem}.{extension}"));
             fs::copy(source, &target).with_context(|| {
                 format!(
-                    "failed to copy source PDF {} to {}",
+                    "failed to copy source file {} to {}",
                     source.display(),
                     target.display()
                 )
@@ -2765,7 +2801,7 @@ fn write_book_assets(
         asset_dir,
         text_path,
         markdown_path,
-        original_pdf_path,
+        original_source_path,
     })
 }
 
@@ -3487,7 +3523,7 @@ fn fallback_search(
         let text: String = row.get(2)?;
         let markdown: String = row.get(3)?;
         let rects = parse_rects(row.get(4)?).context("failed to parse chunk rects")?;
-        let coordinate_version = row.get(5)?;
+        let coordinate_version = checked_coordinate_version(row.get(5)?);
         let haystack = format!("{}\n{}", text, markdown).to_lowercase();
         let score: f64 = terms
             .iter()
@@ -3604,18 +3640,27 @@ fn vector_search(
                AND e.provider = ?2
                AND e.base_url = ?3
                AND e.model = ?4
-               AND e.dimension = ?5",
+               AND e.dimension = ?5
+             ORDER BY c.page_index, c.id
+             LIMIT ?6",
         )
         .context("failed to prepare vector search")?;
     let mut rows = stmt
-        .query(params![book_id, provider, base_url, model, dimension])
+        .query(params![
+            book_id,
+            provider,
+            base_url,
+            model,
+            dimension,
+            VECTOR_SEARCH_MAX_CANDIDATES
+        ])
         .context("failed to query vector rows")?;
     let mut hits = Vec::new();
 
     while let Some(row) = rows.next().context("failed to read vector row")? {
         let text: String = row.get(2)?;
         let rects = parse_rects(row.get(4)?).context("failed to parse chunk rects")?;
-        let coordinate_version = row.get(5)?;
+        let coordinate_version = checked_coordinate_version(row.get(5)?);
         let embedding_json: String = row.get(6)?;
         let embedding: Vec<f32> =
             serde_json::from_str(&embedding_json).context("failed to parse embedding JSON")?;
@@ -3892,7 +3937,7 @@ fn to_fts_query(query: &str) -> String {
 fn row_to_search_hit(row: &rusqlite::Row<'_>) -> rusqlite::Result<SearchHit> {
     let text: String = row.get(2)?;
     let rects = parse_rects_for_row(row.get(4)?, 4)?;
-    let coordinate_version = row.get(5)?;
+    let coordinate_version = checked_coordinate_version(row.get(5)?);
     let raw_snippet: String = row.get(6)?;
     Ok(SearchHit {
         chunk_id: row.get(0)?,
@@ -3908,6 +3953,22 @@ fn row_to_search_hit(row: &rusqlite::Row<'_>) -> rusqlite::Result<SearchHit> {
         text,
         score: row.get(7)?,
     })
+}
+
+fn warn_if_coordinate_version_mismatch(coordinate_version: u32) {
+    if coordinate_version == COORDINATE_VERSION {
+        return;
+    }
+    COORDINATE_VERSION_WARNED.get_or_init(|| {
+        eprintln!(
+            "stored chunk coordinate_version {coordinate_version} does not match runtime coordinate_version {COORDINATE_VERSION}; coordinates may need migration"
+        );
+    });
+}
+
+fn checked_coordinate_version(coordinate_version: u32) -> u32 {
+    warn_if_coordinate_version_mismatch(coordinate_version);
+    coordinate_version
 }
 
 fn parse_rects(value: String) -> Result<Vec<NormalizedRectInput>, serde_json::Error> {
@@ -4985,6 +5046,66 @@ mod tests {
         );
 
         let _ = fs::remove_file(&source_pdf);
+        let _ = fs::remove_file(&saved.original_pdf_path);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn copies_non_pdf_source_file_with_original_extension() {
+        let _guard = crate::TEST_ENV_LOCK.lock().expect("env lock");
+        let path = temp_db("epub-copy");
+        let _ = fs::remove_file(&path);
+        let source_epub = std::env::temp_dir().join(format!(
+            "focused-reading-source-epub-{}.epub",
+            std::process::id()
+        ));
+        fs::write(&source_epub, b"fake epub fixture").expect("source EPUB should write");
+
+        let saved = save_book(
+            &path,
+            SaveBookRequest {
+                title: "EPUB 资产测试".to_string(),
+                total_pages: 1,
+                parser_engine: "text-import-epub".to_string(),
+                coordinate_mode: "text-only".to_string(),
+                quality: Some(TextQuality {
+                    char_count: 8,
+                    replacement_char_ratio: 0.0,
+                    control_char_ratio: 0.0,
+                    looks_usable: true,
+                }),
+                source_pdf_path: Some(source_epub.to_string_lossy().to_string()),
+                source_asset_dir: None,
+                source_asset_dirs: Vec::new(),
+                pages: vec![ParsedPageInput {
+                    page_index: 0,
+                    text: "EPUB 已转换".to_string(),
+                    markdown: "# 第一章\n\nEPUB 已转换".to_string(),
+                }],
+                chunks: vec![ParsedChunkInput {
+                    chunk_id: "p1-c1".to_string(),
+                    page_index: 0,
+                    text: "EPUB 已转换".to_string(),
+                    markdown: "### [p1-c1] Page 1\n\nEPUB 已转换".to_string(),
+                    rects: Vec::new(),
+                    coordinate_version: COORDINATE_VERSION,
+                }],
+            },
+        )
+        .expect("book should save");
+
+        assert!(saved.original_pdf_path.ends_with(".epub"));
+        assert_ne!(Path::new(&saved.original_pdf_path), source_epub.as_path());
+        assert_eq!(
+            fs::read(&saved.original_pdf_path).expect("copied EPUB should read"),
+            fs::read(&source_epub).expect("source EPUB should read")
+        );
+        let matched = find_book_by_source_pdf(&path, &source_epub)
+            .expect("source lookup should run")
+            .expect("source EPUB should match saved book");
+        assert_eq!(matched.book_id, saved.book_id);
+
+        let _ = fs::remove_file(&source_epub);
         let _ = fs::remove_file(&saved.original_pdf_path);
         let _ = fs::remove_file(&path);
     }

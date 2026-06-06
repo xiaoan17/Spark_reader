@@ -143,7 +143,7 @@ export function LibraryShelf({
             <Library className="mb-4 h-10 w-10 text-muted-foreground" />
             <div className="text-lg font-semibold">还没有转换图书</div>
             <div className="mt-2 text-sm leading-6 text-muted-foreground">
-              导入 PDF 后会生成 Markdown 转换稿和本地索引，之后会以封面卡片出现在这里。
+              导入 PDF、TXT 或 EPUB 后会生成 Markdown 转换稿和本地索引，之后会以封面卡片出现在这里。
             </div>
           </div>
         )}
@@ -197,8 +197,8 @@ function LibraryBookGrid({
                 <div className="line-clamp-2 text-sm font-medium">{book.title}</div>
                 <div className="truncate text-xs text-muted-foreground">{book.textCharCount} 字</div>
                 <div className="flex flex-wrap gap-1">
-                  <Badge variant="secondary">{book.sourcePdfFingerprint ? "源 PDF" : "转换稿"}</Badge>
-                  {book.originalPdfPath ? <Badge variant="secondary">可校对</Badge> : null}
+                  <Badge variant="secondary">{sourceKindLabel(book)}</Badge>
+                  {book.originalPdfPath.toLowerCase().endsWith(".pdf") ? <Badge variant="secondary">可校对</Badge> : null}
                   {book.quality?.looksUsable === false ? <Badge variant="secondary">建议重解析</Badge> : null}
                   <LibraryBookDateBadge book={book} />
                 </div>
@@ -223,6 +223,16 @@ function LibraryBookGrid({
       })}
     </div>
   )
+}
+
+function sourceKindLabel(book: StoredBookSummary) {
+  if (book.parserEngine === "text-import-epub") {
+    return "EPUB"
+  }
+  if (book.parserEngine === "text-import-txt") {
+    return "TXT"
+  }
+  return book.sourcePdfFingerprint ? "源 PDF" : "转换稿"
 }
 
 function LibraryBookDateBadge({ book }: { book: StoredBookSummary }) {

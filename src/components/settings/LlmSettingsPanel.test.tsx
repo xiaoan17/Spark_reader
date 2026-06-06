@@ -11,6 +11,7 @@ import {
   saveEmbeddingSettings,
   saveLlmSettings,
   saveMineruSettings,
+  testLlmConnectionWithSettings,
 } from "@/core/library-api"
 import { LlmSettingsPanel } from "./LlmSettingsPanel"
 
@@ -26,6 +27,7 @@ vi.mock("@/core/library-api", async (importOriginal) => {
       baseUrl: "https://api.siliconflow.cn/v1/embeddings",
       model: "Qwen/Qwen3-Embedding-4B",
       expectedDimension: 2560,
+      batchSize: 64,
       apiKeyConfigured: true,
       enabled: true,
     })),
@@ -34,6 +36,23 @@ vi.mock("@/core/library-api", async (importOriginal) => {
       baseUrl: "https://api.deepseek.com",
       model: "deepseek-v4-flash",
       apiKeyConfigured: true,
+      providers: {
+        deep_seek: {
+          baseUrl: "https://api.deepseek.com",
+          model: "deepseek-v4-flash",
+          apiKeyConfigured: true,
+        },
+        open_ai: {
+          baseUrl: "https://proxy.example.com/openai/v1",
+          model: "custom-openai-model",
+          apiKeyConfigured: true,
+        },
+        anthropic: {
+          baseUrl: "https://proxy.example.com/anthropic",
+          model: "custom-anthropic-model",
+          apiKeyConfigured: false,
+        },
+      },
     })),
     getMineruSettings: vi.fn(async () => ({
       baseUrl: "https://mineru.net",
@@ -46,6 +65,7 @@ vi.mock("@/core/library-api", async (importOriginal) => {
       baseUrl: "https://api.siliconflow.cn/v1/embeddings",
       model: "Qwen/Qwen3-Embedding-4B",
       expectedDimension: 2560,
+      batchSize: 64,
       apiKeyConfigured: true,
       enabled: true,
     })),
@@ -54,10 +74,22 @@ vi.mock("@/core/library-api", async (importOriginal) => {
       baseUrl: "https://api.deepseek.com",
       model: "deepseek-v4-flash",
       apiKeyConfigured: true,
+      providers: {
+        deep_seek: {
+          baseUrl: "https://api.deepseek.com",
+          model: "deepseek-v4-flash",
+          apiKeyConfigured: true,
+        },
+      },
     })),
     saveMineruSettings: vi.fn(async () => ({
       baseUrl: "https://mineru.net",
       apiTokenConfigured: true,
+    })),
+    testLlmConnectionWithSettings: vi.fn(async () => ({
+      provider: "deep_seek",
+      model: "deepseek-v4-flash",
+      ok: true,
     })),
   }
 })
@@ -72,6 +104,7 @@ beforeEach(() => {
   vi.mocked(saveEmbeddingSettings).mockClear()
   vi.mocked(saveLlmSettings).mockClear()
   vi.mocked(saveMineruSettings).mockClear()
+  vi.mocked(testLlmConnectionWithSettings).mockClear()
 })
 
 async function renderClient(element: React.ReactElement) {
@@ -130,6 +163,19 @@ async function click(element: Element) {
   })
 }
 
+async function setInputValue(input: HTMLInputElement, value: string) {
+  await act(async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(
+      Object.getPrototypeOf(input),
+      "value",
+    )
+    descriptor?.set?.call(input, value)
+    input.dispatchEvent(new Event("input", { bubbles: true }))
+    input.dispatchEvent(new Event("change", { bubbles: true }))
+    await Promise.resolve()
+  })
+}
+
 describe("LlmSettingsPanel defaults", () => {
   it("starts in recommended mode with provider presets and no advanced fields", () => {
     const html = renderToStaticMarkup(
@@ -174,6 +220,7 @@ describe("LlmSettingsPanel defaults", () => {
 
     await click(buttonByText(container, "OpenAI"))
     expect(textContent(container)).toContain("获取 OpenAI key")
+    expect(textContent(container)).toContain("custom-openai-model")
     expect(
       container.querySelector<HTMLAnchorElement>(
         'a[href="https://platform.openai.com/api-keys"]',
@@ -182,6 +229,7 @@ describe("LlmSettingsPanel defaults", () => {
 
     await click(buttonByText(container, "Anthropic"))
     expect(textContent(container)).toContain("获取 Anthropic key")
+    expect(textContent(container)).toContain("custom-anthropic-model")
     expect(
       container.querySelector<HTMLAnchorElement>(
         'a[href="https://console.anthropic.com/settings/keys"]',
@@ -199,16 +247,7 @@ describe("LlmSettingsPanel defaults", () => {
     )
 
     const tokenInput = inputByPlaceholder(container, "MinerU token")
-    await act(async () => {
-      const descriptor = Object.getOwnPropertyDescriptor(
-        Object.getPrototypeOf(tokenInput),
-        "value",
-      )
-      descriptor?.set?.call(tokenInput, "mineru-secret-token")
-      tokenInput.dispatchEvent(new Event("input", { bubbles: true }))
-      tokenInput.dispatchEvent(new Event("change", { bubbles: true }))
-      await Promise.resolve()
-    })
+    await setInputValue(tokenInput, "mineru-secret-token")
     await click(buttonByText(container, "保存 MinerU"))
 
     await vi.waitFor(() => {
@@ -220,6 +259,209 @@ describe("LlmSettingsPanel defaults", () => {
     })
     expect(textContent(container)).not.toContain("mineru-secret-token")
     unmount()
+  })
+
+  it("keeps custom OpenAI and Anthropic drafts when switching providers", async () => {
+    vi.mocked(isTauriRuntime).mockReturnValue(true)
+
+    const { container, unmount } = await renderClient(
+      <LlmSettingsPanel open onClose={() => undefined} defaultAdvancedOpen />,
+    )
+
+    await click(buttonByText(container, "OpenAI"))
+    let advancedInputs = [...container.querySelectorAll("input")]
+    const openAiBaseUrl = advancedInputs.find((input) =>
+      input.value.includes("proxy.example.com/openai"),
+    )
+    const openAiModel = advancedInputs.find((input) => input.value === "custom-openai-model")
+    expect(openAiBaseUrl?.value).toBe("https://proxy.example.com/openai/v1")
+    expect(openAiModel?.value).toBe("custom-openai-model")
+
+    await setInputValue(openAiBaseUrl as HTMLInputElement, "https://gateway.local/openai/v1")
+    await setInputValue(openAiModel as HTMLInputElement, "my-openai-model")
+    await click(buttonByText(container, "Anthropic"))
+
+    advancedInputs = [...container.querySelectorAll("input")]
+    expect(advancedInputs.some((input) => input.value === "https://proxy.example.com/anthropic")).toBe(true)
+    expect(advancedInputs.some((input) => input.value === "custom-anthropic-model")).toBe(true)
+
+    await click(buttonByText(container, "OpenAI"))
+    advancedInputs = [...container.querySelectorAll("input")]
+    expect(advancedInputs.some((input) => input.value === "https://gateway.local/openai/v1")).toBe(true)
+    expect(advancedInputs.some((input) => input.value === "my-openai-model")).toBe(true)
+    unmount()
+  })
+
+  it("tests and persists the current LLM configuration", async () => {
+    vi.mocked(isTauriRuntime).mockReturnValue(true)
+    vi.mocked(testLlmConnectionWithSettings).mockResolvedValueOnce({
+      provider: "open_ai",
+      model: "my-openai-model",
+      ok: true,
+    })
+    vi.mocked(saveLlmSettings).mockResolvedValueOnce({
+      provider: "open_ai",
+      baseUrl: "https://gateway.local/openai/v1",
+      model: "my-openai-model",
+      apiKeyConfigured: true,
+      providers: {
+        deep_seek: {
+          baseUrl: "https://api.deepseek.com",
+          model: "deepseek-v4-flash",
+          apiKeyConfigured: true,
+        },
+        open_ai: {
+          baseUrl: "https://gateway.local/openai/v1",
+          model: "my-openai-model",
+          apiKeyConfigured: true,
+        },
+        anthropic: {
+          baseUrl: "https://proxy.example.com/anthropic",
+          model: "custom-anthropic-model",
+          apiKeyConfigured: false,
+        },
+      },
+    })
+
+    const onLlmSettingsSaved = vi.fn()
+    const { container, unmount } = await renderClient(
+      <LlmSettingsPanel
+        open
+        onClose={() => undefined}
+        onLlmSettingsSaved={onLlmSettingsSaved}
+        defaultAdvancedOpen
+      />,
+    )
+
+    await click(buttonByText(container, "OpenAI"))
+    const inputs = [...container.querySelectorAll("input")]
+    const keyInput = inputByPlaceholder(container, "沿用已保存密钥")
+    const baseUrlInput = inputs.find((input) =>
+      input.value.includes("proxy.example.com/openai"),
+    ) as HTMLInputElement
+    const modelInput = inputs.find((input) => input.value === "custom-openai-model") as HTMLInputElement
+
+    await setInputValue(keyInput, "unsaved-openai-key")
+    await setInputValue(baseUrlInput, "https://gateway.local/openai/v1")
+    await setInputValue(modelInput, "my-openai-model")
+    await click(buttonByText(container, "测试并记录"))
+
+    await vi.waitFor(() => {
+      expect(testLlmConnectionWithSettings).toHaveBeenCalledWith({
+        provider: "open_ai",
+        baseUrl: "https://gateway.local/openai/v1",
+        model: "my-openai-model",
+        apiKey: "unsaved-openai-key",
+      })
+      expect(saveLlmSettings).toHaveBeenCalledWith({
+        provider: "open_ai",
+        baseUrl: "https://gateway.local/openai/v1",
+        model: "my-openai-model",
+        apiKey: "unsaved-openai-key",
+      })
+      expect(textContent(container)).toContain("OpenAI my-openai-model 连通正常，已记录为当前 LLM 设置")
+      expect(onLlmSettingsSaved).toHaveBeenCalledWith({
+        provider: "open_ai",
+        baseUrl: "https://gateway.local/openai/v1",
+        model: "my-openai-model",
+        apiKeyConfigured: true,
+        providers: {
+          deep_seek: {
+            baseUrl: "https://api.deepseek.com",
+            model: "deepseek-v4-flash",
+            apiKeyConfigured: true,
+          },
+          open_ai: {
+            baseUrl: "https://gateway.local/openai/v1",
+            model: "my-openai-model",
+            apiKeyConfigured: true,
+          },
+          anthropic: {
+            baseUrl: "https://proxy.example.com/anthropic",
+            model: "custom-anthropic-model",
+            apiKeyConfigured: false,
+          },
+        },
+      })
+    })
+    expect(textContent(container)).not.toContain("unsaved-openai-key")
+    unmount()
+  })
+
+  it("restores the tested Anthropic-compatible provider after reopening settings", async () => {
+    vi.mocked(isTauriRuntime).mockReturnValue(true)
+    const persistedSettings = {
+      provider: "anthropic" as const,
+      baseUrl: "https://api.minimaxi.com/anthropic",
+      model: "MiniMax-M3",
+      apiKeyConfigured: true,
+      providers: {
+        deep_seek: {
+          baseUrl: "https://api.deepseek.com",
+          model: "deepseek-v4-flash",
+          apiKeyConfigured: true,
+        },
+        open_ai: {
+          baseUrl: "https://proxy.example.com/openai/v1",
+          model: "custom-openai-model",
+          apiKeyConfigured: true,
+        },
+        anthropic: {
+          baseUrl: "https://api.minimaxi.com/anthropic",
+          model: "MiniMax-M3",
+          apiKeyConfigured: true,
+        },
+      },
+    }
+    vi.mocked(testLlmConnectionWithSettings).mockResolvedValueOnce({
+      provider: "anthropic",
+      model: "MiniMax-M3",
+      ok: true,
+    })
+    vi.mocked(saveLlmSettings).mockResolvedValueOnce(persistedSettings)
+
+    const first = await renderClient(
+      <LlmSettingsPanel open onClose={() => undefined} defaultAdvancedOpen />,
+    )
+
+    await click(buttonByText(first.container, "Anthropic"))
+    const firstInputs = [...first.container.querySelectorAll("input")]
+    const keyInput = inputByPlaceholder(first.container, "输入密钥后保存")
+    const baseUrlInput = firstInputs.find((input) =>
+      input.value.includes("proxy.example.com/anthropic"),
+    ) as HTMLInputElement
+    const modelInput = firstInputs.find((input) => input.value === "custom-anthropic-model") as HTMLInputElement
+
+    await setInputValue(keyInput, "anthropic-compatible-key")
+    await setInputValue(baseUrlInput, "https://api.minimaxi.com/anthropic")
+    await setInputValue(modelInput, "MiniMax-M3")
+    await click(buttonByText(first.container, "测试并记录"))
+
+    await vi.waitFor(() => {
+      expect(saveLlmSettings).toHaveBeenCalledWith({
+        provider: "anthropic",
+        baseUrl: "https://api.minimaxi.com/anthropic",
+        model: "MiniMax-M3",
+        apiKey: "anthropic-compatible-key",
+      })
+      expect(textContent(first.container)).toContain("Anthropic MiniMax-M3 连通正常，已记录为当前 LLM 设置")
+    })
+    first.unmount()
+
+    vi.mocked(getLlmSettings).mockResolvedValueOnce(persistedSettings)
+    const reopened = await renderClient(
+      <LlmSettingsPanel open onClose={() => undefined} defaultAdvancedOpen />,
+    )
+
+    expect(textContent(reopened.container)).toContain("当前预设：Anthropic · MiniMax-M3")
+    expect([...reopened.container.querySelectorAll("input")].some((input) =>
+      input.value === "https://api.minimaxi.com/anthropic",
+    )).toBe(true)
+    expect([...reopened.container.querySelectorAll("input")].some((input) =>
+      input.value === "MiniMax-M3",
+    )).toBe(true)
+    expect(textContent(reopened.container)).not.toContain("anthropic-compatible-key")
+    reopened.unmount()
   })
 
   it("keeps per-section save buttons and can save all settings from the footer", async () => {
@@ -250,6 +492,7 @@ describe("LlmSettingsPanel defaults", () => {
         baseUrl: "https://api.siliconflow.cn/v1/embeddings",
         model: "Qwen/Qwen3-Embedding-4B",
         expectedDimension: 2560,
+        batchSize: 64,
         enabled: true,
         apiKey: undefined,
       })
@@ -294,8 +537,9 @@ describe("LlmSettingsPanel defaults", () => {
     expect(textContent(container)).toContain("Provider ID")
     expect(textContent(container)).toContain("Embedding URL")
     expect(textContent(container)).toContain("向量维度")
+    expect(textContent(container)).toContain("批大小")
     expect(textContent(container)).toContain("开发诊断")
-    expect(textContent(container)).toContain("模型服务地址")
+    expect(textContent(container)).toContain("OpenAI 兼容服务填到 /v1")
     expect(textContent(container)).toContain("自定义模型")
     expect(textContent(container)).toContain("兼容 OpenAI embeddings 协议")
     expect(textContent(container)).toContain("必须匹配模型输出维度")
@@ -309,6 +553,7 @@ describe("LlmSettingsPanel defaults", () => {
       baseUrl: "https://api.siliconflow.cn/v1/embeddings",
       model: "Qwen/Qwen3-Embedding-4B",
       expectedDimension: 2560,
+      batchSize: 64,
       apiKeyConfigured: false,
       enabled: false,
     })
@@ -326,6 +571,7 @@ describe("LlmSettingsPanel defaults", () => {
         baseUrl: "https://api.siliconflow.cn/v1/embeddings",
         model: "Qwen/Qwen3-Embedding-4B",
         expectedDimension: 2560,
+        batchSize: 64,
         enabled: false,
         apiKey: undefined,
       })

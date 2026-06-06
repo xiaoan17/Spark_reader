@@ -1,0 +1,42 @@
+{
+  "jobs": 4,
+  "tasks": [
+    {
+      "id": "selection-frame-gpt-image-2",
+      "promptFiles": ["prompts/shared.md", "prompts/01-selection-frame.md"],
+      "image": "out/spark-logo-01-selection-frame-gpt-image-2.png",
+      "provider": "openai",
+      "model": "gpt-image-2",
+      "ar": "1:1",
+      "quality": "normal"
+    },
+    {
+      "id": "citation-anchor-gpt-image-2",
+      "promptFiles": ["prompts/shared.md", "prompts/02-citation-anchor.md"],
+      "image": "out/spark-logo-02-citation-anchor-gpt-image-2.png",
+      "provider": "openai",
+      "model": "gpt-image-2",
+      "ar": "1:1",
+      "quality": "normal"
+    },
+    {
+      "id": "yin-abstract-gpt-image-2",
+      "promptFiles": ["prompts/shared.md", "prompts/03-yin-abstract.md"],
+      "image": "out/spark-logo-03-yin-abstract-gpt-image-2.png",
+      "provider": "openai",
+      "model": "gpt-image-2",
+      "ar": "1:1",
+      "quality": "normal"
+    },
+    {
+      "id": "spark-s-glyph-gpt-image-2",
+      "promptFiles": ["prompts/shared.md", "prompts/04-spark-s-glyph.md"],
+      "image": "out/spark-logo-04-s-glyph-gpt-image-2.png",
+      "provider": "openai",
+      "model": "gpt-image-2",
+      "ar": "1:1",
+      "quality": "normal"
+    }
+  ]
+}
+

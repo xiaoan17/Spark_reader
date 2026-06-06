@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{thread, time::Duration};
 
 use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
@@ -51,6 +51,16 @@ pub enum EmbeddingError {
     Disabled,
 }
 
+impl EmbeddingError {
+    fn should_retry_with_smaller_batch(&self) -> bool {
+        match self {
+            EmbeddingError::Provider { status, .. } => matches!(*status, 408 | 429 | 500..=599),
+            EmbeddingError::Http(err) => err.is_timeout() || err.is_connect(),
+            _ => false,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct EmbeddingsResponse {
     data: Vec<EmbeddingItem>,
@@ -78,8 +88,8 @@ pub fn embed_texts(texts: &[String]) -> Result<Option<EmbeddingBatch>, Embedding
 
     let mut vectors = Vec::with_capacity(texts.len());
     let mut dimension = None;
-    for batch in texts.chunks(64) {
-        let partial = embed_openai_compat(&config, batch)?;
+    for batch in texts.chunks(config.batch_size.max(1)) {
+        let partial = embed_openai_compat_with_backoff(&config, batch)?;
         if let Some(expected) = dimension {
             if partial.dimension != expected {
                 return Err(EmbeddingError::DimensionMismatch);
@@ -113,6 +123,46 @@ pub fn test_connection() -> Result<EmbeddingConnectionTestResponse, EmbeddingErr
         model: config.model,
         dimension: batch.dimension,
         ok: true,
+    })
+}
+
+fn embed_openai_compat_with_backoff(
+    config: &EmbeddingConfig,
+    texts: &[String],
+) -> Result<EmbeddingBatch, EmbeddingError> {
+    let mut batch_size = texts.len().max(1);
+    let mut offset = 0;
+    let mut vectors = Vec::with_capacity(texts.len());
+    let mut dimension = None;
+
+    while offset < texts.len() {
+        let end = (offset + batch_size).min(texts.len());
+        match embed_openai_compat(config, &texts[offset..end]) {
+            Ok(partial) => {
+                if let Some(expected) = dimension {
+                    if partial.dimension != expected {
+                        return Err(EmbeddingError::DimensionMismatch);
+                    }
+                } else {
+                    dimension = Some(partial.dimension);
+                }
+                vectors.extend(partial.vectors);
+                offset = end;
+            }
+            Err(err) if err.should_retry_with_smaller_batch() && batch_size > 1 => {
+                batch_size = (batch_size / 2).max(1);
+                thread::sleep(Duration::from_millis(350));
+            }
+            Err(err) => return Err(err),
+        }
+    }
+
+    Ok(EmbeddingBatch {
+        provider: config.provider.clone(),
+        base_url: config.base_url.clone(),
+        model: config.model.clone(),
+        dimension: dimension.unwrap_or(0),
+        vectors,
     })
 }
 

@@ -1,10 +1,15 @@
-use std::{path::PathBuf, time::Duration};
+use std::{
+    env,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use anyhow::{anyhow, Context, Result};
 use reqwest::header::LOCATION;
 use serde::{Deserialize, Serialize};
 
 const LOCAL_API_BASE_URL: &str = "http://127.0.0.1:23119/api/users/0";
+const MAX_ZOTERO_QUERY_CHARS: usize = 300;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -56,6 +61,11 @@ pub fn search_items(query: &str, limit: u32) -> Result<Vec<ZoteroSearchResult>> 
     let trimmed = query.trim();
     if trimmed.is_empty() {
         return Ok(Vec::new());
+    }
+    if trimmed.chars().count() > MAX_ZOTERO_QUERY_CHARS {
+        return Err(anyhow!(
+            "Zotero 搜索关键词过长，请控制在 {MAX_ZOTERO_QUERY_CHARS} 个字符以内"
+        ));
     }
     let client = client()?;
     let url = format!(
@@ -209,10 +219,14 @@ fn attachment_file_path(
     file_url_to_path(location)
         .with_context(|| format!("Zotero PDF 路径无效：{location}"))
         .and_then(|path| {
-            if path.exists() {
-                Ok(path)
+            let canonical = path
+                .canonicalize()
+                .with_context(|| format!("Zotero PDF 文件不存在：{}", path.display()))?;
+            ensure_path_under_zotero_storage(&canonical)?;
+            if canonical.exists() {
+                Ok(canonical)
             } else {
-                Err(anyhow!("Zotero PDF 文件不存在：{}", path.display()))
+                Err(anyhow!("Zotero PDF 文件不存在：{}", canonical.display()))
             }
         })
 }
@@ -223,6 +237,26 @@ fn file_url_to_path(value: &str) -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("Zotero 返回的不是本地 file:// 路径"))?;
     let decoded = percent_decode(encoded)?;
     Ok(PathBuf::from(decoded))
+}
+
+fn ensure_path_under_zotero_storage(path: &Path) -> Result<()> {
+    let Some(storage_dir) = env::var("ZOTERO_STORAGE_DIR")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+    else {
+        return Ok(());
+    };
+    let storage_dir = storage_dir
+        .canonicalize()
+        .with_context(|| format!("Zotero storage 目录不存在：{}", storage_dir.display()))?;
+    if !path.starts_with(&storage_dir) {
+        return Err(anyhow!(
+            "Zotero PDF 路径不在允许的 storage 目录下：{}",
+            path.display()
+        ));
+    }
+    Ok(())
 }
 
 fn percent_encode(value: &str) -> String {

@@ -44,6 +44,7 @@ LLM_PROVIDER=deepseek            # deepseek | openai | anthropic
 DEEPSEEK_API_KEY=... / DEEPSEEK_BASE_URL=https://api.deepseek.com
 OPENAI_API_KEY=...  / OPENAI_BASE_URL=https://api.openai.com/v1
 ANTHROPIC_API_KEY=...
+ANTHROPIC_BASE_URL=https://api.anthropic.com
 ```
 
 **Embedding 配置**:embedding 只走外部 provider,不在客户端本地部署/下载 embedding 模型。当前实现支持 OpenAI-compatible `/embeddings`:
@@ -53,12 +54,18 @@ EMBEDDING_API_KEY=...
 EMBEDDING_BASE_URL=https://api.siliconflow.cn/v1/embeddings
 EMBEDDING_MODEL=Qwen/Qwen3-Embedding-4B
 EMBEDDING_DIM=2560              # 可选;配置后会校验 provider 返回维度
+EMBEDDING_BATCH_SIZE=64         # 可选;provider 限流/超时时会自动减半重试
 ```
 DB 存 `provider/model + dimension`;切换 provider 或模型必须重建整本索引,绝不混用向量。
 
-**设置 UI**(接 `UI-UX.md`):设置页用 shadcn `Select` 选 provider + `Input`(密码态)填 key + `Button` 测试连通。切换即时生效。
+**设置 UI**(接 `UI-UX.md`):设置页用 provider 预设按钮选择 DeepSeek / OpenAI / Anthropic,`Input`(密码态)填 key,高级模式可分别编辑每个 provider 的 `Base URL` 和 `Model`,`Button` 测试当前界面配置。切换 provider 时保留各自草稿和已保存配置;保存后即时生效。
 
-**安全铁律**:key 只存本地 `.env`/系统钥匙串,**经 Tauri Rust 后端调用,绝不进前端、绝不打包进客户端**(见 `AGENTS.md`)。商业分发应走自有服务端代理。
+**自定义接入规则**:
+- DeepSeek / OpenAI 走 OpenAI-compatible Chat Completions,后端会把 `Base URL` 拼成 `{base_url}/chat/completions`。
+- Anthropic 走 Messages API,后端会把 `Base URL` 拼成 `{base_url}/v1/messages`。
+- `Base URL` 保存时去掉尾部 `/`;key 只写入本机 `.env`,不会写入 settings JSON。
+
+**安全铁律**:当前 key 存本地后端 `.env`(Unix `0600`,Windows ACL 限当前用户),**经 Tauri Rust 后端调用,绝不进前端、绝不打包进客户端**(见 `AGENTS.md`)。商业分发应走自有服务端代理;系统钥匙串是后续加固项。
 
 ---
 
@@ -120,4 +127,4 @@ Synthesize → 带 [chunk_id] 引用的解读
 - [x] 设置 UI:provider 选择 + key 输入 + 连通测试。
 - [x] Embedding 设置 UI + 外部 provider `/embeddings` 连通测试。
 - [ ] 真实 DeepSeek/OpenAI/Anthropic 三家在线回归仍需按当前密钥逐一跑。
-- [ ] prompt cache 命中率和成本观测还未做成产品内指标。
+- [ ] prompt cache usage 已在后端日志解析(OpenAI cached prompt tokens / Anthropic cache create/read tokens);产品内指标展示待做。

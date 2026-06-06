@@ -3,6 +3,8 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import type { ZoteroSearchResult } from "@/core/library-api"
 
+const ZOTERO_QUERY_MAX_LENGTH = 300
+
 type ZoteroImportPanelProps = {
   open: boolean
   query: string
@@ -56,6 +58,7 @@ export function ZoteroImportPanel({
             placeholder="输入论文标题或关键词"
             value={query}
             onChange={(event) => onQueryChange(event.target.value)}
+            maxLength={ZOTERO_QUERY_MAX_LENGTH}
             autoFocus
           />
           <Button type="submit" disabled={status === "searching" || status === "importing"}>

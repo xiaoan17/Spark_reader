@@ -60,6 +60,8 @@ base host:`https://mineru.net`
    → full.md / *_middle.json(即 layout.json)/ *_content_list.json / *_model.json
 ```
 
+下载结果 zip 时后端强制 `https`、校验 host 属于 `mineru.net` 或 `MINERU_ALLOWED_ZIP_HOSTS` 追加白名单,并检查响应像 zip 后才进入解压防护。
+
 > 单文件 URL 路径 `POST /api/v4/extract/task`(传公网 `url`)仅用于"解析网络上的 PDF"场景,本地文件用不上。
 
 ### 2.2 轮询策略

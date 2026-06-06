@@ -6,6 +6,7 @@ mod interpretation;
 mod llm;
 mod mineru;
 mod mineru_parser;
+mod plain_book_parser;
 mod product_self_check;
 mod storage;
 mod translation;
@@ -38,6 +39,7 @@ pub fn run() {
             commands::get_neighbors,
             commands::get_llm_settings,
             commands::import_mineru_output,
+            commands::import_plain_book,
             commands::import_pdf_with_mineru,
             commands::import_zotero_item,
             commands::interpret_selection,
@@ -49,6 +51,7 @@ pub fn run() {
             commands::product_self_check,
             commands::read_pdf_file,
             commands::rebuild_search_index,
+            commands::rebuild_search_index_async,
             commands::reveal_book_asset,
             commands::save_highlight,
             commands::save_embedding_settings,
@@ -61,6 +64,7 @@ pub fn run() {
             commands::start_translation,
             commands::test_embedding_connection,
             commands::test_llm_connection,
+            commands::test_llm_connection_with_settings,
             commands::translation_status,
         ])
         .run(tauri::generate_context!())
@@ -69,9 +73,7 @@ pub fn run() {
 
 pub fn run_cli_if_requested() -> Option<i32> {
     let mut args = std::env::args().skip(1);
-    let Some(command) = args.next() else {
-        return None;
-    };
+    let command = args.next()?;
     match command.as_str() {
         "--product-self-check" => Some(run_product_self_check_cli(args.next())),
         "--help" | "-h" => {
