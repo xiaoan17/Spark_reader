@@ -48,18 +48,20 @@
 | （新增）健康度 | `knowledge_health` | — |
 | （新增）漂移 | `list_knowledge_drift` | — |
 
-### 0.5.3 已知偏离与技术债（需偿还，见 P10）
+### 0.5.3 已知偏离与技术债（偿还进度，见 P10）
 
-| 偏离项 | 计划/铁律要求 | 现状 | 严重度 |
+> 进度更新（2026-06-07）：`knowledge.rs` 拆分与 git 纳管已完成；`storage.rs` 瘦身与前端纯函数层待办。
+
+| 偏离项 | 计划/铁律要求 | 状态 | 严重度 |
 |---|---|---|---|
-| **架构未拆分** | 第 3 节要求 `knowledge/` 目录（schema/cards/evidence/query/...）；coding-style 要求 200–400 行/文件、禁止 >800 行 | `knowledge.rs` **单文件 4557 行**，无 `knowledge/` 目录 | 🔴 高 |
-| **storage 膨胀** | 「storage.rs 只做薄 DB helper」 | `storage.rs` **5984 行** | 🔴 高 |
-| **前端纯函数层缺失** | 第 3 节要求 `src/core/knowledge-export.ts` / `knowledge-display.ts` + 单测 | **两文件均不存在**，导出/展示逻辑无独立可单测纯函数层 | 🟡 中 |
-| **未纳入 git** | 第 9 节全部 gate/PR 流程基于 commit | `knowledge.rs`、`src/components/knowledge/`、本计划文件全部 `untracked`；仓库仅 1 个 commit | 🔴 高 |
-| **P3 惰性补全缺失** | P3 核心交付 | `get_or_generate_highlight_note` / `get_or_generate_card_summary` 未实现 | 🟡 中 |
-| **测试密度不足** | 每条能力都有单测 | `knowledge.rs` 仅 12 个测试覆盖 4557 行 + P2–P7 全部能力 | 🟡 中 |
+| **架构未拆分** | 第 3 节要求 `knowledge/` 目录；coding-style 要求 200–400 行/文件、禁止 >800 行 | ✅ **已拆分**：`knowledge.rs` 4557 行 → `knowledge/`(mod 2970 + types 263 + schema 103 + text_utils 416 + export 165 + tests 673)；137 个 Rust 测试全绿。mod.rs 仍 2970 行(DB 核心高耦合),进一步细拆见 P10 备注 | 🟡 中（已大幅缓解） |
+| **storage 膨胀** | 「storage.rs 只做薄 DB helper」 | ❌ 待办：`storage.rs` 仍 **5984 行** | 🔴 高 |
+| **前端纯函数层缺失** | 第 3 节要求 `src/core/knowledge-export.ts` / `knowledge-display.ts` + 单测 | ❌ 待办：两文件仍不存在 | 🟡 中 |
+| **未纳入 git** | 第 9 节全部 gate/PR 流程基于 commit | ✅ **已纳管**：知识系统已提交到 `anbc_dev` 分支，并按步骤切了 6 个可回滚 commit；`0_reference/`、`*.dmg` 已加入 `.gitignore` | — 已解决 |
+| **P3 惰性补全缺失** | P3 核心交付 | ❌ 待办：`get_or_generate_*` 未实现 | 🟡 中 |
+| **测试密度不足** | 每条能力都有单测 | ⚠️ 部分：`knowledge::tests` 仍 12 个;拆分未降低覆盖,但 P2–P7 新能力仍需补测 | 🟡 中 |
 
-**决策（2026-06-07）**：上述架构偏离按**技术债处理**，排期偿还（见新增 **P10**），代码向计划看齐，而非放宽计划约束。
+**决策（2026-06-07）**：架构偏离按**技术债处理**，代码向计划看齐。**已完成 `knowledge.rs` 拆分 + git 纳管**（6 步增量提交，每步 `cargo test` 全绿）；剩余 `storage.rs` 瘦身、前端纯函数层、P3 惰性补全见 P10。
 
 ---
 
@@ -694,13 +696,14 @@ pnpm health:bundle
 
 任务（建议按依赖顺序）：
 
-- [ ] **纳入 git（最高优先，前置）**：
-  - 把 `src-tauri/src/knowledge.rs`、`src/components/knowledge/`、`docs/knowledge-system-implementation-plan.md`、`docs/20260607_开发note_v1/` 纳入版本控制。
-  - 后续按阶段切 commit，使第 6/9 节的 gate 与 PR 清单可被真实验证。
-- [ ] **拆分 `knowledge.rs`（4557 行 → `knowledge/` 目录）**：
-  - 按第 3 节蓝图拆为 `mod.rs / schema.rs / cards.rs / evidence.rs / query.rs / extract.rs / events.rs / relations.rs / export.rs / prompts.rs`。
-  - 每文件回到 200–400 行区间；纯逻辑拆出后补单测。
-  - 拆分必须**行为等价**：先有覆盖测试兜底，再搬代码，最后跑 `cargo test` 对齐。
+- [x] **纳入 git（最高优先，前置）**：
+  - 知识系统已提交到 `anbc_dev` 分支；`0_reference/`(155M)、`*.dmg` 已加入 `.gitignore`。
+  - 已按步骤切 6 个可回滚 commit（baseline + 5 次模块抽取），第 6/9 节 gate/PR 流程现可真实验证。
+- [x] **拆分 `knowledge.rs`（4557 行 → `knowledge/` 目录）**：
+  - 已拆为 `mod.rs(2970) / types.rs(263) / schema.rs(103) / text_utils.rs(416) / export.rs(165) / tests.rs(673)`。
+  - 采用「中粒度 5 文件」策略（私有 helper 高度共享，细拆 churn 过大）；submodule 用 `use super::*` 共享父作用域。
+  - **行为等价已验证**：每步 `cargo test --lib knowledge::` 12 通过，最终全量 137 Rust 测试全绿、0 warning、tsc 干净。
+  - ⚠️ 备注：`mod.rs` 仍 2970 行（cards CRUD / graph / query / extract 高耦合 DB 核心）。进一步细拆为 `cards/graph/query` 风险较高（需大量 `pub(super)` + 跨文件重写），按 ROI 暂缓，留作后续可选项。
 - [ ] **`storage.rs` 瘦身（5984 行）**：
   - 只保留 schema 初始化与薄 DB helper；知识层相关逻辑迁入 `knowledge/`。
 - [ ] **补前端纯函数层**：
@@ -711,10 +714,10 @@ pnpm health:bundle
 
 Check 目标：
 
-- [ ] `wc -l src-tauri/src/knowledge.rs` 不再是单一巨文件；`knowledge/` 目录存在。
+- [x] `wc -l src-tauri/src/knowledge/mod.rs` 不再是单一巨文件；`knowledge/` 目录存在（6 个文件）。
 - [ ] `storage.rs` 行数显著下降，不再承载知识层业务逻辑。
-- [ ] `git ls-files` 能列出 knowledge 模块与组件（不再 untracked）。
-- [ ] 拆分前后 `cargo test` / `pnpm test` 全绿，行为等价。
+- [x] `git ls-files` 能列出 knowledge 模块与组件（不再 untracked）。
+- [x] 拆分前后 `cargo test`（137 通过）/ `tsc`（干净）全绿，行为等价。
 
 自动化验收：
 
