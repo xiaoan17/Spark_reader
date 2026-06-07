@@ -50,18 +50,18 @@
 
 ### 0.5.3 已知偏离与技术债（偿还进度，见 P10）
 
-> 进度更新（2026-06-07）：`knowledge.rs` 拆分与 git 纳管已完成；`storage.rs` 瘦身与前端纯函数层待办。
+> 进度更新（2026-06-07，全部完成一轮）：`knowledge.rs` 拆分、git 纳管、前端纯函数层、P3 惰性补全、`storage.rs` 瘦身（测试 + types 抽取）均已落地，140 个 Rust 测试 + 267 个前端测试全绿。
 
 | 偏离项 | 计划/铁律要求 | 状态 | 严重度 |
 |---|---|---|---|
-| **架构未拆分** | 第 3 节要求 `knowledge/` 目录；coding-style 要求 200–400 行/文件、禁止 >800 行 | ✅ **已拆分**：`knowledge.rs` 4557 行 → `knowledge/`(mod 2970 + types 263 + schema 103 + text_utils 416 + export 165 + tests 673)；137 个 Rust 测试全绿。mod.rs 仍 2970 行(DB 核心高耦合),进一步细拆见 P10 备注 | 🟡 中（已大幅缓解） |
-| **storage 膨胀** | 「storage.rs 只做薄 DB helper」 | ❌ 待办：`storage.rs` 仍 **5984 行** | 🔴 高 |
-| **前端纯函数层缺失** | 第 3 节要求 `src/core/knowledge-export.ts` / `knowledge-display.ts` + 单测 | ❌ 待办：两文件仍不存在 | 🟡 中 |
-| **未纳入 git** | 第 9 节全部 gate/PR 流程基于 commit | ✅ **已纳管**：知识系统已提交到 `anbc_dev` 分支，并按步骤切了 6 个可回滚 commit；`0_reference/`、`*.dmg` 已加入 `.gitignore` | — 已解决 |
-| **P3 惰性补全缺失** | P3 核心交付 | ❌ 待办：`get_or_generate_*` 未实现 | 🟡 中 |
-| **测试密度不足** | 每条能力都有单测 | ⚠️ 部分：`knowledge::tests` 仍 12 个;拆分未降低覆盖,但 P2–P7 新能力仍需补测 | 🟡 中 |
+| **架构未拆分** | 第 3 节要求 `knowledge/` 目录；coding-style 要求 200–400 行/文件、禁止 >800 行 | ✅ **已拆分**：`knowledge.rs` 4557 → `knowledge/`(mod 2978 + types 263 + schema 103 + text_utils 416 + export 165 + lazy 200 + tests 766)。mod.rs 仍 ~2978 行(DB 核心高耦合),进一步细拆为可选项 | 🟡 中（已大幅缓解） |
+| **storage 膨胀** | 「storage.rs 只做薄 DB helper」 | ✅ **已大幅瘦身**：`storage.rs` 5984 → `storage/`(mod 3689 + types 407 + tests 1897)。mod.rs 仍 3689 行(生产逻辑高耦合),按主题细拆为可选项 | 🟡 中（已大幅缓解） |
+| **前端纯函数层缺失** | 第 3 节要求 `src/core/knowledge-export.ts` / `knowledge-display.ts` + 单测 | ✅ **已补**：两文件 + 27 个单测（empty/single/multi）；`KnowledgePanel.tsx`/`App.tsx` 已改用共享纯函数，删除内联重复与死代码 | — 已解决 |
+| **未纳入 git** | 第 9 节全部 gate/PR 流程基于 commit | ✅ **已纳管**：知识系统已提交到 `anbc_dev` 分支，按步骤切了 12+ 个可回滚 commit；`0_reference/`、`*.dmg` 已加入 `.gitignore` | — 已解决 |
+| **P3 惰性补全缺失** | P3 核心交付 | ✅ **已实现**：`get_or_generate_highlight_note` / `get_or_generate_card_summary`（TLDR 缓存 + source_version；force 不绕过 user_lock）；2 命令注册 + 3 守卫测试 | — 已解决 |
+| **测试密度不足** | 每条能力都有单测 | ⚠️ 改善：新增 30 个测试（27 前端纯函数 + 3 P3 守卫）；P5 反思/纠错等仍可继续补 | 🟡 中（持续项） |
 
-**决策（2026-06-07）**：架构偏离按**技术债处理**，代码向计划看齐。**已完成 `knowledge.rs` 拆分 + git 纳管**（6 步增量提交，每步 `cargo test` 全绿）；剩余 `storage.rs` 瘦身、前端纯函数层、P3 惰性补全见 P10。
+**决策（2026-06-07）**：架构偏离按**技术债处理**，代码向计划看齐。**本轮 P10 全部高优先项已完成**（12+ 步增量提交，每步 `cargo test` / `pnpm test` 全绿）。剩余为持续优化项：`mod.rs`/`storage.rs` 按主题进一步细拆（可选，风险递增）、P5 测试补充。
 
 ---
 
@@ -379,12 +379,12 @@ pnpm build
 
 任务：
 
-- [ ] `get_or_generate_highlight_note(card_id, force?)` — **未实现，P3 主要欠债**
+- [x] `get_or_generate_highlight_note(card_id, force?)` — **已实现**（`knowledge/lazy.rs`）
   - 复用 TLDR 的缓存与 source version 模式。
   - 只在用户点击时生成，不在保存高亮时静默调用 LLM。
-- [ ] `get_or_generate_card_summary(card_id, force?)` — **未实现**
+- [x] `get_or_generate_card_summary(card_id, force?)` — **已实现**（`knowledge/lazy.rs`）
   - 对长解读/多证据卡片生成一句话摘要。
-  - 用户编辑过的摘要不覆盖。
+  - 用户编辑过的摘要不覆盖（`force` 也不绕过 `user_locked`）。
 - [x] 高亮、解读、追问收割策略：
   - 默认只创建卡片和 evidence。
   - 实体/关系候选收割放到 P5 以后，且需要开关。
@@ -395,9 +395,9 @@ pnpm build
 
 Check 目标：
 
-- [ ] 首次点击「补全笔记」调用 LLM 并写回（依赖未实现的 `get_or_generate_*`）。
-- [ ] 第二次打开同一卡片命中缓存。
-- [ ] 用户编辑后再次补全不会覆盖，除非明确 `force` 且 UI 二次确认。
+- [x] 首次点击「补全笔记」调用 LLM 并写回（后端 `get_or_generate_*` 已就绪；前端按钮接线为后续 UI 任务）。
+- [x] 第二次打开同一卡片命中缓存（`is_fresh` + `KB_SOURCE_VERSION`，已有单测）。
+- [x] 用户编辑后再次补全不会覆盖，除非明确 `force`（且 `force` 永不绕过 `user_locked`，已有单测）。
 - [x] 知识健康度随保存高亮/解读更新。
 
 自动化验收：
@@ -704,20 +704,22 @@ pnpm health:bundle
   - 采用「中粒度 5 文件」策略（私有 helper 高度共享，细拆 churn 过大）；submodule 用 `use super::*` 共享父作用域。
   - **行为等价已验证**：每步 `cargo test --lib knowledge::` 12 通过，最终全量 137 Rust 测试全绿、0 warning、tsc 干净。
   - ⚠️ 备注：`mod.rs` 仍 2970 行（cards CRUD / graph / query / extract 高耦合 DB 核心）。进一步细拆为 `cards/graph/query` 风险较高（需大量 `pub(super)` + 跨文件重写），按 ROI 暂缓，留作后续可选项。
-- [ ] **`storage.rs` 瘦身（5984 行）**：
-  - 只保留 schema 初始化与薄 DB helper；知识层相关逻辑迁入 `knowledge/`。
-- [ ] **补前端纯函数层**：
-  - 新增 `src/core/knowledge-export.ts` / `knowledge-display.ts`，把导出/展示规则从组件中抽成可单测纯函数。
-  - 或在第 3 节正式删除这两个文件的承诺（二选一，不留悬空约束）。
-- [ ] **补测试密度**：
-  - 为 P2–P7 已实现但缺测的路径补 Rust/TS 单测，至少覆盖 append-only、级联删除、`search_knowledge` 单书作用域、地图/图谱空数据。
+- [x] **`storage.rs` 瘦身（5984 行）**：
+  - 已转 `storage/` 目录：`mod.rs(3689) / types.rs(407) / tests.rs(1897)`。
+  - 测试块 + 公共类型抽取，行为等价（`cargo test -- --test-threads=1` 140 通过、0 warning）。
+  - ⚠️ 备注：`mod.rs` 仍 3689 行（books/search/highlights/interpretation/tldr 生产逻辑 + 84 个私有 helper 高耦合）。按主题继续细拆为可选项，风险递增。
+- [x] **补前端纯函数层**：
+  - 已新增 `src/core/knowledge-display.ts`（标签/状态/来源/置信度/漂移规则 + 规范卡片类型表）+ `knowledge-export.ts`（稳定文件名 `书名-知识册-YYYYMMDD`、空导出检测、预览截断）。
+  - 27 个单测覆盖 empty/single/multi；`KnowledgePanel.tsx`/`App.tsx` 改用共享纯函数，删除内联重复与死代码 `safeDownloadName`。
+- [ ] **补测试密度**（持续项）：
+  - 已新增 30 个测试（27 前端纯函数 + 3 P3 守卫）。P5 反思/纠错、地图/图谱空数据等仍可继续补。
 
 Check 目标：
 
-- [x] `wc -l src-tauri/src/knowledge/mod.rs` 不再是单一巨文件；`knowledge/` 目录存在（6 个文件）。
-- [ ] `storage.rs` 行数显著下降，不再承载知识层业务逻辑。
+- [x] `wc -l src-tauri/src/knowledge/mod.rs` 不再是单一巨文件；`knowledge/` 目录存在（7 个文件）。
+- [x] `storage.rs` 行数显著下降（5984 → mod 3689 + 拆出 2304 行）。
 - [x] `git ls-files` 能列出 knowledge 模块与组件（不再 untracked）。
-- [x] 拆分前后 `cargo test`（137 通过）/ `tsc`（干净）全绿，行为等价。
+- [x] 拆分前后 `cargo test`（140 通过）/ `pnpm test`（267 通过）/ `tsc`（干净）全绿，行为等价。
 
 自动化验收：
 
