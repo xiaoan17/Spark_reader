@@ -671,3 +671,95 @@
         assert!(!drift.is_empty());
         assert!(drift.iter().any(|item| item.card_id == card_id));
     }
+
+    #[tokio::test]
+    async fn lazy_summary_respects_user_lock_even_on_force() {
+        // A user-locked card must never be overwritten by lazy completion,
+        // even with force = true. This path returns before any LLM call, so
+        // the test is fully deterministic (no network).
+        let path = temp_db("lazy-lock");
+        let _ = fs::remove_file(&path);
+        let book_id = save_fixture_book(&path);
+        let chunk_id = first_chunk_id(&path, &book_id);
+
+        let card = upsert_user_card(
+            &path,
+            UpsertKnowledgeCardRequest {
+                card_id: None,
+                book_id: book_id.clone(),
+                card_type: "note".to_string(),
+                title: "用户笔记".to_string(),
+                summary: "用户亲手写的摘要".to_string(),
+                body_markdown: "用户正文".to_string(),
+                payload_json: None,
+                status: "candidate".to_string(),
+                evidence_chunk_ids: vec![chunk_id],
+            },
+        )
+        .expect("user card should upsert");
+        assert!(card.user_locked);
+
+        let result = get_or_generate_card_summary(&path, &book_id, &card.card_id, true)
+            .await
+            .expect("locked card should return without error");
+        assert_eq!(result.summary, "用户亲手写的摘要");
+        assert!(result.user_locked);
+    }
+
+    #[tokio::test]
+    async fn lazy_summary_returns_cached_field_without_llm() {
+        // A non-locked card whose summary is already populated at the current
+        // source version is a cache hit: it returns as-is without an LLM call.
+        let path = temp_db("lazy-cache");
+        let _ = fs::remove_file(&path);
+        let book_id = save_fixture_book(&path);
+
+        let card_id = "auto-cache-card";
+        let conn = storage::open_database(&path).expect("db should open");
+        conn.execute(
+            "INSERT INTO kb_cards(
+                card_id, book_id, card_type, title, summary, body_markdown,
+                payload_json, status, source, confidence, source_version,
+                user_locked, created_at, updated_at
+             ) VALUES (?1, ?2, 'concept', '复利', '已缓存的一句话摘要', '正文',
+                '{}', 'candidate', 'auto', 0.6, ?3, 0, datetime('now'), datetime('now'))",
+            params![card_id, book_id, KB_SOURCE_VERSION],
+        )
+        .expect("seed auto card");
+
+        let result = get_or_generate_card_summary(&path, &book_id, card_id, false)
+            .await
+            .expect("cache hit should return without error");
+        assert_eq!(result.summary, "已缓存的一句话摘要");
+        assert!(!result.user_locked);
+    }
+
+    #[tokio::test]
+    async fn lazy_highlight_note_respects_user_lock_even_on_force() {
+        let path = temp_db("lazy-note-lock");
+        let _ = fs::remove_file(&path);
+        let book_id = save_fixture_book(&path);
+        let chunk_id = first_chunk_id(&path, &book_id);
+
+        let card = upsert_user_card(
+            &path,
+            UpsertKnowledgeCardRequest {
+                card_id: None,
+                book_id: book_id.clone(),
+                card_type: "highlight".to_string(),
+                title: "高亮".to_string(),
+                summary: "摘要".to_string(),
+                body_markdown: "用户写的笔记正文".to_string(),
+                payload_json: None,
+                status: "candidate".to_string(),
+                evidence_chunk_ids: vec![chunk_id],
+            },
+        )
+        .expect("user card should upsert");
+
+        let result = get_or_generate_highlight_note(&path, &book_id, &card.card_id, true)
+            .await
+            .expect("locked card should return without error");
+        assert_eq!(result.body_markdown, "用户写的笔记正文");
+        assert!(result.user_locked);
+    }

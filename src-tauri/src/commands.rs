@@ -845,6 +845,32 @@ pub fn get_knowledge_card(
 }
 
 #[command]
+pub async fn get_or_generate_highlight_note(
+    app: AppHandle,
+    book_id: String,
+    card_id: String,
+    force: Option<bool>,
+) -> CommandResult<knowledge::KnowledgeCard> {
+    let db_path = library_db_path(&app)?;
+    knowledge::get_or_generate_highlight_note(&db_path, &book_id, &card_id, force.unwrap_or(false))
+        .await
+        .map_err(command_error)
+}
+
+#[command]
+pub async fn get_or_generate_card_summary(
+    app: AppHandle,
+    book_id: String,
+    card_id: String,
+    force: Option<bool>,
+) -> CommandResult<knowledge::KnowledgeCard> {
+    let db_path = library_db_path(&app)?;
+    knowledge::get_or_generate_card_summary(&db_path, &book_id, &card_id, force.unwrap_or(false))
+        .await
+        .map_err(command_error)
+}
+
+#[command]
 pub fn upsert_knowledge_card(
     app: AppHandle,
     request: knowledge::UpsertKnowledgeCardRequest,

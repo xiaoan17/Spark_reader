@@ -22,6 +22,9 @@ pub use schema::initialize_schema;
 mod types;
 pub use types::*;
 
+mod lazy;
+pub use lazy::{get_or_generate_card_summary, get_or_generate_highlight_note};
+
 pub const KB_SOURCE_VERSION: u32 = 1;
 const KNOWLEDGE_GRAPH_TASK: &str = "knowledge_graph";
 const MAX_GRAPH_CANDIDATES: usize = 260;
