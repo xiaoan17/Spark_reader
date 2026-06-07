@@ -28,6 +28,12 @@ import type {
   KnowledgeMap,
 } from "@/stores/reader-store"
 import type { UpsertKnowledgeCardRequest } from "@/core/library-api"
+import {
+  KNOWLEDGE_CARD_TYPES,
+  formatConfidencePercent,
+  labelForCardType,
+  labelForStatus,
+} from "@/core/knowledge-display"
 
 type KnowledgePanelProps = {
   cards: KnowledgeCard[]
@@ -396,7 +402,7 @@ function KnowledgeCardItem({
           <h3 className="mt-2 line-clamp-2 text-sm font-semibold leading-5">{card.title}</h3>
         </div>
         <span className="shrink-0 text-[11px] text-muted-foreground">
-          {Math.round(card.confidence * 100)}%
+          {formatConfidencePercent(card.confidence)}
         </span>
       </div>
 
@@ -584,7 +590,7 @@ function KnowledgeCardEditForm({
             value={cardType}
             onChange={(event) => setCardType(event.target.value)}
           >
-            {["note", "highlight", "interpretation", "concept", "entity", "event", "claim", "question", "summary"].map((value) => (
+            {KNOWLEDGE_CARD_TYPES.map((value) => (
               <option key={value} value={value}>
                 {labelForCardType(value)}
               </option>
@@ -652,42 +658,4 @@ function KnowledgeSkeleton() {
       ))}
     </div>
   )
-}
-
-function labelForCardType(value: string) {
-  switch (value) {
-    case "highlight":
-      return "高亮"
-    case "interpretation":
-      return "解读"
-    case "question":
-      return "追问"
-    case "note":
-      return "笔记"
-    case "concept":
-      return "概念"
-    case "entity":
-      return "实体"
-    case "event":
-      return "事件"
-    case "claim":
-      return "论点"
-    case "summary":
-      return "章节"
-    default:
-      return value || "卡片"
-  }
-}
-
-function labelForStatus(value: string) {
-  switch (value) {
-    case "confirmed":
-      return "已确认"
-    case "candidate":
-      return "候选"
-    case "rejected":
-      return "已拒绝"
-    default:
-      return value || "未知"
-  }
 }

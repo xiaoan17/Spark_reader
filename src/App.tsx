@@ -74,6 +74,7 @@ import { llmKeyReadiness, shouldUseBackendInterpretation } from "@/core/interpre
 import { orderLocalFallbackChunks } from "@/core/local-fallback-chunks"
 import { resolveCitationTarget } from "@/core/citation-target"
 import { createSampleBook } from "@/core/sample-book"
+import { knowledgeExportFilename } from "@/core/knowledge-export"
 import type {
   EvidencePreview,
   ParsedChunk,
@@ -1378,7 +1379,7 @@ export function App() {
     try {
       const exportResult = await exportBookKnowledgeMarkdown(bookId)
       downloadMarkdownFile(
-        `${safeDownloadName(bookTitle || "reading-knowledge")}-knowledge.md`,
+        knowledgeExportFilename(bookTitle || "reading-knowledge", "md", new Date()),
         exportResult.markdown,
       )
       refreshKnowledge(bookId)
@@ -1394,7 +1395,7 @@ export function App() {
     try {
       const exportResult = await exportBookKnowledgeJson(bookId)
       downloadTextFile(
-        `${safeDownloadName(bookTitle || "reading-knowledge")}-knowledge.json`,
+        knowledgeExportFilename(bookTitle || "reading-knowledge", "json", new Date()),
         JSON.stringify(exportResult, null, 2),
         "application/json;charset=utf-8",
       )
@@ -1580,14 +1581,6 @@ export function App() {
 
 function normalizeSelectionForSpark(value: string) {
   return value.replace(/\s+/g, " ").trim()
-}
-
-function safeDownloadName(value: string) {
-  return value
-    .trim()
-    .replace(/[\\/:*?"<>|]+/g, "-")
-    .replace(/\s+/g, "-")
-    .slice(0, 80) || "reading-knowledge"
 }
 
 function downloadMarkdownFile(filename: string, markdown: string) {
