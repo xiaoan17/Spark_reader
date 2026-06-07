@@ -64,6 +64,50 @@ pub fn search_book_tool() -> ToolDefinition {
     }
 }
 
+pub fn search_knowledge_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "search_knowledge".to_string(),
+        description: "Search the current book's built knowledge system, including saved notes and auto-generated full-book concepts, entities, events, claims, and section summaries. It returns original evidence chunks. Final citations must still cite chunk_id evidence, never card ids.".to_string(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "A focused query for saved knowledge cards in the current book."
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 12
+                }
+            },
+            "required": ["query"]
+        }),
+    }
+}
+
+pub fn get_knowledge_context_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "get_knowledge_context".to_string(),
+        description: "Inspect a compact knowledge-graph context for the current book: matching cards, graph relations, map stations, and their evidence chunk ids. Use this before synthesis when the answer should connect to the book's knowledge graph. Do not cite card ids in the final answer; cite only chunk ids.".to_string(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "A focused topic, entity, event, claim, or user question to inspect in the knowledge graph."
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 10
+                }
+            },
+            "required": ["query"]
+        }),
+    }
+}
+
 pub fn get_chunk_tool() -> ToolDefinition {
     ToolDefinition {
         name: "get_chunk".to_string(),
@@ -112,6 +156,8 @@ pub fn list_structure_tool() -> ToolDefinition {
 
 pub fn book_retrieval_tools() -> Vec<ToolDefinition> {
     vec![
+        get_knowledge_context_tool(),
+        search_knowledge_tool(),
         search_book_tool(),
         get_chunk_tool(),
         get_neighbors_tool(),
@@ -1091,6 +1137,8 @@ mod tests {
         assert_eq!(
             names,
             vec![
+                "get_knowledge_context",
+                "search_knowledge",
                 "search_book",
                 "get_chunk",
                 "get_neighbors",
@@ -1098,10 +1146,13 @@ mod tests {
             ]
         );
         assert_eq!(tools[0].input_schema["required"][0], "query");
-        assert_eq!(tools[0].input_schema["properties"]["limit"]["maximum"], 12);
-        assert_eq!(tools[1].input_schema["required"][0], "chunk_id");
-        assert_eq!(tools[2].input_schema["properties"]["radius"]["maximum"], 3);
-        assert!(tools[3].input_schema["properties"].is_object());
+        assert_eq!(tools[0].input_schema["properties"]["limit"]["maximum"], 10);
+        assert_eq!(tools[1].input_schema["required"][0], "query");
+        assert_eq!(tools[1].input_schema["properties"]["limit"]["maximum"], 12);
+        assert_eq!(tools[2].input_schema["required"][0], "query");
+        assert_eq!(tools[3].input_schema["required"][0], "chunk_id");
+        assert_eq!(tools[4].input_schema["properties"]["radius"]["maximum"], 3);
+        assert!(tools[5].input_schema["properties"].is_object());
     }
 
     #[test]

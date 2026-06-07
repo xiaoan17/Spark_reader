@@ -13,7 +13,7 @@ use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
-use crate::{chunk_id, config, coordinates::COORDINATE_VERSION, embeddings};
+use crate::{chunk_id, config, coordinates::COORDINATE_VERSION, embeddings, knowledge};
 
 const DEFAULT_INTERPRETATION_HISTORY_LIMIT: u32 = 50;
 const MAX_INTERPRETATION_HISTORY_LIMIT: u32 = 200;
@@ -274,6 +274,10 @@ pub struct SaveHighlightRequest {
     #[serde(rename = "coordinateVersion", default = "default_coordinate_version")]
     pub coordinate_version: u32,
     pub interpretation: Option<String>,
+    #[serde(default)]
+    pub evidence_chunk_ids: Vec<String>,
+    #[serde(default)]
+    pub evidence_chunk_snapshots: Vec<EvidenceChunkSnapshot>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -300,6 +304,8 @@ pub struct SavedHighlight {
     pub rects: Vec<NormalizedRectInput>,
     pub coordinate_version: u32,
     pub interpretation: Option<String>,
+    pub evidence_chunk_ids: Vec<String>,
+    pub evidence_chunk_snapshots: Vec<EvidenceChunkSnapshot>,
     pub created_at: String,
 }
 
@@ -382,14 +388,14 @@ fn default_answer_source() -> AnswerSource {
 }
 
 impl AnswerSource {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             AnswerSource::Llm => "llm",
             AnswerSource::LocalFallback => "local_fallback",
         }
     }
 
-    fn from_db(value: &str) -> Self {
+    pub(crate) fn from_db(value: &str) -> Self {
         match value {
             "local_fallback" => AnswerSource::LocalFallback,
             _ => AnswerSource::Llm,
@@ -398,7 +404,7 @@ impl AnswerSource {
 }
 
 impl InterpretationKind {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             InterpretationKind::Interpretation => "interpretation",
             InterpretationKind::Spark => "spark",
@@ -406,7 +412,7 @@ impl InterpretationKind {
         }
     }
 
-    fn from_db(value: &str) -> Self {
+    pub(crate) fn from_db(value: &str) -> Self {
         match value {
             "spark" => InterpretationKind::Spark,
             "note" => InterpretationKind::Note,
@@ -1472,8 +1478,21 @@ pub fn find_book_by_source_pdf_with_engine(
     Ok(None)
 }
 
-pub fn save_highlight(db_path: &Path, request: SaveHighlightRequest) -> Result<SavedHighlight> {
+pub fn save_highlight(db_path: &Path, mut request: SaveHighlightRequest) -> Result<SavedHighlight> {
     let conn = open_database(db_path)?;
+    let requested_evidence_chunk_ids = request.evidence_chunk_ids.clone();
+    request.evidence_chunk_ids = requested_evidence_chunk_ids
+        .iter()
+        .map(|chunk_id| resolve_chunk_id(&conn, &request.book_id, chunk_id))
+        .collect::<Result<Vec<_>>>()
+        .context("failed to normalize highlight evidence chunk ids")?;
+    request.evidence_chunk_snapshots = evidence_chunk_snapshots(
+        &conn,
+        &request.book_id,
+        &requested_evidence_chunk_ids,
+        &request.evidence_chunk_ids,
+        &request.evidence_chunk_snapshots,
+    )?;
     let id = stable_highlight_id(&request);
     let rects_json = serde_json::to_string(&request.rects).context("failed to serialize rects")?;
 
@@ -1490,9 +1509,11 @@ pub fn save_highlight(db_path: &Path, request: SaveHighlightRequest) -> Result<S
            rects_json,
            coordinate_version,
            interpretation,
+           evidence_chunk_ids_json,
+           evidence_chunk_snapshots_json,
            created_at
          )
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, datetime('now'))
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, datetime('now'))
          ON CONFLICT(id) DO UPDATE SET
            selection_text = excluded.selection_text,
            prefix = excluded.prefix,
@@ -1502,7 +1523,9 @@ pub fn save_highlight(db_path: &Path, request: SaveHighlightRequest) -> Result<S
            position_end = excluded.position_end,
            rects_json = excluded.rects_json,
            coordinate_version = excluded.coordinate_version,
-           interpretation = excluded.interpretation",
+           interpretation = excluded.interpretation,
+           evidence_chunk_ids_json = excluded.evidence_chunk_ids_json,
+           evidence_chunk_snapshots_json = excluded.evidence_chunk_snapshots_json",
         params![
             id,
             request.book_id,
@@ -1514,12 +1537,25 @@ pub fn save_highlight(db_path: &Path, request: SaveHighlightRequest) -> Result<S
             request.position_end,
             rects_json,
             request.coordinate_version,
-            request.interpretation
+            request.interpretation,
+            serde_json::to_string(&request.evidence_chunk_ids)
+                .context("failed to serialize highlight evidence chunk ids")?,
+            serde_json::to_string(&request.evidence_chunk_snapshots)
+                .context("failed to serialize highlight evidence chunk snapshots")?
         ],
     )
     .context("failed to save highlight")?;
 
-    get_highlight(&conn, &id)
+    let highlight = get_highlight(&conn, &id)?;
+    knowledge::create_card_for_highlight(
+        &conn,
+        &highlight,
+        knowledge::HighlightKnowledgeInput {
+            evidence_chunk_ids: &request.evidence_chunk_ids,
+            evidence_chunk_snapshots: &request.evidence_chunk_snapshots,
+        },
+    )?;
+    Ok(highlight)
 }
 
 pub fn list_highlights(db_path: &Path, book_id: &str) -> Result<Vec<SavedHighlight>> {
@@ -1537,6 +1573,8 @@ pub fn list_highlights(db_path: &Path, book_id: &str) -> Result<Vec<SavedHighlig
                     rects_json,
                     coordinate_version,
                     interpretation,
+                    evidence_chunk_ids_json,
+                    evidence_chunk_snapshots_json,
                     created_at
              FROM highlights
              WHERE book_id = ?1
@@ -1553,6 +1591,7 @@ pub fn list_highlights(db_path: &Path, book_id: &str) -> Result<Vec<SavedHighlig
 
 pub fn delete_highlight(db_path: &Path, highlight_id: &str) -> Result<()> {
     let conn = open_database(db_path)?;
+    knowledge::delete_card_for_source(&conn, "highlight", highlight_id)?;
     conn.execute(
         "DELETE FROM highlights WHERE id = ?1",
         params![highlight_id],
@@ -1649,7 +1688,9 @@ pub fn save_interpretation(
     )
     .context("failed to save interpretation")?;
 
-    get_interpretation(&conn, &id)
+    let interpretation = get_interpretation(&conn, &id)?;
+    knowledge::create_card_for_interpretation(&conn, &interpretation)?;
+    Ok(interpretation)
 }
 
 pub fn list_interpretations(db_path: &Path, book_id: &str) -> Result<Vec<SavedInterpretation>> {
@@ -1721,6 +1762,17 @@ pub fn delete_interpretation(db_path: &Path, interpretation_id: &str) -> Result<
         .optional()
         .context("failed to find interpretation session")?;
     if let Some(session_id) = session_id {
+        let interpretation_ids = conn
+            .prepare("SELECT id FROM interpretations WHERE session_id = ?1 OR id = ?2")
+            .context("failed to prepare interpretation ids for knowledge cleanup")?
+            .query_map(params![session_id, interpretation_id], |row| {
+                row.get::<_, String>(0)
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("failed to read interpretation ids for knowledge cleanup")?;
+        for id in interpretation_ids {
+            knowledge::delete_card_for_source(&conn, "interpretation", &id)?;
+        }
         conn.execute(
             "DELETE FROM interpretations WHERE session_id = ?1 OR id = ?2",
             params![session_id, interpretation_id],
@@ -1813,7 +1865,7 @@ fn clear_book_tldr_with_conn(conn: &Connection, book_id: &str) -> Result<()> {
     Ok(())
 }
 
-fn open_database(path: &Path) -> Result<Connection> {
+pub(crate) fn open_database(path: &Path) -> Result<Connection> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create database directory {}", parent.display()))?;
@@ -1900,6 +1952,8 @@ fn open_database(path: &Path) -> Result<Connection> {
           rects_json TEXT NOT NULL,
           coordinate_version INTEGER NOT NULL DEFAULT 1,
           interpretation TEXT,
+          evidence_chunk_ids_json TEXT NOT NULL DEFAULT '[]',
+          evidence_chunk_snapshots_json TEXT NOT NULL DEFAULT '[]',
           created_at TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS interpretations (
@@ -2053,6 +2107,18 @@ fn open_database(path: &Path) -> Result<Connection> {
     )?;
     ensure_column(
         &conn,
+        "highlights",
+        "evidence_chunk_ids_json",
+        "ALTER TABLE highlights ADD COLUMN evidence_chunk_ids_json TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    ensure_column(
+        &conn,
+        "highlights",
+        "evidence_chunk_snapshots_json",
+        "ALTER TABLE highlights ADD COLUMN evidence_chunk_snapshots_json TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    ensure_column(
+        &conn,
         "embedding_indexes",
         "provider",
         "ALTER TABLE embedding_indexes ADD COLUMN provider TEXT NOT NULL DEFAULT ''",
@@ -2146,6 +2212,7 @@ fn open_database(path: &Path) -> Result<Connection> {
         "evidence_chunk_snapshots_json",
         "ALTER TABLE interpretations ADD COLUMN evidence_chunk_snapshots_json TEXT NOT NULL DEFAULT '[]'",
     )?;
+    knowledge::initialize_schema(&conn)?;
     apply_schema_migrations(&conn)?;
 
     Ok(conn)
@@ -3823,6 +3890,8 @@ fn get_highlight(conn: &Connection, highlight_id: &str) -> Result<SavedHighlight
                 rects_json,
                 coordinate_version,
                 interpretation,
+                evidence_chunk_ids_json,
+                evidence_chunk_snapshots_json,
                 created_at
          FROM highlights
          WHERE id = ?1",
@@ -3832,9 +3901,25 @@ fn get_highlight(conn: &Connection, highlight_id: &str) -> Result<SavedHighlight
     .context("failed to fetch saved highlight")
 }
 
-fn row_to_highlight(row: &rusqlite::Row<'_>) -> rusqlite::Result<SavedHighlight> {
+pub(crate) fn row_to_highlight(row: &rusqlite::Row<'_>) -> rusqlite::Result<SavedHighlight> {
     let rects_json: String = row.get(8)?;
     let rects = parse_rects_for_row(rects_json, 8)?;
+    let evidence_json: String = row.get(11)?;
+    let evidence_snapshots_json: String = row.get(12)?;
+    let evidence_chunk_ids =
+        serde_json::from_str::<Vec<String>>(&evidence_json).map_err(|err| {
+            rusqlite::Error::FromSqlConversionFailure(
+                11,
+                rusqlite::types::Type::Text,
+                Box::new(err),
+            )
+        })?;
+    let evidence_chunk_snapshots = serde_json::from_str::<Vec<EvidenceChunkSnapshot>>(
+        &evidence_snapshots_json,
+    )
+    .map_err(|err| {
+        rusqlite::Error::FromSqlConversionFailure(12, rusqlite::types::Type::Text, Box::new(err))
+    })?;
 
     Ok(SavedHighlight {
         id: row.get(0)?,
@@ -3848,7 +3933,9 @@ fn row_to_highlight(row: &rusqlite::Row<'_>) -> rusqlite::Result<SavedHighlight>
         rects,
         coordinate_version: row.get(9)?,
         interpretation: row.get(10)?,
-        created_at: row.get(11)?,
+        evidence_chunk_ids,
+        evidence_chunk_snapshots,
+        created_at: row.get(13)?,
     })
 }
 
@@ -3880,7 +3967,9 @@ fn get_interpretation(conn: &Connection, interpretation_id: &str) -> Result<Save
     .context("failed to fetch saved interpretation")
 }
 
-fn row_to_interpretation(row: &rusqlite::Row<'_>) -> rusqlite::Result<SavedInterpretation> {
+pub(crate) fn row_to_interpretation(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<SavedInterpretation> {
     let page_indexes_json: String = row.get(10)?;
     let evidence_json: String = row.get(11)?;
     let evidence_snapshots_json: String = row.get(16)?;
@@ -5285,6 +5374,8 @@ mod tests {
                 }],
                 coordinate_version: COORDINATE_VERSION,
                 interpretation: Some("解读内容".to_string()),
+                evidence_chunk_ids: vec!["p1-c1".to_string()],
+                evidence_chunk_snapshots: Vec::new(),
             },
         )
         .expect("highlight should save");
@@ -5298,6 +5389,7 @@ mod tests {
         assert_eq!(highlights[0].position_start, Some(0));
         assert_eq!(highlights[0].position_end, Some(6));
         assert_eq!(highlights[0].coordinate_version, COORDINATE_VERSION);
+        assert_eq!(highlights[0].evidence_chunk_ids.len(), 1);
 
         delete_highlight(&path, &highlight.id).expect("highlight should delete");
         let highlights = list_highlights(&path, &saved_book.book_id).expect("highlights list");
@@ -5351,6 +5443,8 @@ mod tests {
                 rects: Vec::new(),
                 coordinate_version: COORDINATE_VERSION,
                 interpretation: None,
+                evidence_chunk_ids: Vec::new(),
+                evidence_chunk_snapshots: Vec::new(),
             },
         )
         .expect("text-only highlight should save");

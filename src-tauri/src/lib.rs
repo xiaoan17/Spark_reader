@@ -3,6 +3,7 @@ mod commands;
 mod config;
 mod embeddings;
 mod interpretation;
+mod knowledge;
 mod llm;
 mod mineru;
 mod mineru_parser;
@@ -22,18 +23,26 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             commands::app_health,
+            commands::build_knowledge_graph,
             commands::cancel_interpretation,
             commands::cancel_translation,
+            commands::confirm_knowledge_card,
             commands::coordinate_version,
             commands::delete_book,
             commands::delete_highlight,
             commands::delete_interpretation,
+            commands::delete_knowledge_card,
+            commands::export_book_knowledge_json,
+            commands::export_book_knowledge_markdown,
             commands::find_book_by_source_pdf,
+            commands::get_book_knowledge_map,
             commands::get_converted_book,
             commands::get_converted_book_manifest,
             commands::get_converted_book_pages,
             commands::get_chunk,
             commands::get_embedding_settings,
+            commands::get_knowledge_card,
+            commands::get_knowledge_graph,
             commands::get_mineru_settings,
             commands::get_or_generate_document_tldr,
             commands::get_neighbors,
@@ -45,13 +54,18 @@ pub fn run() {
             commands::interpret_selection,
             commands::list_highlights,
             commands::list_interpretations,
+            commands::list_knowledge_cards,
+            commands::list_knowledge_cards_by_chunk,
+            commands::list_knowledge_drift,
             commands::list_books,
             commands::list_structure,
+            commands::knowledge_health,
             commands::open_book_asset,
             commands::product_self_check,
             commands::read_pdf_file,
             commands::rebuild_search_index,
             commands::rebuild_search_index_async,
+            commands::reject_knowledge_card,
             commands::reveal_book_asset,
             commands::save_highlight,
             commands::save_embedding_settings,
@@ -60,12 +74,14 @@ pub fn run() {
             commands::save_mineru_settings,
             commands::search_book,
             commands::search_index_summary,
+            commands::search_knowledge,
             commands::search_zotero_items,
             commands::start_translation,
             commands::test_embedding_connection,
             commands::test_llm_connection,
             commands::test_llm_connection_with_settings,
             commands::translation_status,
+            commands::upsert_knowledge_card,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run tauri app");

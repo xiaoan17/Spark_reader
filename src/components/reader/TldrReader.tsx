@@ -1,6 +1,7 @@
 import { AlertCircle, Loader2, RefreshCw, Sparkles } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { MarkdownContent } from "@/components/markdown/MarkdownContent"
 
 export type TldrReaderProps = {
   text?: string
@@ -59,7 +60,10 @@ export function TldrReader({
               <div className="h-4 w-8/12 rounded bg-muted reader-shimmer" />
             </div>
           ) : hasText ? (
-            <p className="font-reading text-[17px] leading-9 text-foreground">{text}</p>
+            <MarkdownContent
+              content={text}
+              className="font-reading text-[17px] text-foreground [&_p]:my-3 [&_p]:leading-9 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0 [&_li]:leading-9"
+            />
           ) : error ? (
             <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm leading-6 text-red-900">
               <AlertCircle className="mt-1 h-4 w-4 shrink-0" />

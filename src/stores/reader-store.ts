@@ -97,7 +97,148 @@ export type SavedHighlight = {
   rects: NormalizedPageRect[]
   coordinateVersion?: number
   interpretation?: string | null
+  evidenceChunkIds?: string[]
+  evidenceChunkSnapshots?: EvidenceChunkSnapshot[]
   createdAt: string
+}
+
+export type KnowledgeEvidence = {
+  cardId: string
+  bookId: string
+  chunkId: string
+  pageIndex?: number | null
+  quote: string
+  role: string
+  contentHash?: string | null
+  createdAt: string
+}
+
+export type KnowledgeCard = {
+  cardId: string
+  bookId: string
+  cardType: string
+  title: string
+  summary: string
+  bodyMarkdown: string
+  payloadJson: string
+  status: string
+  source: string
+  confidence: number
+  sourceVersion: number
+  userLocked: boolean
+  createdAt: string
+  updatedAt: string
+  evidence: KnowledgeEvidence[]
+  driftCount?: number
+}
+
+export type KnowledgeEdge = {
+  edgeId: string
+  bookId: string
+  sourceCardId: string
+  targetCardId: string
+  edgeType: string
+  label: string
+  evidenceChunkIds: string[]
+  source: string
+  confidence: number
+  status: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type KnowledgeGraphNode = {
+  cardId: string
+  bookId: string
+  cardType: string
+  title: string
+  summary: string
+  status: string
+  source: string
+  confidence: number
+  evidenceCount: number
+  pageIndex?: number | null
+  evidence: KnowledgeEvidence[]
+}
+
+export type KnowledgeGraph = {
+  bookId: string
+  nodes: KnowledgeGraphNode[]
+  edges: KnowledgeEdge[]
+  builtAt?: string | null
+}
+
+export type BuildKnowledgeGraphResponse = {
+  bookId: string
+  cardCount: number
+  edgeCount: number
+  candidateCount: number
+  builtAt: string
+}
+
+export type KnowledgeHealth = {
+  bookId: string
+  cardCount: number
+  confirmedCount: number
+  candidateCount: number
+  rejectedCount: number
+  driftCount: number
+  edgeCount: number
+  latestUpdatedAt?: string | null
+}
+
+export type KnowledgeDrift = {
+  cardId: string
+  title: string
+  chunkId: string
+  pageIndex?: number | null
+  storedContentHash?: string | null
+  currentContentHash?: string | null
+  quote: string
+}
+
+export type KnowledgeMapLine = {
+  lineId: string
+  title: string
+  pageStart: number
+  pageEnd: number
+  stationCount: number
+}
+
+export type KnowledgeMapStation = {
+  stationId: string
+  cardId: string
+  lineId: string
+  title: string
+  cardType: string
+  status: string
+  pageIndex?: number | null
+  timeRaw?: string | null
+  timeNorm?: string | null
+  timeOrder: number
+  timeSource?: string | null
+  people: string[]
+  places: string[]
+  evidence: KnowledgeEvidence[]
+}
+
+export type KnowledgeMapTransfer = {
+  edgeId: string
+  sourceStationId: string
+  targetStationId: string
+  edgeType: string
+  label: string
+  evidenceChunkIds: string[]
+  confidence: number
+  status: string
+}
+
+export type KnowledgeMap = {
+  bookId: string
+  lines: KnowledgeMapLine[]
+  stations: KnowledgeMapStation[]
+  transfers: KnowledgeMapTransfer[]
+  builtAt?: string | null
 }
 
 export type ParsedPage = {
@@ -143,6 +284,15 @@ type ReaderState = {
   interpretationSessionId: string
   highlights: SavedHighlight[]
   interpretationHistory: SavedInterpretation[]
+  knowledgeCards: KnowledgeCard[]
+  knowledgeGraph: KnowledgeGraph | null
+  knowledgeHealth: KnowledgeHealth | null
+  knowledgeDrift: KnowledgeDrift[]
+  knowledgeMap: KnowledgeMap | null
+  knowledgeLoading: boolean
+  knowledgeGraphLoading: boolean
+  knowledgeGraphBuilding: boolean
+  knowledgeError: string
   tldr: DocumentTldrState | null
   tldrLoading: boolean
   tldrError: string
@@ -197,6 +347,16 @@ type ReaderState = {
   setInterpretationSessionId: (sessionId: string) => void
   setHighlights: (highlights: SavedHighlight[]) => void
   setInterpretationHistory: (history: SavedInterpretation[]) => void
+  setKnowledgeCards: (cards: KnowledgeCard[]) => void
+  setKnowledgeGraph: (graph: KnowledgeGraph | null) => void
+  setKnowledgeHealth: (health: KnowledgeHealth | null) => void
+  setKnowledgeDrift: (drift: KnowledgeDrift[]) => void
+  setKnowledgeMap: (map: KnowledgeMap | null) => void
+  setKnowledgeLoading: (loading: boolean) => void
+  setKnowledgeGraphLoading: (loading: boolean) => void
+  setKnowledgeGraphBuilding: (building: boolean) => void
+  setKnowledgeError: (message: string) => void
+  addKnowledgeCards: (cards: KnowledgeCard[]) => void
   setTldr: (tldr: DocumentTldrState | null) => void
   setTldrLoading: (loading: boolean) => void
   setTldrError: (message: string) => void
@@ -238,6 +398,15 @@ export const useReaderStore = create<ReaderState>((set) => ({
   interpretationSessionId: "",
   highlights: [],
   interpretationHistory: [],
+  knowledgeCards: [],
+  knowledgeGraph: null,
+  knowledgeHealth: null,
+  knowledgeDrift: [],
+  knowledgeMap: null,
+  knowledgeLoading: false,
+  knowledgeGraphLoading: false,
+  knowledgeGraphBuilding: false,
+  knowledgeError: "",
   tldr: null,
   tldrLoading: false,
   tldrError: "",
@@ -278,6 +447,15 @@ export const useReaderStore = create<ReaderState>((set) => ({
       interpretationSessionId: "",
       highlights: [],
       interpretationHistory: [],
+      knowledgeCards: [],
+      knowledgeGraph: null,
+      knowledgeHealth: null,
+      knowledgeDrift: [],
+      knowledgeMap: null,
+      knowledgeLoading: false,
+      knowledgeGraphLoading: false,
+      knowledgeGraphBuilding: false,
+      knowledgeError: "",
       tldr: null,
       tldrLoading: false,
       tldrError: "",
@@ -429,6 +607,35 @@ export const useReaderStore = create<ReaderState>((set) => ({
   setInterpretationSessionId: (interpretationSessionId) => set({ interpretationSessionId }),
   setHighlights: (highlights) => set({ highlights }),
   setInterpretationHistory: (interpretationHistory) => set({ interpretationHistory }),
+  setKnowledgeCards: (knowledgeCards) => set({ knowledgeCards, knowledgeError: "", knowledgeLoading: false }),
+  setKnowledgeGraph: (knowledgeGraph) =>
+    set({ knowledgeGraph, knowledgeError: "", knowledgeGraphLoading: false, knowledgeGraphBuilding: false }),
+  setKnowledgeHealth: (knowledgeHealth) => set({ knowledgeHealth }),
+  setKnowledgeDrift: (knowledgeDrift) => set({ knowledgeDrift }),
+  setKnowledgeMap: (knowledgeMap) => set({ knowledgeMap }),
+  setKnowledgeLoading: (knowledgeLoading) => set({ knowledgeLoading }),
+  setKnowledgeGraphLoading: (knowledgeGraphLoading) => set({ knowledgeGraphLoading }),
+  setKnowledgeGraphBuilding: (knowledgeGraphBuilding) => set({ knowledgeGraphBuilding }),
+  setKnowledgeError: (knowledgeError) =>
+    set({
+      knowledgeError,
+      knowledgeLoading: false,
+      knowledgeGraphLoading: false,
+      knowledgeGraphBuilding: false,
+    }),
+  addKnowledgeCards: (cards) =>
+    set((state) => {
+      const next = new Map(state.knowledgeCards.map((card) => [card.cardId, card]))
+      for (const card of cards) {
+        next.set(card.cardId, card)
+      }
+      return {
+        knowledgeCards: [...next.values()].sort((left, right) =>
+          right.updatedAt.localeCompare(left.updatedAt),
+        ),
+        knowledgeError: "",
+      }
+    }),
   setTldr: (tldr) => set({ tldr, tldrError: "", tldrLoading: false, tldrDismissed: false }),
   setTldrLoading: (tldrLoading) => set({ tldrLoading }),
   setTldrError: (tldrError) => set({ tldrError, tldrLoading: false }),

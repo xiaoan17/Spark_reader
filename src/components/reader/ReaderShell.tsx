@@ -5,6 +5,7 @@ import {
   Languages,
   Loader2,
   Library,
+  Network,
   Minus,
   Plus,
   RefreshCw,
@@ -28,6 +29,7 @@ import { open } from "@tauri-apps/plugin-dialog"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { InterpretationCard } from "@/components/interpretation/InterpretationCard"
+import { KnowledgePanel } from "@/components/knowledge/KnowledgePanel"
 import { TldrReader } from "@/components/reader/TldrReader"
 import { SparkPanel } from "@/components/spark/SparkPanel"
 import { LlmSettingsPanel } from "@/components/settings/LlmSettingsPanel"
@@ -39,6 +41,11 @@ import type {
   FollowUpTurn,
   AgentTraceStep,
   LibraryStatus,
+  KnowledgeCard,
+  KnowledgeGraph,
+  KnowledgeHealth,
+  KnowledgeDrift,
+  KnowledgeMap,
   ParsedChunk,
   ParsedPage,
   ReaderPhase,
@@ -126,6 +133,7 @@ import {
   type LlmSettings,
   type LlmProviderKind,
   type TranslationStatus,
+  type UpsertKnowledgeCardRequest,
 } from "@/core/library-api"
 import { readerChunkSearchResults } from "./search-results"
 import { clampPage, useReaderPageNavigation } from "./page-navigation"
@@ -173,6 +181,15 @@ type ReaderShellProps = {
   sparkLoading?: boolean
   highlights: SavedHighlight[]
   interpretationHistory: SavedInterpretation[]
+  knowledgeCards?: KnowledgeCard[]
+  knowledgeGraph?: KnowledgeGraph | null
+  knowledgeHealth?: KnowledgeHealth | null
+  knowledgeDrift?: KnowledgeDrift[]
+  knowledgeMap?: KnowledgeMap | null
+  knowledgeLoading?: boolean
+  knowledgeGraphLoading?: boolean
+  knowledgeGraphBuilding?: boolean
+  knowledgeError?: string
   parsedPages: ParsedPage[]
   parsedChunks: ParsedChunk[]
   parserEngine: string
@@ -215,6 +232,7 @@ type ReaderShellProps = {
   onPhaseChange: (phase: ReaderPhase) => void
   onDeepInterpret: () => void
   onPlainExplain: () => void
+  onApplyInterpret?: () => void
   onQuestionSubmit: (question: string) => void
   onOpenSpark?: () => void
   onSparkModeChange?: (mode: "spark" | "note") => void
@@ -229,9 +247,17 @@ type ReaderShellProps = {
   onOpenHighlight: (highlight: SavedHighlight) => void
   onDeleteHighlight: (highlightId: string) => void
   onOpenInterpretation: (item: SavedInterpretation) => void
-  onOpenSparkInterpretation?: (item: SavedInterpretation, sourceView?: ReaderView) => void
+  onOpenSparkInterpretation?: (item: SavedInterpretation, sourceView?: "text" | "translation") => void
   onDeleteInterpretation: (interpretationId: string) => void
   onCitationClick?: (chunkId: string) => void
+  onRefreshKnowledge?: () => void
+  onBuildKnowledge?: () => void
+  onExportKnowledge?: () => void
+  onExportKnowledgeJson?: () => void
+  onConfirmKnowledgeCard?: (cardId: string) => void
+  onRejectKnowledgeCard?: (cardId: string) => void
+  onDeleteKnowledgeCard?: (cardId: string) => void
+  onSaveKnowledgeCard?: (request: Omit<UpsertKnowledgeCardRequest, "bookId">) => void
   onRegenerate: () => void
   onStop: () => void
   onOpenSampleBook?: () => void
@@ -268,6 +294,15 @@ export function ReaderShell({
   sparkLoading = false,
   highlights,
   interpretationHistory,
+  knowledgeCards = [],
+  knowledgeGraph = null,
+  knowledgeHealth = null,
+  knowledgeDrift = [],
+  knowledgeMap = null,
+  knowledgeLoading = false,
+  knowledgeGraphLoading = false,
+  knowledgeGraphBuilding = false,
+  knowledgeError = "",
   parsedPages,
   parsedChunks,
   parserEngine,
@@ -289,6 +324,7 @@ export function ReaderShell({
   onPhaseChange,
   onDeepInterpret,
   onPlainExplain,
+  onApplyInterpret = () => undefined,
   onQuestionSubmit,
   onOpenSpark = () => undefined,
   onSparkModeChange = () => undefined,
@@ -306,6 +342,14 @@ export function ReaderShell({
   onOpenSparkInterpretation = () => undefined,
   onDeleteInterpretation: _onDeleteInterpretation,
   onCitationClick,
+  onRefreshKnowledge = () => undefined,
+  onBuildKnowledge = () => undefined,
+  onExportKnowledge = () => undefined,
+  onExportKnowledgeJson = () => undefined,
+  onConfirmKnowledgeCard = () => undefined,
+  onRejectKnowledgeCard = () => undefined,
+  onDeleteKnowledgeCard = () => undefined,
+  onSaveKnowledgeCard = () => undefined,
   onRegenerate,
   onStop,
   onOpenSampleBook,
@@ -1062,6 +1106,8 @@ export function ReaderShell({
             ? "tldr"
           : options.readerView === "translation" && isTauriRuntime()
             ? "translation"
+          : options.readerView === "knowledge"
+            ? "knowledge"
             : "text"
       setReaderView(restoredView)
       if (!options.silent) {
@@ -1285,6 +1331,7 @@ export function ReaderShell({
     : isTauriRuntime()
       ? llmSettingsError || "尚未读取当前 LLM provider"
       : "浏览器版不会读取本机 LLM provider"
+  const showInterpretationAside = readerView !== "knowledge"
   const searchResults = searchParsedPages(searchQuery, parsedPages)
   const localChunkResults = searchParsedChunks(searchQuery, parsedChunks).map((result) => ({
     ...result,
@@ -1538,6 +1585,17 @@ export function ReaderShell({
     pushNotice(chunk.rects.length > 0 ? "已定位到相关段落" : "已定位到相关文本")
   }
 
+  function handleEvidenceJump(chunkId: string) {
+    const citationPage =
+      evidence.find((item) => item.chunkId === chunkId)?.pageIndex ??
+      parsedChunks.find((chunk) => chunk.chunkId === chunkId)?.pageIndex
+    switchReaderView(
+      "text",
+      citationPage === undefined ? { restorePage: false } : { page: citationPage + 1 },
+    )
+    onCitationClick?.(chunkId)
+  }
+
   function handleOutlineSelect(entry: ReaderOutlineEntry) {
   const targetView = readerView === "translation" ? "translation" : "text"
     switchReaderView(targetView, { page: entry.pageIndex + 1 })
@@ -1742,6 +1800,17 @@ export function ReaderShell({
             </Button>
             <Button
               size="sm"
+              variant={readerView === "knowledge" ? "secondary" : "ghost"}
+              disabled={!canShowConvertedText || !bookId}
+              className="h-7 px-2.5"
+              title={bookId ? "打开完整知识体系视图" : "导入书籍后可查看知识体系"}
+              onClick={() => switchReaderView("knowledge")}
+            >
+              <Network className="mr-1.5 h-4 w-4" />
+              知识体系
+            </Button>
+            <Button
+              size="sm"
               variant={readerView === "pdf" ? "secondary" : "ghost"}
               disabled={!canOpenPdfView}
               className="h-7 px-2.5"
@@ -1853,8 +1922,12 @@ export function ReaderShell({
         className="grid min-h-0 flex-1 overflow-hidden transition-[grid-template-columns] duration-200 ease-out motion-reduce:transition-none"
         style={{
           gridTemplateColumns: sidebarOpen
-            ? "240px minmax(640px,1fr) 360px"
-            : "0px minmax(640px,1fr) 360px",
+            ? showInterpretationAside
+              ? "240px minmax(640px,1fr) 360px"
+              : "240px minmax(760px,1fr) 0px"
+            : showInterpretationAside
+              ? "0px minmax(640px,1fr) 360px"
+              : "0px minmax(760px,1fr) 0px",
         }}
       >
         <aside
@@ -1928,7 +2001,7 @@ export function ReaderShell({
                 ) : null}
               </div>
             ) : null}
-            {readerView !== "pdf" && readerView !== "tldr" && readerOutline.length > 0 ? (
+            {readerView !== "pdf" && readerView !== "tldr" && readerView !== "knowledge" && readerOutline.length > 0 ? (
               <ReaderOutlinePanel
                 entries={readerOutline}
                 currentPage={safePage}
@@ -1941,9 +2014,18 @@ export function ReaderShell({
                 onSelect={handleOutlineSelect}
               />
             ) : null}
-            {readerView !== "pdf" && readerView !== "tldr" && readerOutline.length === 0 ? (
+            {readerView !== "pdf" && readerView !== "tldr" && readerView !== "knowledge" && readerOutline.length === 0 ? (
               <div className="min-h-0 flex-1 rounded-md border border-dashed bg-background px-3 py-8 text-center text-xs text-muted-foreground">
                 {parsedPages.length > 0 ? "未识别到章节标题目录" : "导入书籍后显示目录"}
+              </div>
+            ) : null}
+            {readerView === "knowledge" ? (
+              <div className="min-h-0 flex-1 rounded-md border bg-background px-3 py-4 text-xs leading-5 text-muted-foreground">
+                <div className="mb-2 flex items-center gap-1.5 font-medium text-foreground">
+                  <Network className="h-3.5 w-3.5" />
+                  知识体系
+                </div>
+                这是与转换稿同级的整书知识页。点击原文证据会回到转换稿对应段落。
               </div>
             ) : null}
         </aside>
@@ -1954,6 +2036,8 @@ export function ReaderShell({
             canShowConvertedText && (readerView === "text" || readerView === "translation")
               ? "min-h-0 overflow-hidden bg-[hsl(38_22%_91%)] animate-fade-in"
               : canShowConvertedText && readerView === "tldr"
+                ? "min-h-0 overflow-hidden bg-[hsl(38_22%_91%)] animate-fade-in"
+              : canShowConvertedText && readerView === "knowledge"
                 ? "min-h-0 overflow-hidden bg-[hsl(38_22%_91%)] animate-fade-in"
               : "min-h-0 overflow-auto bg-[hsl(38_22%_91%)] px-8 py-8 animate-fade-in"
           }
@@ -1981,6 +2065,7 @@ export function ReaderShell({
               onCopySelection={handleCopy}
               onExplain={onDeepInterpret}
               onPlainExplain={onPlainExplain}
+              onApplyInterpret={onApplyInterpret}
               onSpark={onOpenSpark}
               onOpenSparkItem={(item) => onOpenSparkInterpretation(item, "text")}
               onAskToggle={() => setAskOpen((open) => !open)}
@@ -2030,6 +2115,7 @@ export function ReaderShell({
               onCopySelection={handleCopy}
               onExplain={onDeepInterpret}
               onPlainExplain={onPlainExplain}
+              onApplyInterpret={onApplyInterpret}
               onSpark={onOpenSpark}
               onOpenSparkItem={(item) => onOpenSparkInterpretation(item, "translation")}
               onAskToggle={() => setAskOpen((open) => !open)}
@@ -2040,6 +2126,30 @@ export function ReaderShell({
               onClearSelection={onClearSelection}
               onPageWindowRequest={requestStoredPageWindow}
             />
+          ) : canShowConvertedText && readerView === "knowledge" ? (
+            <div className="h-full overflow-hidden px-4 py-4">
+              <KnowledgePanel
+                cards={knowledgeCards}
+                graph={knowledgeGraph}
+                health={knowledgeHealth}
+                drift={knowledgeDrift}
+                map={knowledgeMap}
+                loading={knowledgeLoading}
+                graphLoading={knowledgeGraphLoading}
+                building={knowledgeGraphBuilding}
+                error={knowledgeError}
+                onRefresh={onRefreshKnowledge}
+                onBuildKnowledge={onBuildKnowledge}
+                onExport={onExportKnowledge}
+                onExportJson={onExportKnowledgeJson}
+                onConfirmCard={onConfirmKnowledgeCard}
+                onRejectCard={onRejectKnowledgeCard}
+                onDeleteCard={onDeleteKnowledgeCard}
+                onSaveCard={onSaveKnowledgeCard}
+                onEvidenceClick={handleEvidenceJump}
+                fullHeight
+              />
+            </div>
           ) : readerView === "pdf" && pdfLoadStatus === "loading" ? (
             <PdfUnavailablePanel
               status="loading"
@@ -2071,6 +2181,7 @@ export function ReaderShell({
               onExplain={onDeepInterpret}
               onHighlight={handleHighlight}
               onPlainExplain={onPlainExplain}
+              onApplyInterpret={onApplyInterpret}
               onSpark={onOpenSpark}
               onQuestionChange={setQuestion}
               onQuestionSubmit={handleQuestionSubmit}
@@ -2142,6 +2253,7 @@ export function ReaderShell({
           )}
         </section>
 
+        {showInterpretationAside ? (
         <aside className="min-h-0 animate-fade-in overflow-y-auto border-l bg-card/65 p-3 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none">
           {sparkPanelOpen ? (
             <SparkPanel
@@ -2163,16 +2275,7 @@ export function ReaderShell({
               onAsk={onSparkAsk}
               onClose={onCloseSpark}
               onCopy={copyInterpretationResult}
-              onCitationClick={(chunkId) => {
-                const citationPage = evidence.find((item) => item.chunkId === chunkId)?.pageIndex
-                switchReaderView(
-                  "text",
-                  citationPage === undefined
-                    ? { restorePage: false }
-                    : { page: citationPage + 1 },
-                )
-                onCitationClick?.(chunkId)
-              }}
+              onCitationClick={handleEvidenceJump}
             />
           ) : (
             <>
@@ -2197,16 +2300,7 @@ export function ReaderShell({
                 onCopy={copyInterpretationResult}
                 onQuestionChange={setQuestion}
                 onQuestionSubmit={handleQuestionSubmit}
-                onCitationClick={(chunkId) => {
-                  const citationPage = evidence.find((item) => item.chunkId === chunkId)?.pageIndex
-                  switchReaderView(
-                    "text",
-                    citationPage === undefined
-                      ? { restorePage: false }
-                      : { page: citationPage + 1 },
-                  )
-                  onCitationClick?.(chunkId)
-                }}
+                onCitationClick={handleEvidenceJump}
                 onRegenerate={onRegenerate}
                 onSave={handleHighlight}
                 onStop={onStop}
@@ -2216,6 +2310,7 @@ export function ReaderShell({
             </>
           )}
         </aside>
+        ) : null}
       </main>
 
       {readerView === "pdf" ? (
@@ -2326,6 +2421,8 @@ function readerViewLabel(view: ReaderView) {
       return "原 PDF 校对"
     case "translation":
       return "对照翻译"
+    case "knowledge":
+      return "知识体系"
   }
 }
 

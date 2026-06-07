@@ -2,26 +2,40 @@ import { useRef } from "react"
 import { ReaderShell } from "@/components/reader/ReaderShell"
 import { useReaderStore } from "@/stores/reader-store"
 import {
+  buildKnowledgeGraph,
   cancelInterpretation,
+  confirmKnowledgeCard,
   normalizeCommandError,
   deleteHighlight,
   deleteInterpretation,
+  deleteKnowledgeCard,
   getDocumentTldr,
+  getBookKnowledgeMap,
   getChunk,
+  getKnowledgeHealth,
   getLlmSettings,
+  exportBookKnowledgeJson,
+  exportBookKnowledgeMarkdown,
   interpretSelection,
   isTauriRuntime,
+  listKnowledgeDrift,
   listenInterpretationStream,
   listHighlights,
   listInterpretations,
+  listKnowledgeCards,
+  getKnowledgeGraph,
+  rejectKnowledgeCard,
   saveHighlight,
   saveInterpretation,
   searchBook,
   searchHitToChunk,
   regenerateDocumentTldr,
+  upsertKnowledgeCard,
   type InterpretEvidenceItem,
   type AnswerSource,
+  type InterpretMode,
   type SearchBookHit,
+  type UpsertKnowledgeCardRequest,
 } from "@/core/library-api"
 import {
   browserLibraryAvailable,
@@ -120,6 +134,15 @@ export function App() {
     sparkError,
     highlights,
     interpretationHistory,
+    knowledgeCards,
+    knowledgeGraph,
+    knowledgeHealth,
+    knowledgeDrift,
+    knowledgeMap,
+    knowledgeLoading,
+    knowledgeGraphLoading,
+    knowledgeGraphBuilding,
+    knowledgeError,
     parsedPages,
     parsedChunks,
     parserEngine,
@@ -142,6 +165,15 @@ export function App() {
     setInterpretationSessionId,
     setHighlights,
     setInterpretationHistory,
+    setKnowledgeCards,
+    setKnowledgeGraph,
+    setKnowledgeHealth,
+    setKnowledgeDrift,
+    setKnowledgeMap,
+    setKnowledgeLoading,
+    setKnowledgeGraphLoading,
+    setKnowledgeGraphBuilding,
+    setKnowledgeError,
     setTldr,
     setTldrLoading,
     setTldrError,
@@ -214,7 +246,7 @@ export function App() {
     }
   }
 
-  function runLocalInterpretation(mode: "deep" | "plain" = "deep") {
+  function runLocalInterpretation(mode: InterpretMode = "deep") {
     if (!selectionText.trim()) {
       return
     }
@@ -598,7 +630,7 @@ export function App() {
     focusChunk(page, chunkId, text, rects, preserveInterpretation)
   }
 
-  async function runBackendInterpretation(mode: "deep" | "plain", version: number) {
+  async function runBackendInterpretation(mode: InterpretMode, version: number) {
     if (!shouldUseBackendInterpretation({ bookId, libraryStatus, tauriRuntime: isTauriRuntime() })) {
       setInterpretationError(localFallbackNotice(undefined, "解读"))
       await runFallbackInterpretation(mode, version)
@@ -655,7 +687,7 @@ export function App() {
     }
   }
 
-  async function runFallbackInterpretation(mode: "deep" | "plain", version: number) {
+  async function runFallbackInterpretation(mode: InterpretMode, version: number) {
     if (!isCurrentRequest(version)) {
       return
     }
@@ -682,6 +714,8 @@ export function App() {
     const answer =
       mode === "plain"
         ? `${text}\n\n简要来说：这段话已经被定位到转换后的正文；当前环境会先使用转换稿文本给出可核对解释。`
+        : mode === "apply"
+          ? `${text}\n\n应用/迁移提示：当前环境只能基于转换稿做本地兜底，不能替代完整 LLM 的迁移分析；请优先核对上面的原文依据。`
         : text
     setInterpretation(answer)
     void persistInterpretation(answer, { evidencePreview, version, answerSource: "local_fallback" })
@@ -950,18 +984,7 @@ export function App() {
         positionEnd: selector.positionEnd,
         pageIndexes,
         evidenceChunkIds: evidencePreview.map((item) => item.chunkId),
-        evidenceChunkSnapshots: evidencePreview.map((item) => {
-          const chunk = parsedChunks.find((candidate) => candidate.chunkId === item.chunkId)
-          return {
-            chunkId: item.chunkId,
-            chunkIdVersion: isNamespacedChunkId(item.chunkId)
-              ? 2
-              : isLegacyChunkId(item.chunkId)
-                ? 1
-                : 0,
-            contentHash: chunk ? chunkContentHash(chunk.text) : null,
-          }
-        }),
+        evidenceChunkSnapshots: evidenceSnapshotsForChunkIds(evidencePreview.map((item) => item.chunkId)),
         question: question ?? null,
         answer,
         answerSource: savedAnswerSource,
@@ -984,6 +1007,9 @@ export function App() {
         setActiveSparkSessionId(saved.sessionId)
       }
       addInterpretationHistory(saved)
+      if (isTauriRuntime()) {
+        refreshKnowledge(bookId)
+      }
       return saved
     } catch {
       // Browser-only preview cannot persist history through Tauri.
@@ -1002,6 +1028,17 @@ export function App() {
       currentPage,
       chunks: parsedChunks,
       pages: parsedPages,
+    })
+  }
+
+  function evidenceSnapshotsForChunkIds(chunkIds: string[]) {
+    return chunkIds.map((chunkId) => {
+      const chunk = parsedChunks.find((candidate) => candidate.chunkId === chunkId)
+      return {
+        chunkId,
+        chunkIdVersion: isNamespacedChunkId(chunkId) ? 2 : isLegacyChunkId(chunkId) ? 1 : 0,
+        contentHash: chunk ? chunkContentHash(chunk.text) : null,
+      }
     })
   }
 
@@ -1060,6 +1097,7 @@ export function App() {
         selectionText,
         preferredPositionStart,
       )
+      const evidenceChunkIds = focusChunkIds()
       const request = {
         bookId,
         selectionText,
@@ -1070,6 +1108,8 @@ export function App() {
         positionEnd: selector.positionEnd,
         rects: selectionRects,
         interpretation: interpretation || null,
+        evidenceChunkIds,
+        evidenceChunkSnapshots: evidenceSnapshotsForChunkIds(evidenceChunkIds),
       }
       const highlight = isTauriRuntime()
         ? await saveHighlight(request)
@@ -1080,6 +1120,9 @@ export function App() {
         return false
       }
       addHighlight(highlight)
+      if (isTauriRuntime()) {
+        refreshKnowledge(bookId)
+      }
       return true
     } catch {
       // Browser-only dev mode cannot persist through Tauri. Keep current UI stable.
@@ -1204,6 +1247,9 @@ export function App() {
       } else if (browserLibraryAvailable()) {
         await deleteBrowserHighlight(highlightId)
       }
+      if (bookId && isTauriRuntime()) {
+        refreshKnowledge(bookId)
+      }
     } catch {
       // Ignore browser fallback failures; local state already reflects the user action.
     }
@@ -1216,6 +1262,9 @@ export function App() {
         await deleteInterpretation(interpretationId)
       } else if (browserLibraryAvailable()) {
         await deleteBrowserInterpretation(interpretationId)
+      }
+      if (bookId && isTauriRuntime()) {
+        refreshKnowledge(bookId)
       }
     } catch {
       // Ignore browser fallback failures; local state already reflects the user action.
@@ -1245,6 +1294,164 @@ export function App() {
       setInterpretationHistory(rows)
     } catch {
       setInterpretationHistory([])
+    }
+  }
+
+  async function loadKnowledgeCards(bookIdToLoad: string) {
+    if (!isTauriRuntime()) {
+      setKnowledgeCards([])
+      setKnowledgeGraph(null)
+      setKnowledgeHealth(null)
+      setKnowledgeDrift([])
+      setKnowledgeMap(null)
+      return
+    }
+    setKnowledgeLoading(true)
+    try {
+      const rows = await listKnowledgeCards(bookIdToLoad)
+      setKnowledgeCards(rows)
+    } catch (error) {
+      setKnowledgeError(normalizeCommandError(error).message)
+    }
+  }
+
+  async function loadKnowledgeHealth(bookIdToLoad: string) {
+    if (!isTauriRuntime()) {
+      setKnowledgeHealth(null)
+      setKnowledgeDrift([])
+      return
+    }
+    try {
+      const [health, drift] = await Promise.all([
+        getKnowledgeHealth(bookIdToLoad),
+        listKnowledgeDrift(bookIdToLoad),
+      ])
+      setKnowledgeHealth(health)
+      setKnowledgeDrift(drift)
+    } catch (error) {
+      setKnowledgeError(normalizeCommandError(error).message)
+    }
+  }
+
+  async function loadKnowledgeGraph(bookIdToLoad: string) {
+    if (!isTauriRuntime()) {
+      setKnowledgeGraph(null)
+      setKnowledgeMap(null)
+      return
+    }
+    setKnowledgeGraphLoading(true)
+    try {
+      const [graph, map] = await Promise.all([
+        getKnowledgeGraph(bookIdToLoad),
+        getBookKnowledgeMap(bookIdToLoad),
+      ])
+      setKnowledgeGraph(graph)
+      setKnowledgeMap(map)
+    } catch (error) {
+      setKnowledgeError(normalizeCommandError(error).message)
+    }
+  }
+
+  function refreshKnowledge(bookIdToLoad: string) {
+    void loadKnowledgeCards(bookIdToLoad)
+    void loadKnowledgeGraph(bookIdToLoad)
+    void loadKnowledgeHealth(bookIdToLoad)
+  }
+
+  async function handleBuildKnowledge() {
+    if (!bookId || !isTauriRuntime()) {
+      return
+    }
+    setKnowledgeGraphBuilding(true)
+    try {
+      await buildKnowledgeGraph(bookId)
+      await Promise.all([loadKnowledgeCards(bookId), loadKnowledgeGraph(bookId), loadKnowledgeHealth(bookId)])
+    } catch (error) {
+      setKnowledgeError(normalizeCommandError(error).message)
+    }
+  }
+
+  async function handleExportKnowledgeMarkdown() {
+    if (!bookId || !isTauriRuntime()) {
+      return
+    }
+    try {
+      const exportResult = await exportBookKnowledgeMarkdown(bookId)
+      downloadMarkdownFile(
+        `${safeDownloadName(bookTitle || "reading-knowledge")}-knowledge.md`,
+        exportResult.markdown,
+      )
+      refreshKnowledge(bookId)
+    } catch (error) {
+      setKnowledgeError(normalizeCommandError(error).message)
+    }
+  }
+
+  async function handleExportKnowledgeJson() {
+    if (!bookId || !isTauriRuntime()) {
+      return
+    }
+    try {
+      const exportResult = await exportBookKnowledgeJson(bookId)
+      downloadTextFile(
+        `${safeDownloadName(bookTitle || "reading-knowledge")}-knowledge.json`,
+        JSON.stringify(exportResult, null, 2),
+        "application/json;charset=utf-8",
+      )
+      refreshKnowledge(bookId)
+    } catch (error) {
+      setKnowledgeError(normalizeCommandError(error).message)
+    }
+  }
+
+  async function handleConfirmKnowledgeCard(cardId: string) {
+    if (!bookId || !isTauriRuntime()) {
+      return
+    }
+    try {
+      await confirmKnowledgeCard(bookId, cardId)
+      refreshKnowledge(bookId)
+    } catch (error) {
+      setKnowledgeError(normalizeCommandError(error).message)
+    }
+  }
+
+  async function handleRejectKnowledgeCard(cardId: string) {
+    if (!bookId || !isTauriRuntime()) {
+      return
+    }
+    try {
+      await rejectKnowledgeCard(bookId, cardId)
+      refreshKnowledge(bookId)
+    } catch (error) {
+      setKnowledgeError(normalizeCommandError(error).message)
+    }
+  }
+
+  async function handleDeleteKnowledgeCard(cardId: string) {
+    if (!bookId || !isTauriRuntime()) {
+      return
+    }
+    try {
+      await deleteKnowledgeCard(bookId, cardId)
+      refreshKnowledge(bookId)
+    } catch (error) {
+      setKnowledgeError(normalizeCommandError(error).message)
+    }
+  }
+
+  async function handleSaveKnowledgeCard(request: Omit<UpsertKnowledgeCardRequest, "bookId">) {
+    if (!bookId || !isTauriRuntime()) {
+      return
+    }
+    try {
+      await upsertKnowledgeCard({
+        ...request,
+        bookId,
+      })
+      refreshKnowledge(bookId)
+    } catch (error) {
+      setKnowledgeError(normalizeCommandError(error).message)
     }
   }
 
@@ -1296,6 +1503,15 @@ export function App() {
       sparkNoteItems={activeSparkItems}
       highlights={highlights}
       interpretationHistory={interpretationHistory}
+      knowledgeCards={knowledgeCards}
+      knowledgeGraph={knowledgeGraph}
+      knowledgeHealth={knowledgeHealth}
+      knowledgeDrift={knowledgeDrift}
+      knowledgeMap={knowledgeMap}
+      knowledgeLoading={knowledgeLoading}
+      knowledgeGraphLoading={knowledgeGraphLoading}
+      knowledgeGraphBuilding={knowledgeGraphBuilding}
+      knowledgeError={knowledgeError}
       parsedPages={parsedPages}
       parsedChunks={parsedChunks}
       parserEngine={parserEngine}
@@ -1309,6 +1525,7 @@ export function App() {
         if (indexedBookId && status === "indexed") {
           void loadHighlights(indexedBookId)
           void loadInterpretationHistory(indexedBookId)
+          refreshKnowledge(indexedBookId)
           void ensureTldr(indexedBookId)
         }
       }}
@@ -1324,6 +1541,7 @@ export function App() {
       onPhaseChange={setPhase}
       onDeepInterpret={() => runLocalInterpretation("deep")}
       onPlainExplain={() => runLocalInterpretation("plain")}
+      onApplyInterpret={() => runLocalInterpretation("apply")}
       onQuestionSubmit={handleQuestionSubmit}
       onOpenSpark={handleOpenSpark}
       onSparkModeChange={setSparkMode}
@@ -1341,6 +1559,18 @@ export function App() {
       onOpenSparkInterpretation={handleOpenSparkInterpretation}
       onDeleteInterpretation={handleDeleteInterpretation}
       onCitationClick={handleCitationClick}
+      onRefreshKnowledge={() => {
+        if (bookId) {
+          refreshKnowledge(bookId)
+        }
+      }}
+      onBuildKnowledge={() => void handleBuildKnowledge()}
+      onExportKnowledge={() => void handleExportKnowledgeMarkdown()}
+      onExportKnowledgeJson={() => void handleExportKnowledgeJson()}
+      onConfirmKnowledgeCard={(cardId) => void handleConfirmKnowledgeCard(cardId)}
+      onRejectKnowledgeCard={(cardId) => void handleRejectKnowledgeCard(cardId)}
+      onDeleteKnowledgeCard={(cardId) => void handleDeleteKnowledgeCard(cardId)}
+      onSaveKnowledgeCard={(request) => void handleSaveKnowledgeCard(request)}
       onRegenerate={() => runLocalInterpretation("deep")}
       onStop={handleStop}
       onOpenSampleBook={handleOpenSampleBook}
@@ -1350,4 +1580,28 @@ export function App() {
 
 function normalizeSelectionForSpark(value: string) {
   return value.replace(/\s+/g, " ").trim()
+}
+
+function safeDownloadName(value: string) {
+  return value
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, "-")
+    .replace(/\s+/g, "-")
+    .slice(0, 80) || "reading-knowledge"
+}
+
+function downloadMarkdownFile(filename: string, markdown: string) {
+  downloadTextFile(filename, markdown, "text/markdown;charset=utf-8")
+}
+
+function downloadTextFile(filename: string, text: string, type: string) {
+  const blob = new Blob([text], { type })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement("a")
+  anchor.href = url
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  URL.revokeObjectURL(url)
 }

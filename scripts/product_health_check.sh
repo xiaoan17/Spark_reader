@@ -12,7 +12,7 @@ run() {
 run cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 run pnpm test
 run pnpm eval:rag
-run cargo test --manifest-path src-tauri/Cargo.toml --lib -- --nocapture
+run cargo test --manifest-path src-tauri/Cargo.toml --lib -- --nocapture --test-threads=1
 run pnpm build
 run pnpm secret-scan
 

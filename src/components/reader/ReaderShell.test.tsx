@@ -931,7 +931,76 @@ describe("ReaderShell view navigation", () => {
       />,
     )
 
-    expect(readerViewButtonLabels(container)).toEqual(["转换稿", "TLDR", "对照翻译", "PDF"])
+    expect(readerViewButtonLabels(container)).toEqual(["转换稿", "TLDR", "对照翻译", "知识体系", "PDF"])
+    unmount()
+  })
+
+  it("opens knowledge as a top-level view and removes the right interpretation sidebar", async () => {
+    const { ReaderShell } = await import("./ReaderShell")
+    const { container, unmount } = await renderClient(
+      <ReaderShell
+        phase="reading"
+        bookId="book-knowledge-view"
+        libraryStatus="indexed"
+        libraryMessage="已索引"
+        bookTitle="知识体系测试"
+        currentPage={1}
+        totalPages={1}
+        selectionText="复利来自长期坚持"
+        selectionRects={[]}
+        selectionAnchor={null}
+        evidence={[]}
+        agentTrace={[]}
+        interpretation=""
+        followUps={[]}
+        highlights={[]}
+        interpretationHistory={[]}
+        knowledgeCards={[]}
+        parsedPages={[
+          {
+            pageIndex: 0,
+            text: "复利来自长期坚持。",
+            markdown: "复利来自长期坚持。",
+          },
+        ]}
+        parsedChunks={[]}
+        parserEngine="mineru-layout"
+        coordinateMode="normalized-page-rects"
+        activeChunkId=""
+        textQuality={{
+          charCount: 20,
+          replacementCharRatio: 0,
+          controlCharRatio: 0,
+          looksUsable: true,
+        }}
+        zoom={1}
+        onBookLoaded={vi.fn()}
+        onLibraryStatus={vi.fn()}
+        onParsedDocument={vi.fn()}
+        onPageChange={vi.fn()}
+        onVisiblePageChange={vi.fn()}
+        onZoomChange={vi.fn()}
+        onSelection={vi.fn()}
+        onActiveChunk={vi.fn()}
+        onChunkFocus={vi.fn()}
+        onPhaseChange={vi.fn()}
+        onDeepInterpret={vi.fn()}
+        onPlainExplain={vi.fn()}
+        onQuestionSubmit={vi.fn()}
+        onSaveHighlight={vi.fn(async () => false)}
+        onOpenHighlight={vi.fn()}
+        onDeleteHighlight={vi.fn()}
+        onOpenInterpretation={vi.fn()}
+        onDeleteInterpretation={vi.fn()}
+        onRegenerate={vi.fn()}
+        onStop={vi.fn()}
+      />,
+    )
+
+    await clickAsync(readerViewButton(container, "知识体系"))
+
+    expect(textContent(container)).toContain("暂无知识卡片")
+    expect(textContent(container)).not.toContain("可回跳引用")
     unmount()
   })
 

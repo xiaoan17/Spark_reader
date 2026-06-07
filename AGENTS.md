@@ -26,6 +26,7 @@
 7. **pre-1.0 / 外部接口依赖锁版本**:Tauri、rusqlite、MinerU API 版本、各 LLM/embedding provider 模型名锁精确版本,升级要过测试。(注:向量检索走外部 provider,不引入 sqlite-vec/LanceDB 本地向量库。)
 8. **MinerU 坐标真相 = `middle.json`**:bbox 经 `bbox/page_size` 换算到归一化页空间;原点方向必须经验验证(见 `docs/mineru-integration.md` §4)。**绝不用 `content_list.json` 的 0–1000 或 model.json 像素值直接当渲染坐标。**
 9. **MinerU token / LLM key 只走后端**:仅存 `.env`,经 Tauri Rust 后端读取调用,**绝不进前端代码、绝不打包进客户端**。MinerU 解析结果缓存本地,不重复消耗配额。LLM key 同理(DeepSeek/OpenAI/Anthropic)。
+10. **知识层只沉淀,不污染原文、不升级为引用证据**:`kb_cards` / `kb_evidence` 只能从高亮、解读、笔记和抽取候选沉淀;自动流程只能新建/补空,不得覆盖 `user_locked` 或用户正文;最终回答仍必须落回原文 `[chunk_id]`,不得把知识卡 ID 当最终 citation。
 
 ---
 
@@ -61,4 +62,5 @@
 - `docs/tech-stack.md` — 完整技术栈
 - `docs/mineru-integration.md` — MinerU 开放 API 集成规范(接口/坐标/配额/安全)
 - `docs/llm-provider.md` — LLM 多 provider 可配置设计(DeepSeek/OpenAI/Anthropic)
+- `docs/knowledge-system-implementation-plan.md` — 单书知识库任务清单、阶段 check 和验收总控
 - `docs/ui/*.md` — (按界面)UI 实现 spec

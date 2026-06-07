@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 use tauri::{command, AppHandle, Emitter, Manager};
 
 use crate::{
-    coordinates::COORDINATE_VERSION, embeddings, interpretation, llm, mineru, mineru_parser,
-    plain_book_parser, product_self_check, storage, translation, zotero,
+    coordinates::COORDINATE_VERSION, embeddings, interpretation, knowledge, llm, mineru,
+    mineru_parser, plain_book_parser, product_self_check, storage, translation, zotero,
 };
 
 pub const SEARCH_INDEX_PROGRESS_EVENT: &str = "search-index://progress";
@@ -823,6 +823,149 @@ pub fn list_interpretations(
 ) -> CommandResult<Vec<storage::SavedInterpretation>> {
     let db_path = library_db_path(&app)?;
     storage::list_interpretations_page(&db_path, &book_id, limit, offset).map_err(command_error)
+}
+
+#[command]
+pub fn list_knowledge_cards(
+    app: AppHandle,
+    book_id: String,
+) -> CommandResult<Vec<knowledge::KnowledgeCard>> {
+    let db_path = library_db_path(&app)?;
+    knowledge::list_cards(&db_path, &book_id).map_err(command_error)
+}
+
+#[command]
+pub fn get_knowledge_card(
+    app: AppHandle,
+    book_id: String,
+    card_id: String,
+) -> CommandResult<Option<knowledge::KnowledgeCard>> {
+    let db_path = library_db_path(&app)?;
+    knowledge::get_card(&db_path, &book_id, &card_id).map_err(command_error)
+}
+
+#[command]
+pub fn upsert_knowledge_card(
+    app: AppHandle,
+    request: knowledge::UpsertKnowledgeCardRequest,
+) -> CommandResult<knowledge::KnowledgeCard> {
+    let db_path = library_db_path(&app)?;
+    knowledge::upsert_user_card(&db_path, request).map_err(command_error)
+}
+
+#[command]
+pub fn confirm_knowledge_card(
+    app: AppHandle,
+    book_id: String,
+    card_id: String,
+) -> CommandResult<knowledge::KnowledgeCard> {
+    let db_path = library_db_path(&app)?;
+    knowledge::confirm_card(&db_path, &book_id, &card_id).map_err(command_error)
+}
+
+#[command]
+pub fn reject_knowledge_card(
+    app: AppHandle,
+    book_id: String,
+    card_id: String,
+) -> CommandResult<knowledge::KnowledgeCard> {
+    let db_path = library_db_path(&app)?;
+    knowledge::reject_card(&db_path, &book_id, &card_id).map_err(command_error)
+}
+
+#[command]
+pub fn delete_knowledge_card(
+    app: AppHandle,
+    book_id: String,
+    card_id: String,
+) -> CommandResult<()> {
+    let db_path = library_db_path(&app)?;
+    knowledge::delete_card(&db_path, &book_id, &card_id).map_err(command_error)
+}
+
+#[command]
+pub fn list_knowledge_cards_by_chunk(
+    app: AppHandle,
+    book_id: String,
+    chunk_id: String,
+) -> CommandResult<Vec<knowledge::KnowledgeCard>> {
+    let db_path = library_db_path(&app)?;
+    knowledge::list_cards_by_chunk(&db_path, &book_id, &chunk_id).map_err(command_error)
+}
+
+#[command]
+pub fn build_knowledge_graph(
+    app: AppHandle,
+    book_id: String,
+) -> CommandResult<knowledge::BuildKnowledgeGraphResponse> {
+    let db_path = library_db_path(&app)?;
+    knowledge::build_knowledge_graph(&db_path, &book_id).map_err(command_error)
+}
+
+#[command]
+pub fn get_knowledge_graph(
+    app: AppHandle,
+    book_id: String,
+) -> CommandResult<knowledge::KnowledgeGraphResponse> {
+    let db_path = library_db_path(&app)?;
+    knowledge::get_knowledge_graph(&db_path, &book_id).map_err(command_error)
+}
+
+#[command]
+pub fn get_book_knowledge_map(
+    app: AppHandle,
+    book_id: String,
+) -> CommandResult<knowledge::KnowledgeMapResponse> {
+    let db_path = library_db_path(&app)?;
+    knowledge::get_book_knowledge_map(&db_path, &book_id).map_err(command_error)
+}
+
+#[command]
+pub fn knowledge_health(
+    app: AppHandle,
+    book_id: String,
+) -> CommandResult<knowledge::KnowledgeHealth> {
+    let db_path = library_db_path(&app)?;
+    knowledge::knowledge_health(&db_path, &book_id).map_err(command_error)
+}
+
+#[command]
+pub fn list_knowledge_drift(
+    app: AppHandle,
+    book_id: String,
+) -> CommandResult<Vec<knowledge::KnowledgeDrift>> {
+    let db_path = library_db_path(&app)?;
+    knowledge::list_drift(&db_path, &book_id).map_err(command_error)
+}
+
+#[command]
+pub fn search_knowledge(
+    app: AppHandle,
+    book_id: String,
+    query: String,
+    limit: Option<u32>,
+) -> CommandResult<Vec<knowledge::KnowledgeSearchHit>> {
+    let db_path = library_db_path(&app)?;
+    knowledge::search_knowledge(&db_path, &book_id, &query, limit.unwrap_or(8))
+        .map_err(command_error)
+}
+
+#[command]
+pub fn export_book_knowledge_markdown(
+    app: AppHandle,
+    book_id: String,
+) -> CommandResult<knowledge::ExportBookKnowledgeMarkdownResponse> {
+    let db_path = library_db_path(&app)?;
+    knowledge::export_book_knowledge_markdown(&db_path, &book_id).map_err(command_error)
+}
+
+#[command]
+pub fn export_book_knowledge_json(
+    app: AppHandle,
+    book_id: String,
+) -> CommandResult<knowledge::ExportBookKnowledgeJsonResponse> {
+    let db_path = library_db_path(&app)?;
+    knowledge::export_book_knowledge_json(&db_path, &book_id).map_err(command_error)
 }
 
 #[command]

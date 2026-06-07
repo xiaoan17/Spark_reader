@@ -4,6 +4,12 @@ import { COORDINATE_VERSION, type NormalizedPageRect } from "@/core/coordinates"
 import type {
   ParsedChunk,
   ParsedPage,
+  BuildKnowledgeGraphResponse,
+  KnowledgeGraph,
+  KnowledgeHealth,
+  KnowledgeDrift,
+  KnowledgeMap,
+  KnowledgeCard,
   SavedHighlight,
   SavedInterpretation,
 } from "@/stores/reader-store"
@@ -234,7 +240,7 @@ export type MinerUProgressEvent = {
   pageRange?: string | null
 }
 
-export type InterpretMode = "deep" | "plain"
+export type InterpretMode = "deep" | "plain" | "apply"
 
 export type InterpretSelectionRequest = {
   bookId: string
@@ -393,6 +399,10 @@ export type ProductSelfCheckSummary = {
   citationCount: number
   highlightCount: number
   interpretationCount: number
+  knowledgeCardCount: number
+  knowledgeEvidenceCount: number
+  knowledgeEdgeCount: number
+  knowledgeExportBytes: number
   tempDir: string
 }
 
@@ -445,6 +455,12 @@ export type SaveHighlightRequest = {
   rects: NormalizedPageRect[]
   coordinateVersion?: number
   interpretation?: string | null
+  evidenceChunkIds?: string[]
+  evidenceChunkSnapshots?: {
+    chunkId: string
+    chunkIdVersion: number
+    contentHash?: string | null
+  }[]
 }
 
 export type SaveInterpretationRequest = {
@@ -471,6 +487,31 @@ export type SaveInterpretationRequest = {
 }
 
 export type InterpretationKind = "interpretation" | "spark" | "note"
+
+export type ExportBookKnowledgeMarkdownResponse = {
+  bookId: string
+  markdown: string
+  generatedAt: string
+}
+
+export type ExportBookKnowledgeJsonResponse = {
+  bookId: string
+  generatedAt: string
+  cards: KnowledgeCard[]
+  edges: KnowledgeGraph["edges"]
+}
+
+export type UpsertKnowledgeCardRequest = {
+  cardId?: string | null
+  bookId: string
+  cardType: string
+  title: string
+  summary?: string
+  bodyMarkdown?: string
+  payloadJson?: string | null
+  status?: string
+  evidenceChunkIds?: string[]
+}
 
 export function isTauriRuntime() {
   return "__TAURI_INTERNALS__" in window
@@ -705,6 +746,66 @@ export async function saveInterpretation(request: SaveInterpretationRequest) {
 
 export async function listInterpretations(bookId: string, limit = 50, offset = 0) {
   return invokeCommand<SavedInterpretation[]>("list_interpretations", { bookId, limit, offset })
+}
+
+export async function listKnowledgeCards(bookId: string) {
+  return invokeCommand<KnowledgeCard[]>("list_knowledge_cards", { bookId })
+}
+
+export async function getKnowledgeCard(bookId: string, cardId: string) {
+  return invokeCommand<KnowledgeCard | null>("get_knowledge_card", { bookId, cardId })
+}
+
+export async function upsertKnowledgeCard(request: UpsertKnowledgeCardRequest) {
+  return invokeCommand<KnowledgeCard>("upsert_knowledge_card", { request })
+}
+
+export async function confirmKnowledgeCard(bookId: string, cardId: string) {
+  return invokeCommand<KnowledgeCard>("confirm_knowledge_card", { bookId, cardId })
+}
+
+export async function rejectKnowledgeCard(bookId: string, cardId: string) {
+  return invokeCommand<KnowledgeCard>("reject_knowledge_card", { bookId, cardId })
+}
+
+export async function deleteKnowledgeCard(bookId: string, cardId: string) {
+  return invokeCommand<void>("delete_knowledge_card", { bookId, cardId })
+}
+
+export async function listKnowledgeCardsByChunk(bookId: string, chunkId: string) {
+  return invokeCommand<KnowledgeCard[]>("list_knowledge_cards_by_chunk", { bookId, chunkId })
+}
+
+export async function buildKnowledgeGraph(bookId: string) {
+  return invokeCommand<BuildKnowledgeGraphResponse>("build_knowledge_graph", { bookId })
+}
+
+export async function getKnowledgeGraph(bookId: string) {
+  return invokeCommand<KnowledgeGraph>("get_knowledge_graph", { bookId })
+}
+
+export async function getBookKnowledgeMap(bookId: string) {
+  return invokeCommand<KnowledgeMap>("get_book_knowledge_map", { bookId })
+}
+
+export async function getKnowledgeHealth(bookId: string) {
+  return invokeCommand<KnowledgeHealth>("knowledge_health", { bookId })
+}
+
+export async function listKnowledgeDrift(bookId: string) {
+  return invokeCommand<KnowledgeDrift[]>("list_knowledge_drift", { bookId })
+}
+
+export async function exportBookKnowledgeMarkdown(bookId: string) {
+  return invokeCommand<ExportBookKnowledgeMarkdownResponse>("export_book_knowledge_markdown", {
+    bookId,
+  })
+}
+
+export async function exportBookKnowledgeJson(bookId: string) {
+  return invokeCommand<ExportBookKnowledgeJsonResponse>("export_book_knowledge_json", {
+    bookId,
+  })
 }
 
 export function searchHitToChunk(hit: SearchBookHit): ParsedChunk {

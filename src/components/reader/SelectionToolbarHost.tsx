@@ -16,6 +16,7 @@ export type SelectionToolbarHostProps = {
   onExplain: () => void
   onHighlight: () => void
   onPlainExplain: () => void
+  onApplyInterpret?: () => void
   onSpark?: () => void
   onQuestionChange: (question: string) => void
   onQuestionSubmit: () => void
@@ -36,6 +37,7 @@ export function SelectionToolbarHost({
   onExplain,
   onHighlight,
   onPlainExplain,
+  onApplyInterpret = () => undefined,
   onSpark = () => undefined,
   onQuestionChange,
   onQuestionSubmit,
@@ -61,6 +63,7 @@ export function SelectionToolbarHost({
       onExplain={onExplain}
       onHighlight={onHighlight}
       onPlainExplain={onPlainExplain}
+      onApplyInterpret={onApplyInterpret}
       onSpark={onSpark}
       onQuestionChange={onQuestionChange}
       onQuestionSubmit={onQuestionSubmit}

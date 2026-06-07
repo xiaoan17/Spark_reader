@@ -27,7 +27,9 @@ import { cn } from "@/lib/utils"
 import type { NormalizedPageRect } from "@/core/coordinates"
 import {
   citationLabelMap,
+  chunkIdsInCitation,
   evidenceLabel,
+  internalCitationPattern,
   sanitizeInternalReferenceText,
 } from "@/core/citation-display"
 
@@ -223,11 +225,13 @@ function PhaseBody({
   }
 
   if ((phase === "streaming" || phase === "reading") && interpretation) {
+    const trust = interpretationTrustState(interpretation, evidence, citationChunkIds, answerSource)
     return (
       <div className="animate-fade-in space-y-4 text-sm leading-7">
         {answerSource === "local_fallback" ? (
           <LocalFallbackNotice message={errorMessage} onOpenSettings={onOpenSettings} />
         ) : null}
+        <InterpretationTrustBadge trust={trust} />
         {phase === "streaming" ? (
           <p className="inline-flex items-center gap-1.5 rounded-md bg-muted px-2.5 py-1 text-xs text-muted-foreground">
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
@@ -377,6 +381,82 @@ function FollowUpList({
           </div>
         </div>
       ))}
+    </div>
+  )
+}
+
+type InterpretationTrustState = {
+  groundedCitationCount: number
+  droppedCitationCount: number
+  answerSource: AnswerSource
+  label: string
+  tone: "ok" | "warn" | "muted"
+}
+
+function interpretationTrustState(
+  text: string,
+  evidence: EvidencePreview[],
+  citationChunkIds: string[] | undefined,
+  answerSource: AnswerSource,
+): InterpretationTrustState {
+  const allowed = new Set(citationChunkIds?.length ? citationChunkIds : evidence.map((item) => item.chunkId))
+  const grounded = new Set<string>()
+  let dropped = 0
+  for (const match of text.matchAll(internalCitationPattern)) {
+    const rawIds = match[1] ?? ""
+    const ids = chunkIdsInCitation(rawIds)
+    if (ids.length === 0) {
+      dropped += 1
+      continue
+    }
+    for (const chunkId of ids) {
+      if (allowed.has(chunkId)) {
+        grounded.add(chunkId)
+      } else {
+        dropped += 1
+      }
+    }
+  }
+  if (answerSource === "local_fallback") {
+    return {
+      groundedCitationCount: grounded.size,
+      droppedCitationCount: dropped,
+      answerSource,
+      label: "本地兜底",
+      tone: "muted",
+    }
+  }
+  if (dropped > 0) {
+    return {
+      groundedCitationCount: grounded.size,
+      droppedCitationCount: dropped,
+      answerSource,
+      label: "部分引用未核验",
+      tone: "warn",
+    }
+  }
+  return {
+    groundedCitationCount: grounded.size,
+    droppedCitationCount: 0,
+    answerSource,
+    label: grounded.size > 0 ? "全部引用可核验" : "未发现显式引用",
+    tone: grounded.size > 0 ? "ok" : "muted",
+  }
+}
+
+function InterpretationTrustBadge({ trust }: { trust: InterpretationTrustState }) {
+  const className =
+    trust.tone === "ok"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+      : trust.tone === "warn"
+        ? "border-amber-300 bg-amber-50 text-amber-950"
+        : "border-muted bg-muted/60 text-muted-foreground"
+  return (
+    <div className={`inline-flex flex-wrap items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs ${className}`}>
+      <span className="font-medium">{trust.label}</span>
+      <span>接地 {trust.groundedCitationCount}</span>
+      {trust.droppedCitationCount > 0 ? <span>丢弃 {trust.droppedCitationCount}</span> : null}
+      <span>{trust.answerSource === "llm" ? "LLM" : "local"}</span>
     </div>
   )
 }

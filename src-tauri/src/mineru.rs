@@ -537,7 +537,10 @@ fn validate_mineru_zip_url(url: &str) -> Result<(), MinerUError> {
 
 fn mineru_zip_host_is_allowed(host: &str) -> bool {
     let normalized = host.to_ascii_lowercase();
-    if normalized == "mineru.net" || normalized.ends_with(".mineru.net") {
+    if DEFAULT_MINERU_ZIP_HOSTS
+        .iter()
+        .any(|allowed| zip_host_matches_allowed(&normalized, allowed))
+    {
         return true;
     }
     std::env::var("MINERU_ALLOWED_ZIP_HOSTS")
@@ -545,11 +548,18 @@ fn mineru_zip_host_is_allowed(host: &str) -> bool {
         .map(|hosts| {
             hosts.split(',').any(|allowed| {
                 let allowed = allowed.trim().trim_start_matches('.').to_ascii_lowercase();
-                !allowed.is_empty()
-                    && (normalized == allowed || normalized.ends_with(&format!(".{allowed}")))
+                zip_host_matches_allowed(&normalized, &allowed)
             })
         })
         .unwrap_or(false)
+}
+
+const DEFAULT_MINERU_ZIP_HOSTS: &[&str] = &["mineru.net", "cdn-mineru.openxlab.org.cn"];
+
+fn zip_host_matches_allowed(normalized_host: &str, allowed_host: &str) -> bool {
+    !allowed_host.is_empty()
+        && (normalized_host == allowed_host
+            || normalized_host.ends_with(&format!(".{allowed_host}")))
 }
 
 fn zip_content_type_is_allowed(url: &str, content_type: &str) -> bool {
@@ -817,6 +827,22 @@ mod tests {
         assert!(zip_entry_is_symlink(Some(0o120777)));
         assert!(!zip_entry_is_symlink(Some(0o100644)));
         assert!(!zip_entry_is_symlink(None));
+    }
+
+    #[test]
+    fn allows_default_mineru_zip_download_hosts() {
+        assert!(mineru_zip_host_is_allowed("mineru.net"));
+        assert!(mineru_zip_host_is_allowed("cdn.mineru.net"));
+        assert!(mineru_zip_host_is_allowed("cdn-mineru.openxlab.org.cn"));
+    }
+
+    #[test]
+    fn rejects_unlisted_mineru_zip_download_hosts() {
+        assert!(!mineru_zip_host_is_allowed("example.com"));
+        assert!(!mineru_zip_host_is_allowed("mineru.net.example.com"));
+        assert!(!mineru_zip_host_is_allowed(
+            "cdn-mineru.openxlab.org.cn.example.com"
+        ));
     }
 
     #[test]

@@ -88,6 +88,8 @@ pnpm secret-scan  # 推送前密钥扫描
 | [`docs/mineru-integration.md`](docs/mineru-integration.md) | MinerU API 集成(接口/坐标/配额/安全) |
 | [`docs/llm-provider.md`](docs/llm-provider.md) | LLM 多 provider 设计(DeepSeek/OpenAI/Anthropic) |
 | [`docs/zotero-integration.md`](docs/zotero-integration.md) | Zotero 本地导入 |
+| [`docs/20260607_开发note_v1/shiji-kb-inspired-reading-system.md`](docs/20260607_开发note_v1/shiji-kb-inspired-reading-system.md) | 借鉴 shiji-kb 的阅读体系与查阅体验技术方案 |
+| [`docs/knowledge-system-implementation-plan.md`](docs/knowledge-system-implementation-plan.md) | 单书知识库完整开发任务与验收总控 |
 | [`ROADMAP.md`](ROADMAP.md) | 实现状态 + 分阶段任务 |
 
 ## 技术栈

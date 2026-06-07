@@ -1,4 +1,4 @@
-import { Copy, Highlighter, MessageSquareText, SearchCheck, Sparkles } from "lucide-react"
+import { Copy, Highlighter, MessageSquareText, SearchCheck, Sparkles, WandSparkles } from "lucide-react"
 import { forwardRef, type CSSProperties } from "react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -14,6 +14,7 @@ type SelectionToolbarProps = {
   disabled?: boolean
   onExplain?: () => void
   onPlainExplain?: () => void
+  onApplyInterpret?: () => void
   onAskToggle?: () => void
   onSpark?: () => void
   onHighlight?: () => void
@@ -32,6 +33,7 @@ export const SelectionToolbar = forwardRef<HTMLDivElement, SelectionToolbarProps
   disabled = false,
   onExplain,
   onPlainExplain,
+  onApplyInterpret,
   onAskToggle,
   onSpark,
   onHighlight,
@@ -61,6 +63,10 @@ export const SelectionToolbar = forwardRef<HTMLDivElement, SelectionToolbarProps
         <Button size="sm" variant="ghost" disabled={disabled} onClick={onAskToggle}>
           <MessageSquareText className="mr-1.5 h-4 w-4" />
           追问
+        </Button>
+        <Button size="sm" variant="ghost" disabled={disabled} onClick={onApplyInterpret}>
+          <WandSparkles className="mr-1.5 h-4 w-4" />
+          迁移
         </Button>
         <Button size="sm" variant="ghost" disabled={disabled} onClick={onSpark}>
           <Sparkles className="mr-1.5 h-4 w-4" />

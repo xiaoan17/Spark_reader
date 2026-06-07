@@ -46,6 +46,7 @@ type PdfCanvasPageProps = {
   onClearSelection: () => void
   onExplain: () => void
   onPlainExplain: () => void
+  onApplyInterpret?: () => void
   onSpark?: () => void
   askOpen: boolean
   question: string
@@ -91,6 +92,7 @@ export function PdfDocumentViewer({
   onClearSelection,
   onExplain,
   onPlainExplain,
+  onApplyInterpret = () => undefined,
   onSpark = () => undefined,
   askOpen,
   question,
@@ -321,6 +323,7 @@ export function PdfDocumentViewer({
               onClearSelection={clearSelection}
               onExplain={onExplain}
               onPlainExplain={onPlainExplain}
+              onApplyInterpret={onApplyInterpret}
               onSpark={onSpark}
               askOpen={askOpen}
               question={question}
@@ -351,6 +354,7 @@ export function PdfCanvasPage({
   onClearSelection,
   onExplain,
   onPlainExplain,
+  onApplyInterpret = () => undefined,
   onSpark = () => undefined,
   askOpen,
   question,
@@ -557,6 +561,7 @@ export function PdfCanvasPage({
           onExplain={onExplain}
           onHighlight={onHighlight}
           onPlainExplain={onPlainExplain}
+          onApplyInterpret={onApplyInterpret}
           onSpark={onSpark}
           onQuestionChange={onQuestionChange}
           onQuestionSubmit={onQuestionSubmit}

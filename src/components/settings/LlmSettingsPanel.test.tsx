@@ -645,6 +645,10 @@ describe("LlmSettingsPanel defaults", () => {
         citationCount: 2,
         highlightCount: 1,
         interpretationCount: 2,
+        knowledgeCardCount: 3,
+        knowledgeEvidenceCount: 3,
+        knowledgeEdgeCount: 1,
+        knowledgeExportBytes: 1200,
         tempDir: "/tmp/self-check",
       },
     })

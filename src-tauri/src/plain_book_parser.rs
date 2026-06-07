@@ -229,7 +229,11 @@ fn document_from_sections(
 
     for section in sections {
         for piece in split_large_section(section) {
-            let piece_chars = piece.text.chars().count().max(piece.markdown.chars().count());
+            let piece_chars = piece
+                .text
+                .chars()
+                .count()
+                .max(piece.markdown.chars().count());
             if !page_sections.is_empty()
                 && page_chars + piece_chars > TARGET_PAGE_CHARS
                 && page_chars >= TARGET_PAGE_CHARS / 2
@@ -466,7 +470,11 @@ fn html_to_markdown(html: &str) -> String {
                     continue;
                 }
             }
-            cursor += html[cursor..].chars().next().map(char::len_utf8).unwrap_or(1);
+            cursor += html[cursor..]
+                .chars()
+                .next()
+                .map(char::len_utf8)
+                .unwrap_or(1);
             continue;
         }
 
@@ -521,12 +529,8 @@ fn html_tag_replacement(tag: &str, tag_name: &str, closing: bool) -> String {
         ("h5", false) => "\n\n##### ".to_string(),
         ("h6", false) => "\n\n###### ".to_string(),
         ("h1" | "h2" | "h3" | "h4" | "h5" | "h6", true) => "\n\n".to_string(),
-        ("p" | "div" | "section" | "article" | "header" | "footer", false) => {
-            "\n\n".to_string()
-        }
-        ("p" | "div" | "section" | "article" | "header" | "footer", true) => {
-            "\n\n".to_string()
-        }
+        ("p" | "div" | "section" | "article" | "header" | "footer", false) => "\n\n".to_string(),
+        ("p" | "div" | "section" | "article" | "header" | "footer", true) => "\n\n".to_string(),
         ("br", _) => "\n".to_string(),
         ("li", false) => "\n- ".to_string(),
         ("li", true) => "\n".to_string(),
@@ -901,8 +905,7 @@ mod tests {
             zip.start_file("OPS/chapter1.xhtml", options)
                 .expect("chapter start");
             zip.write_all(
-                r#"<html><body><h1>第一章</h1><p>这是 EPUB 正文。</p></body></html>"#
-                    .as_bytes(),
+                r#"<html><body><h1>第一章</h1><p>这是 EPUB 正文。</p></body></html>"#.as_bytes(),
             )
             .expect("chapter write");
             zip.finish().expect("zip finish");

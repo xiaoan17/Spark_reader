@@ -41,7 +41,11 @@ agent-host/dist/
 *.mobi
 
 # 第三方参考项目副本(含各自的嵌套 .git,非本产品代码)
+0_reference/
 1_reference/
+
+# 打包产物(本地构建的安装包,不进仓库)
+*.dmg
 
 # Storybook
 storybook-static/

@@ -21,6 +21,7 @@ export function useReaderViewMemory({
     text: 1,
     tldr: 1,
     translation: 1,
+    knowledge: 1,
     pdf: 1,
   })
 

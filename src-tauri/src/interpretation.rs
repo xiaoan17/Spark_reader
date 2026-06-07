@@ -13,7 +13,7 @@ use serde_json::Value;
 use tauri::{AppHandle, Emitter};
 
 use crate::{
-    chunk_id,
+    chunk_id, knowledge,
     llm::{self, CancellationToken, ChatMessage, ChatRequest, ToolCall, ToolDefinition},
     storage,
 };
@@ -22,6 +22,8 @@ static ACTIVE_INTERPRETATIONS: OnceLock<Mutex<BTreeMap<String, CancellationToken
     OnceLock::new();
 
 const MAX_SYNTHESIS_EVIDENCE_CHUNKS: usize = 6;
+const MAX_KNOWLEDGE_CONTEXT_CARDS: usize = 6;
+const MAX_KNOWLEDGE_CONTEXT_EDGES: usize = 8;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -57,6 +59,7 @@ pub struct FollowUpContext {
 pub enum InterpretMode {
     Deep,
     Plain,
+    Apply,
 }
 
 #[derive(Debug, Serialize)]
@@ -226,7 +229,8 @@ pub async fn interpret(
     request: InterpretRequest,
 ) -> Result<InterpretResponse> {
     let (evidence, mut trace) = run_retrieval_for_request(db_path, &request).await?;
-    let messages = build_messages(&request, &evidence);
+    let knowledge_context = synthesis_knowledge_context(db_path, &request);
+    let messages = build_messages(&request, &evidence, knowledge_context.as_deref());
     let (answer, answer_source) = match llm::chat(messages, 1400).await {
         Ok(answer) => (
             enforce_grounded_citations(&answer, &request, &evidence),
@@ -332,7 +336,8 @@ pub async fn interpret_with_progress(
         },
     );
 
-    let messages = build_messages(&request, &evidence);
+    let knowledge_context = synthesis_knowledge_context(db_path, &request);
+    let messages = build_messages(&request, &evidence, knowledge_context.as_deref());
     emit_stream_event(
         &app,
         InterpretationStreamEvent {
@@ -557,9 +562,25 @@ fn run_agentic_retrieval(
         }
         trace.push(AgentTraceStep {
             phase: AgentTracePhase::Retrieve,
-            query: Some(query),
+            query: Some(query.clone()),
             chunk_ids,
             note: "混合检索全书文本 chunk，寻找定义、上下文和呼应证据。".to_string(),
+        });
+
+        let knowledge_hits =
+            knowledge::search_knowledge_hits(db_path, &request.book_id, &query, 6)?;
+        let mut knowledge_chunk_ids = Vec::new();
+        for hit in knowledge_hits {
+            seed_chunk_ids.push(hit.chunk_id.clone());
+            knowledge_chunk_ids.push(hit.chunk_id.clone());
+            insert_hit(&mut by_id, hit);
+        }
+        trace.push(AgentTraceStep {
+            phase: AgentTracePhase::Retrieve,
+            query: Some(format!("knowledge:{query}")),
+            chunk_ids: knowledge_chunk_ids,
+            note: "检索已构建知识体系，把相关卡片、实体、事件、章节摘要回落到原文证据 chunk。"
+                .to_string(),
         });
     }
 
@@ -666,6 +687,24 @@ fn run_lightweight_retrieval(
             chunk_ids: prior_ids,
             note: "复用首轮证据，避免 Spark 追问重新展开重检索。".to_string(),
         });
+    }
+
+    if by_id.len() < 2 {
+        let mut knowledge_ids = Vec::new();
+        for query in evidence_queries(request).into_iter().take(2) {
+            for hit in knowledge::search_knowledge_hits(db_path, &request.book_id, &query, 4)? {
+                knowledge_ids.push(hit.chunk_id.clone());
+                insert_hit(&mut by_id, hit);
+            }
+        }
+        if !knowledge_ids.is_empty() {
+            trace.push(AgentTraceStep {
+                phase: AgentTracePhase::Retrieve,
+                query: Some("knowledge_lightweight".to_string()),
+                chunk_ids: knowledge_ids,
+                note: "轻量追问证据不足时，从已构建知识体系补充相关原文证据。".to_string(),
+            });
+        }
     }
 
     if by_id.len() < 2 {
@@ -900,7 +939,8 @@ async fn run_model_tool_loop(
         for tool_call in tool_calls.iter().take(MAX_TOOL_CALLS_PER_ROUND) {
             match execute_retrieval_tool_call(db_path, request, tool_call) {
                 Ok(hits) => {
-                    let result_prompt = format_tool_result_prompt(tool_call, &hits);
+                    let result_prompt =
+                        format_tool_result_prompt(db_path, request, tool_call, &hits);
                     let chunk_ids = hits
                         .iter()
                         .map(|hit| hit.chunk_id.clone())
@@ -980,13 +1020,29 @@ fn should_stop_for_no_new_evidence(
     round_new_ids == 0 && round_index + 1 == max_tool_rounds
 }
 
-fn format_tool_result_prompt(tool_call: &ToolCall, hits: &[storage::SearchHit]) -> String {
+fn format_tool_result_prompt(
+    db_path: &std::path::Path,
+    request: &InterpretRequest,
+    tool_call: &ToolCall,
+    hits: &[storage::SearchHit],
+) -> String {
     if hits.is_empty() {
         return format!(
             "{}\n结果：没有找到匹配 chunk。",
             format_tool_call_query(tool_call)
         );
     }
+    let knowledge_context_note = if tool_call.name == "get_knowledge_context" {
+        let query = string_arg(&tool_call.arguments, "query")
+            .filter(|query| !query.trim().is_empty())
+            .unwrap_or_else(|| trim_for_query(&request.selection_text, 120));
+        match knowledge::knowledge_context_for_query(db_path, &request.book_id, &query, 6) {
+            Ok(context) => format_knowledge_context_for_prompt(&context),
+            Err(error) => format!("知识体系上下文读取失败：{error}"),
+        }
+    } else {
+        "结果：".to_string()
+    };
     let rows = hits
         .iter()
         .take(8)
@@ -1000,7 +1056,12 @@ fn format_tool_result_prompt(tool_call: &ToolCall, hits: &[storage::SearchHit]) 
         })
         .collect::<Vec<_>>()
         .join("\n\n");
-    format!("{}\n结果：\n{}", format_tool_call_query(tool_call), rows)
+    format!(
+        "{}\n{}\n{}",
+        format_tool_call_query(tool_call),
+        knowledge_context_note,
+        rows
+    )
 }
 
 fn format_tool_execution_result_for_model(
@@ -1024,12 +1085,111 @@ fn format_tool_execution_result_for_model(
     format!("{}\n{}", chunk_ids, execution.result_prompt)
 }
 
+fn format_knowledge_context_for_prompt(context: &knowledge::KnowledgeContextResponse) -> String {
+    let mut output = String::new();
+    output.push_str("知识体系上下文：\n");
+    output.push_str("注意：以下 card_id 只用于理解关系，最终回答不能引用 card_id，只能引用 evidence chunk_id。\n");
+    output.push_str(&format!(
+        "- query: {}\n- matched_cards: {}\n- graph_edges: {}\n- map_stations: {}\n",
+        trim_for_prompt(&context.query, 120),
+        context.cards.len(),
+        context.edges.len(),
+        context.station_count
+    ));
+    if !context.cards.is_empty() {
+        output.push_str("卡片：\n");
+        for card in context.cards.iter().take(MAX_KNOWLEDGE_CONTEXT_CARDS) {
+            output.push_str(&format!(
+                "- {} [{} / {} / {:.0}%] evidence=[{}]\n  {}\n",
+                trim_for_prompt(&card.title, 80),
+                card.card_type,
+                card.status,
+                card.confidence * 100.0,
+                card.evidence_chunk_ids
+                    .iter()
+                    .take(6)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                trim_for_prompt(&card.summary, 180)
+            ));
+        }
+    }
+    if !context.edges.is_empty() {
+        output.push_str("关系：\n");
+        for edge in context.edges.iter().take(MAX_KNOWLEDGE_CONTEXT_EDGES) {
+            output.push_str(&format!(
+                "- {}: {} -> {} evidence=[{}]\n",
+                edge.label,
+                trim_for_prompt(&edge.source_title, 60),
+                trim_for_prompt(&edge.target_title, 60),
+                edge.evidence_chunk_ids
+                    .iter()
+                    .take(6)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+    }
+    output
+}
+
+fn synthesis_knowledge_context(
+    db_path: &std::path::Path,
+    request: &InterpretRequest,
+) -> Option<String> {
+    let mut sections = Vec::new();
+    for query in evidence_queries(request).into_iter().take(3) {
+        let Ok(context) =
+            knowledge::knowledge_context_for_query(db_path, &request.book_id, &query, 5)
+        else {
+            continue;
+        };
+        if context.cards.is_empty() && context.edges.is_empty() {
+            continue;
+        }
+        sections.push(format_knowledge_context_for_prompt(&context));
+    }
+    if sections.is_empty() {
+        None
+    } else {
+        Some(trim_for_prompt(&sections.join("\n\n"), 3_600))
+    }
+}
+
 fn execute_retrieval_tool_call(
     db_path: &std::path::Path,
     request: &InterpretRequest,
     tool_call: &ToolCall,
 ) -> Result<Vec<storage::SearchHit>> {
     match tool_call.name.as_str() {
+        "get_knowledge_context" => {
+            let query = string_arg(&tool_call.arguments, "query")
+                .filter(|query| !query.trim().is_empty())
+                .unwrap_or_else(|| trim_for_query(&request.selection_text, 120));
+            let limit = u32_arg(&tool_call.arguments, "limit")
+                .unwrap_or(6)
+                .clamp(1, 10);
+            let context =
+                knowledge::knowledge_context_for_query(db_path, &request.book_id, &query, limit)?;
+            let mut hits = Vec::new();
+            for chunk_id in context.evidence_chunk_ids {
+                if let Some(hit) = storage::get_chunk(db_path, &request.book_id, &chunk_id)? {
+                    hits.push(hit);
+                }
+            }
+            Ok(hits)
+        }
+        "search_knowledge" => {
+            let query = string_arg(&tool_call.arguments, "query")
+                .filter(|query| !query.trim().is_empty())
+                .unwrap_or_else(|| trim_for_query(&request.selection_text, 120));
+            let limit = u32_arg(&tool_call.arguments, "limit")
+                .unwrap_or(6)
+                .clamp(1, 12);
+            knowledge::search_knowledge_hits(db_path, &request.book_id, &query, limit)
+        }
         "search_book" => {
             let query = string_arg(&tool_call.arguments, "query")
                 .filter(|query| !query.trim().is_empty())
@@ -1213,6 +1373,16 @@ fn build_retrieval_plan(request: &InterpretRequest) -> RetrievalPlan {
             queries.push(trim_for_query(
                 &format!("上下文 {}", request.selection_text),
                 140,
+            ));
+        }
+        InterpretMode::Apply => {
+            queries.push(trim_for_query(
+                &format!("原则 方法 迁移 应用 场景 {}", request.selection_text),
+                180,
+            ));
+            queries.push(trim_for_query(
+                &format!("限制 条件 反例 风险 {}", request.selection_text),
+                180,
             ));
         }
     }
@@ -1612,6 +1782,7 @@ fn fallback_grounded_answer(
     let mode_label = match request.mode {
         InterpretMode::Deep => "深度解读",
         InterpretMode::Plain => "直白解释",
+        InterpretMode::Apply => "应用/迁移解读",
     };
     let error_hint = if llm_error.is_some() {
         format!(
@@ -1700,7 +1871,11 @@ fn evidence_citation_footer(evidence: &[EvidenceItem], limit: usize) -> String {
         .join(" ")
 }
 
-fn build_messages(request: &InterpretRequest, evidence: &[EvidenceItem]) -> Vec<ChatMessage> {
+fn build_messages(
+    request: &InterpretRequest,
+    evidence: &[EvidenceItem],
+    knowledge_context: Option<&str>,
+) -> Vec<ChatMessage> {
     let system = [
         "你是“框选精读”的阅读助理。",
         "用户会框选一段转换后的书中文字。你必须始终以这段原文为不可动摇的焦点，不能漂移到泛泛总结整本书。",
@@ -1730,6 +1905,9 @@ fn build_messages(request: &InterpretRequest, evidence: &[EvidenceItem]) -> Vec<
             "请给出深度解读：先解释这段话在说什么，再说明它在上下文中的作用、可能的隐含前提、与证据 chunk 的关联。至少使用 2 条引用，除非证据不足。"
         }
         InterpretMode::Plain => "请用更直白的话解释这段话，并给出必要的上下文依据。",
+        InterpretMode::Apply => {
+            "请给出应用/迁移解读：先提炼这段话在书内证据支持下成立的原则，再说明它可迁移到什么场景、迁移条件和限制。所有原则、条件、限制都必须用 [chunk_id] 接地；不要给没有证据的空泛建议。"
+        }
     };
     let question = request
         .question
@@ -1766,11 +1944,12 @@ fn build_messages(request: &InterpretRequest, evidence: &[EvidenceItem]) -> Vec<
         format!("\n已有追问上下文：\n{turns}")
     };
     let user = format!(
-        "框选文本：\n{}\n{}{}{}\n\nEvidence chunks:\n{}\n\n{}",
+        "框选文本：\n{}\n{}{}{}\n\nKnowledge context:\n{}\n\nEvidence chunks:\n{}\n\n{}",
         request.selection_text.trim(),
         question,
         prior_answer,
         follow_up_context,
+        knowledge_context.unwrap_or("没有可用知识体系上下文。"),
         evidence_text,
         mode_instruction
     );
@@ -1795,7 +1974,8 @@ fn build_tool_planning_messages(request: &InterpretRequest) -> Vec<ChatMessage> 
         "你是“框选精读”的检索规划器。",
         "你只能为当前书籍调用提供的检索工具，不能直接回答。",
         "必须始终围绕用户逐字框选的文本规划检索，不要泛化成整本书摘要。",
-        "优先调用 search_book；如果已有 chunk_id，可调用 get_chunk 或 get_neighbors；证据不足时调用 list_structure。",
+        "优先调用 get_knowledge_context、search_knowledge 和 search_book；如果已有 chunk_id，可调用 get_chunk 或 get_neighbors；证据不足时调用 list_structure。",
+        "get_knowledge_context 会返回知识卡片、关系边和地图站点摘要；search_knowledge 返回知识卡片命中的原文 evidence chunks；最终回答仍必须引用 chunk_id，不要引用知识卡片 ID。",
     ]
     .join("\n");
     let user = format!(
@@ -1854,7 +2034,8 @@ fn build_tool_loop_messages(
         "必须逐轮围绕用户逐字框选的文本和追问检索证据，不要泛化成整本书摘要。",
         "每一轮读取上一轮工具结果后，判断还缺什么证据；如果还缺定义、上下文、呼应、反例或追问相关证据，就继续调用工具。",
         "如果已有足够证据，可以不调用工具；后端会进入合成阶段。",
-        "可用工具：search_book / get_chunk / get_neighbors / list_structure。",
+        "可用工具：get_knowledge_context / search_knowledge / search_book / get_chunk / get_neighbors / list_structure。",
+        "get_knowledge_context 返回知识卡片、关系边和地图站点摘要；search_knowledge 返回知识卡片命中的原文 evidence chunks；知识卡片不能作为最终引用，最终只写 [chunk_id]。",
     ]
     .join("\n");
     let user = format!(
@@ -1961,7 +2142,7 @@ mod tests {
             rects: Vec::new(),
         }];
 
-        let messages = build_messages(&request, &evidence);
+        let messages = build_messages(&request, &evidence, None);
         assert!(messages[0].content.contains("不可动摇的焦点"));
         assert!(messages[1].content.contains("复利来自长期坚持"));
         assert!(messages[1].content.contains("[p1-c1]"));
@@ -1995,12 +2176,17 @@ mod tests {
             rects: Vec::new(),
         }];
 
-        let messages = build_messages(&request, &evidence);
+        let messages = build_messages(
+            &request,
+            &evidence,
+            Some("知识体系上下文：\n- 复利 [concept / candidate] evidence=[p1-c1]"),
+        );
         assert!(messages[1].content.contains("上一轮解读摘要"));
         assert!(messages[1].content.contains("长期是复利成立的时间条件"));
         assert!(messages[1].content.contains("已有追问上下文"));
         assert!(messages[1].content.contains("为什么强调长期"));
         assert!(messages[1].content.contains("风险控制"));
+        assert!(messages[1].content.contains("知识体系上下文"));
     }
 
     #[test]
@@ -2139,6 +2325,8 @@ mod tests {
         assert_eq!(
             names,
             vec![
+                "get_knowledge_context",
+                "search_knowledge",
                 "search_book",
                 "get_chunk",
                 "get_neighbors",
@@ -2436,6 +2624,22 @@ mod tests {
         )
         .expect("list_structure should run");
         assert!(!structure_hits.is_empty());
+
+        knowledge::build_knowledge_graph(&db_path, &request.book_id)
+            .expect("knowledge graph should build");
+        let knowledge_context_hits = execute_retrieval_tool_call(
+            &db_path,
+            &request,
+            &ToolCall {
+                id: "call-6".to_string(),
+                name: "get_knowledge_context".to_string(),
+                arguments: json!({"query": "风险控制 长期", "limit": 4}),
+            },
+        )
+        .expect("get_knowledge_context should run");
+        assert!(knowledge_context_hits
+            .iter()
+            .any(|hit| hit.text.contains("风险控制") || hit.text.contains("复利")));
 
         let unknown_hits = execute_retrieval_tool_call(
             &db_path,

@@ -10,6 +10,7 @@ use serde::Serialize;
 use crate::{
     coordinates::COORDINATE_VERSION,
     interpretation::{self, AgentTracePhase, FollowUpContext, InterpretMode, InterpretRequest},
+    knowledge,
     storage::{self, SaveBookOptions},
 };
 
@@ -45,6 +46,10 @@ pub struct ProductSelfCheckSummary {
     pub citation_count: usize,
     pub highlight_count: usize,
     pub interpretation_count: usize,
+    pub knowledge_card_count: usize,
+    pub knowledge_evidence_count: usize,
+    pub knowledge_edge_count: usize,
+    pub knowledge_export_bytes: usize,
     pub temp_dir: String,
 }
 
@@ -363,6 +368,8 @@ async fn run_product_self_check_in_dir(
             rects: hits[0].rects.first().cloned().into_iter().collect(),
             coordinate_version: COORDINATE_VERSION,
             interpretation: Some(interpretation.answer.clone()),
+            evidence_chunk_ids: vec![focus_chunk_id.clone()],
+            evidence_chunk_snapshots: Vec::new(),
         },
     )?;
     let highlights = storage::list_highlights(&db_path, &saved.book_id)?;
@@ -374,6 +381,144 @@ async fn run_product_self_check_in_dir(
         "highlight",
         "高亮保存/恢复",
         format!("已恢复 {} 条高亮", highlights.len()),
+    );
+
+    let knowledge_cards = knowledge::list_cards(&db_path, &saved.book_id)?;
+    ensure(
+        knowledge_cards.iter().any(|card| {
+            card.card_type == "highlight"
+                && card
+                    .evidence
+                    .iter()
+                    .any(|item| item.chunk_id == focus_chunk_id)
+        }),
+        "高亮没有沉淀为带 evidence 的知识卡片",
+    )?;
+    ensure(
+        knowledge_cards.iter().any(|card| {
+            card.card_type == "interpretation"
+                && card.body_markdown.contains("unique sentinel risk")
+                && card
+                    .evidence
+                    .iter()
+                    .any(|item| item.chunk_id == focus_chunk_id)
+        }),
+        "解读没有沉淀为带 evidence 的知识卡片",
+    )?;
+    let knowledge_evidence_count = knowledge_cards
+        .iter()
+        .map(|card| card.evidence.len())
+        .sum::<usize>();
+    steps.pass(
+        "knowledge_cards",
+        "知识卡片沉淀",
+        format!(
+            "{} 张卡片、{} 条 evidence",
+            knowledge_cards.len(),
+            knowledge_evidence_count
+        ),
+    );
+
+    let graph_build = knowledge::build_knowledge_graph(&db_path, &saved.book_id)?;
+    let graph = knowledge::get_knowledge_graph(&db_path, &saved.book_id)?;
+    ensure(
+        graph.nodes.iter().any(|node| {
+            node.card_type == "concept" || node.card_type == "entity" || node.card_type == "event"
+        }),
+        "知识图谱没有生成候选节点",
+    )?;
+    steps.pass(
+        "knowledge_graph",
+        "知识图谱构建",
+        format!(
+            "{} 节点、{} 关系、{} 候选",
+            graph.nodes.len(),
+            graph.edges.len(),
+            graph_build.candidate_count
+        ),
+    );
+
+    let export = knowledge::export_book_knowledge_markdown(&db_path, &saved.book_id)?;
+    ensure(
+        export.markdown.contains("阅读知识册") && export.markdown.contains(&focus_chunk_id),
+        "知识册导出没有包含标题或 evidence chunk",
+    )?;
+    let json_export = knowledge::export_book_knowledge_json(&db_path, &saved.book_id)?;
+    ensure(!json_export.cards.is_empty(), "知识 JSON 导出没有包含卡片")?;
+    steps.pass(
+        "knowledge_export",
+        "知识册导出",
+        format!(
+            "Markdown {} bytes，JSON {} cards",
+            export.markdown.len(),
+            json_export.cards.len()
+        ),
+    );
+
+    let editable = knowledge_cards
+        .iter()
+        .find(|card| card.card_type == "highlight")
+        .cloned()
+        .ok_or_else(|| anyhow!("缺少可锁定的高亮知识卡片"))?;
+    let conn = storage::open_database(&db_path)?;
+    conn.execute(
+        "UPDATE kb_cards
+         SET title = 'Self-check locked title',
+             summary = 'Self-check locked summary',
+             body_markdown = 'Self-check locked body',
+             user_locked = 1
+         WHERE card_id = ?1",
+        rusqlite::params![editable.card_id],
+    )
+    .context("failed to lock self-check knowledge card")?;
+    knowledge::create_card_for_highlight(
+        &conn,
+        &storage::SavedHighlight {
+            id: highlight.id.clone(),
+            book_id: highlight.book_id.clone(),
+            selection_text: "automatic rewrite should not overwrite".to_string(),
+            prefix: highlight.prefix.clone(),
+            suffix: highlight.suffix.clone(),
+            page_index: highlight.page_index,
+            position_start: highlight.position_start,
+            position_end: highlight.position_end,
+            rects: Vec::new(),
+            coordinate_version: highlight.coordinate_version,
+            interpretation: Some("automatic rewrite".to_string()),
+            evidence_chunk_ids: vec![focus_chunk_id.clone()],
+            evidence_chunk_snapshots: Vec::new(),
+            created_at: highlight.created_at.clone(),
+        },
+        knowledge::HighlightKnowledgeInput {
+            evidence_chunk_ids: &[focus_chunk_id.clone()],
+            evidence_chunk_snapshots: &[],
+        },
+    )?;
+    let locked_card = knowledge::get_card(&db_path, &saved.book_id, &editable.card_id)?
+        .ok_or_else(|| anyhow!("locked knowledge card disappeared"))?;
+    ensure(
+        locked_card.title == "Self-check locked title"
+            && locked_card.summary == "Self-check locked summary"
+            && locked_card.body_markdown == "Self-check locked body",
+        "用户锁定知识卡片被自动流程覆盖",
+    )?;
+    steps.pass(
+        "knowledge_append_only",
+        "知识 append-only",
+        "用户锁定卡片没有被自动流程覆盖",
+    );
+
+    let reopened_cards = knowledge::list_cards(&db_path, &saved.book_id)?;
+    ensure(
+        reopened_cards
+            .iter()
+            .any(|card| card.card_id == locked_card.card_id),
+        "重新打开 DB 后知识卡片没有恢复",
+    )?;
+    steps.pass(
+        "knowledge_reopen",
+        "知识重开恢复",
+        format!("重开后恢复 {} 张知识卡片", reopened_cards.len()),
     );
 
     let citation_count = count_chunk_citations(&interpretation.answer, &focus_chunk_id)
@@ -394,6 +539,10 @@ async fn run_product_self_check_in_dir(
             citation_count,
             highlight_count: highlights.len(),
             interpretation_count: history.len(),
+            knowledge_card_count: reopened_cards.len(),
+            knowledge_evidence_count,
+            knowledge_edge_count: graph.edges.len(),
+            knowledge_export_bytes: export.markdown.len(),
             temp_dir: temp_dir.to_string_lossy().to_string(),
         },
         steps: steps.into_steps(),
