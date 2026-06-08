@@ -165,4 +165,31 @@ describe("reader store navigation state", () => {
     expect(useReaderStore.getState().parsedText).toBe("第一页\n\n第三页")
     expect(useReaderStore.getState().parsedMarkdown).toBe("## Page 1\n\n第一页\n\n## Page 3\n\n第三页")
   })
+
+  it("does not restore stale TLDR cache from parsed document metadata", () => {
+    useReaderStore.getState().setParsedDocument([], [], "", "", {
+      parserEngine: "text-import",
+      coordinateMode: "text-only",
+      tldrText: "旧版 TLDR",
+      tldrGeneratedAt: "2026-06-01T00:00:00Z",
+      tldrModel: "Anthropic/MiniMax-M3",
+      tldrSourceVersion: 2,
+    })
+
+    expect(useReaderStore.getState().tldr).toBeNull()
+
+    useReaderStore.getState().setParsedDocument([], [], "", "", {
+      parserEngine: "text-import",
+      coordinateMode: "text-only",
+      tldrText: "新版 TLDR",
+      tldrGeneratedAt: "2026-06-08T00:00:00Z",
+      tldrModel: "Anthropic/MiniMax-M3",
+      tldrSourceVersion: 3,
+    })
+
+    expect(useReaderStore.getState().tldr).toMatchObject({
+      text: "新版 TLDR",
+      sourceVersion: 3,
+    })
+  })
 })

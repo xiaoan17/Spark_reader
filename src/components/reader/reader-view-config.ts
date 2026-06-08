@@ -47,6 +47,9 @@ export function readerViewHeaderLabel(view: ReaderView): string {
 }
 
 export function readerLayoutColumns(readerView: ReaderView, sidebarOpen: boolean): string {
+  if (readerView === "knowledge") {
+    return "0px minmax(0,1fr) 0px"
+  }
   const showAside = baseReaderViewConfig(readerView).showsInterpretationAside
   if (sidebarOpen) {
     return showAside ? "240px minmax(640px,1fr) 360px" : "240px minmax(760px,1fr) 0px"

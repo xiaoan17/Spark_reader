@@ -36,7 +36,7 @@ const meta = {
   title: "Reader/AiWorkbench",
   component: AiWorkbench,
   args: {
-    tab: "current",
+    tab: "spark",
     runningTaskCount: 1,
     selectionText:
       "复利的力量并不来自某一次惊人的收益，而来自足够长的时间里持续保持正确方向。",
@@ -67,18 +67,15 @@ const meta = {
       },
     ],
     interpretationError: "",
-    askOpen: false,
     question: "",
     interpretationRuntimeHint: "桌面版会使用完整多轮证据检索。",
     tasks,
     tasksDisabled: false,
     onTabChange: () => undefined,
-    onLightweightChange: () => undefined,
     onNoteChange: () => undefined,
     onSaveNote: () => undefined,
     onCopyInterpretation: () => undefined,
     onCitationClick: () => undefined,
-    onAskToggle: () => undefined,
     onQuestionChange: () => undefined,
     onQuestionSubmit: () => undefined,
     onRegenerate: () => undefined,
@@ -99,9 +96,9 @@ const meta = {
 export default meta
 type Story = StoryObj<typeof meta>
 
-export const Current: Story = {}
+export const Spark: Story = {}
 
-export const CurrentEmpty: Story = {
+export const SparkEmpty: Story = {
   args: {
     selectionText: "",
     interpretation: "",
@@ -112,7 +109,7 @@ export const CurrentEmpty: Story = {
   },
 }
 
-export const CurrentPlanning: Story = {
+export const SparkPlanning: Story = {
   args: {
     phase: "planning",
     interpretation: "",

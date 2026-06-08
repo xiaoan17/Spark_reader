@@ -139,20 +139,21 @@ function buttonByText(container: ParentNode, text: string) {
   return button
 }
 
-function inputByPlaceholder(container: ParentNode, placeholder: string) {
-  const input = [...container.querySelectorAll("input")].find((element) =>
-    element.placeholder.includes(placeholder),
-  )
-  if (!(input instanceof HTMLInputElement)) {
-    throw new Error(`missing input placeholder: ${placeholder}`)
-  }
-  return input
-}
-
 function statusMessages(container: ParentNode) {
   return [...container.querySelectorAll(".rounded-md.bg-muted, .border-b.bg-muted\\/45")]
     .map((element) => textContent(element))
     .join(" ")
+}
+
+function inputByLabel(container: ParentNode, labelText: string) {
+  const label = [...container.querySelectorAll("label")].find((element) =>
+    textContent(element).startsWith(labelText),
+  )
+  const input = label?.querySelector("input")
+  if (!(input instanceof HTMLInputElement)) {
+    throw new Error(`missing input label: ${labelText}`)
+  }
+  return input
 }
 
 async function click(element: Element) {
@@ -182,13 +183,12 @@ describe("LlmSettingsPanel defaults", () => {
       <LlmSettingsPanel open onClose={() => undefined} />,
     )
 
-    expect(html).toContain("推荐模式")
+    expect(html).toContain("推荐")
     expect(html).toContain("deepseek-v4-flash")
     expect(html).toContain("OpenAI")
     expect(html).toContain("Anthropic")
     expect(html).toContain("本地文本检索")
     expect(html).toContain("语义向量检索")
-    expect(html).toContain("https://mineru.net")
     expect(html).toContain("MinerU 云端解析")
     expect(html).toContain("获取 DeepSeek key")
     expect(html).toContain("https://platform.deepseek.com/api_keys")
@@ -201,6 +201,10 @@ describe("LlmSettingsPanel defaults", () => {
     expect(html).not.toContain('value="2560"')
     expect(html).not.toContain("开发诊断")
     expect(html).not.toContain("运行自检")
+    expect(html).not.toContain("推荐模式只需要")
+    expect(html).not.toContain("选择一个预设")
+    expect(html).not.toContain("导入 PDF 时保留")
+    expect(html).not.toContain("没有 Embedding key")
     expect(html).not.toContain("sk-")
   })
 
@@ -246,7 +250,7 @@ describe("LlmSettingsPanel defaults", () => {
       <LlmSettingsPanel open onClose={() => undefined} />,
     )
 
-    const tokenInput = inputByPlaceholder(container, "MinerU token")
+    const tokenInput = inputByLabel(container, "API Token")
     await setInputValue(tokenInput, "mineru-secret-token")
     await click(buttonByText(container, "保存 MinerU"))
 
@@ -335,7 +339,7 @@ describe("LlmSettingsPanel defaults", () => {
 
     await click(buttonByText(container, "OpenAI"))
     const inputs = [...container.querySelectorAll("input")]
-    const keyInput = inputByPlaceholder(container, "沿用已保存密钥")
+    const keyInput = inputByLabel(container, "API Key")
     const baseUrlInput = inputs.find((input) =>
       input.value.includes("proxy.example.com/openai"),
     ) as HTMLInputElement
@@ -359,7 +363,7 @@ describe("LlmSettingsPanel defaults", () => {
         model: "my-openai-model",
         apiKey: "unsaved-openai-key",
       })
-      expect(textContent(container)).toContain("OpenAI my-openai-model 连通正常，已记录为当前 LLM 设置")
+      expect(textContent(container)).toContain("OpenAI my-openai-model 连通正常")
       expect(onLlmSettingsSaved).toHaveBeenCalledWith({
         provider: "open_ai",
         baseUrl: "https://gateway.local/openai/v1",
@@ -426,7 +430,7 @@ describe("LlmSettingsPanel defaults", () => {
 
     await click(buttonByText(first.container, "Anthropic"))
     const firstInputs = [...first.container.querySelectorAll("input")]
-    const keyInput = inputByPlaceholder(first.container, "输入密钥后保存")
+    const keyInput = inputByLabel(first.container, "API Key")
     const baseUrlInput = firstInputs.find((input) =>
       input.value.includes("proxy.example.com/anthropic"),
     ) as HTMLInputElement
@@ -444,7 +448,7 @@ describe("LlmSettingsPanel defaults", () => {
         model: "MiniMax-M3",
         apiKey: "anthropic-compatible-key",
       })
-      expect(textContent(first.container)).toContain("Anthropic MiniMax-M3 连通正常，已记录为当前 LLM 设置")
+      expect(textContent(first.container)).toContain("Anthropic MiniMax-M3 连通正常")
     })
     first.unmount()
 
@@ -453,7 +457,7 @@ describe("LlmSettingsPanel defaults", () => {
       <LlmSettingsPanel open onClose={() => undefined} defaultAdvancedOpen />,
     )
 
-    expect(textContent(reopened.container)).toContain("当前预设：Anthropic · MiniMax-M3")
+    expect(textContent(reopened.container)).toContain("AnthropicMiniMax-M3")
     expect([...reopened.container.querySelectorAll("input")].some((input) =>
       input.value === "https://api.minimaxi.com/anthropic",
     )).toBe(true)
@@ -539,10 +543,10 @@ describe("LlmSettingsPanel defaults", () => {
     expect(textContent(container)).toContain("向量维度")
     expect(textContent(container)).toContain("批大小")
     expect(textContent(container)).toContain("开发诊断")
-    expect(textContent(container)).toContain("OpenAI 兼容服务填到 /v1")
-    expect(textContent(container)).toContain("自定义模型")
-    expect(textContent(container)).toContain("兼容 OpenAI embeddings 协议")
-    expect(textContent(container)).toContain("必须匹配模型输出维度")
+    expect(textContent(container)).not.toContain("OpenAI 兼容服务填到 /v1")
+    expect(textContent(container)).not.toContain("自定义模型")
+    expect(textContent(container)).not.toContain("兼容 OpenAI embeddings 协议")
+    expect(textContent(container)).not.toContain("必须匹配模型输出维度")
     unmount()
   })
 
@@ -576,19 +580,19 @@ describe("LlmSettingsPanel defaults", () => {
         apiKey: undefined,
       })
     })
-    expect(textContent(container)).toContain("FTS 文本搜索")
+    expect(textContent(container)).not.toContain("FTS 文本搜索")
     unmount()
   })
 
-  it("describes browser mode without exposing Tauri backend wording", async () => {
+  it("keeps browser mode quiet until the user tries a desktop-only action", async () => {
     vi.mocked(isTauriRuntime).mockReturnValue(false)
 
     const { container, unmount } = await renderClient(
       <LlmSettingsPanel open onClose={() => undefined} />,
     )
 
-    expect(textContent(container)).toContain("浏览器版可查看界面")
-    expect(textContent(container)).toContain("保存密钥和测试连接请使用桌面版")
+    expect(textContent(container)).not.toContain("浏览器版可查看界面")
+    expect(textContent(container)).not.toContain("保存密钥和测试连接请使用桌面版")
     expect(statusMessages(container)).not.toContain("Tauri")
     expect(statusMessages(container)).not.toContain("后端")
     expect(getLlmSettings).not.toHaveBeenCalled()
@@ -608,7 +612,7 @@ describe("LlmSettingsPanel defaults", () => {
 
     await click(buttonByText(container, "高级"))
     await click(buttonByText(container, "运行自检"))
-    expect(textContent(container)).toContain("开发诊断仅桌面版可运行")
+    expect(textContent(container)).toContain("开发诊断请使用桌面版")
     expect(statusMessages(container)).not.toContain("Tauri")
     expect(statusMessages(container)).not.toContain("后端")
     unmount()

@@ -7,15 +7,9 @@ import { SelectionToolbarHost } from "./SelectionToolbarHost"
   .IS_REACT_ACT_ENVIRONMENT = true
 
 const defaultProps = {
-  askOpen: false,
-  question: "",
-  onAskToggle: vi.fn(),
-  onCopy: vi.fn(),
   onExplain: vi.fn(),
   onHighlight: vi.fn(),
   onPlainExplain: vi.fn(),
-  onQuestionChange: vi.fn(),
-  onQuestionSubmit: vi.fn(),
 }
 
 async function renderHost(present: boolean, extra: Partial<Parameters<typeof SelectionToolbarHost>[0]> = {}) {

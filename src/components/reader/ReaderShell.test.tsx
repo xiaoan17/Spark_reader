@@ -1017,7 +1017,7 @@ describe("ReaderShell view navigation", () => {
     unmount()
   })
 
-  it("opens knowledge as a top-level view and removes the right interpretation sidebar", async () => {
+  it("opens knowledge as a full-width top-level view without reader sidebars", async () => {
     const { ReaderShell } = await import("./ReaderShell")
     const { container, unmount } = await renderClient(
       <ReaderShell
@@ -1081,7 +1081,10 @@ describe("ReaderShell view navigation", () => {
 
     await clickAsync(readerViewButton(container, "知识体系"))
 
+    const main = container.querySelector("main") as HTMLElement
+    expect(main.style.gridTemplateColumns).toBe("0px minmax(0,1fr) 0px")
     expect(textContent(container)).toContain("暂无知识卡片")
+    expect(textContent(container)).not.toContain("这是与转换稿同级")
     expect(textContent(container)).not.toContain("可回跳引用")
     unmount()
   })
@@ -3419,12 +3422,6 @@ describe("ReaderShell runtime affordances", () => {
     await vi.waitFor(() => expect(selectedContainer.querySelector('[data-testid="selection-toolbar"]')).not.toBeNull())
     click(buttonByText(selectedContainer, "Spark"))
     expect(onDeepInterpret).toHaveBeenCalledTimes(1)
-    click(buttonByLabel(selectedContainer, "更多操作"))
-    click(buttonByText(selectedContainer, "追问", 0))
-    const questionBox = inputByPlaceholder(selectedContainer, "输入你的问题或解读要求")
-    changeInput(questionBox, "解释这个术语在论文中的作用")
-    click(buttonByText(selectedContainer, "发送"))
-    expect(onQuestionSubmit).toHaveBeenCalledWith("解释这个术语在论文中的作用")
     unmountSelected()
   })
 })
@@ -4582,10 +4579,9 @@ describe("ReaderShell product interaction chain", () => {
     click(buttonByText(container, "引用"))
     expect(onCitationClick).toHaveBeenCalledWith(chunkB)
 
-    click(buttonByText(container, "继续追问"))
     const questionBox = inputByPlaceholder(
       container,
-      "输入你的问题或解读要求；会围绕当前选区继续检索证据",
+      "围绕这段继续追问；会检索证据后回答",
     )
     changeInput(questionBox, "那短期波动怎么处理？")
     click(buttonByText(container, "发送"))

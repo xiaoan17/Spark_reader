@@ -66,15 +66,9 @@ export type ConvertedTextReaderProps = {
   selectionRects: NormalizedPageRect[]
   selectionAnchor: TextSelectionAnchor | null
   quality?: TextQuality | null
-  askOpen: boolean
-  question: string
-  onCopySelection: () => void
   onExplain: () => void
   onPlainExplain: () => void
-  onAskToggle: () => void
   onOpenSparkItem?: (item: SavedInterpretation) => void
-  onQuestionChange: (question: string) => void
-  onQuestionSubmit: () => void
   onHighlight: () => void
   onTextSelection: (
     text: string,
@@ -107,15 +101,9 @@ export function ConvertedTextReader({
   selectionRects,
   selectionAnchor,
   quality,
-  askOpen,
-  question,
-  onCopySelection,
   onExplain,
   onPlainExplain,
-  onAskToggle,
   onOpenSparkItem,
-  onQuestionChange,
-  onQuestionSubmit,
   onHighlight,
   onTextSelection,
   onClearSelection,
@@ -612,10 +600,8 @@ export function ConvertedTextReader({
               <SelectionToolbarHost
                 present={shouldShowToolbarForPage}
                 approximate={approximateSelection}
-                askOpen={askOpen}
                 className="absolute z-20 max-w-[calc(100%-2rem)] animate-pop-in"
                 disabled={!selectionText.trim()}
-                question={question}
                 suppressed={toolbarSuppressed}
                 style={
                   toolbarPosition
@@ -623,13 +609,9 @@ export function ConvertedTextReader({
                     : { left: 40, top: 96 }
                 }
                 onSizeChange={handleToolbarSizeChange}
-                onAskToggle={onAskToggle}
-                onCopy={onCopySelection}
                 onExplain={onExplain}
                 onHighlight={onHighlight}
                 onPlainExplain={onPlainExplain}
-                onQuestionChange={onQuestionChange}
-                onQuestionSubmit={onQuestionSubmit}
               />
             </article>
           )

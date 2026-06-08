@@ -4,15 +4,15 @@ import {
   Copy,
   FileSearch,
   KeyRound,
+  Loader2,
+  NotebookPen,
   RefreshCcw,
-  Save,
+  Sparkles,
   Square,
-  MessageSquareText,
 } from "lucide-react"
 import { useEffect, useState, type CSSProperties } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { MarkdownContent } from "@/components/markdown/MarkdownContent"
 import { renderMarkdownTextWithCitations } from "@/components/markdown/markdown-citations"
 import { shouldSubmitTextarea } from "@/components/reader/textarea-submit"
@@ -45,15 +45,16 @@ type InterpretationCardProps = {
   answerSource?: AnswerSource
   errorMessage?: string
   followUps: FollowUpTurn[]
-  askOpen?: boolean
+  lightweight?: boolean
   question?: string
-  onAskToggle?: () => void
+  noteDraft?: string
+  noteSaving?: boolean
+  noteError?: string
   onQuestionChange?: (question: string) => void
   onQuestionSubmit?: () => void
+  onNoteChange?: (note: string) => void
   onCopy?: () => void
   onSave?: () => void
-  saveLabel?: string
-  saveDisabled?: boolean
   onCitationClick?: (chunkId: string) => void
   onRegenerate?: () => void
   onStop?: () => void
@@ -73,15 +74,16 @@ export function InterpretationCard({
   answerSource = "llm",
   errorMessage = "",
   followUps,
-  askOpen = false,
+  lightweight = false,
   question = "",
-  onAskToggle,
+  noteDraft = "",
+  noteSaving = false,
+  noteError = "",
   onQuestionChange,
   onQuestionSubmit,
+  onNoteChange,
   onCopy,
   onSave,
-  saveLabel = "保存标记",
-  saveDisabled,
   onCitationClick,
   onRegenerate,
   onStop,
@@ -90,7 +92,11 @@ export function InterpretationCard({
   className,
 }: InterpretationCardProps) {
   const [stopping, setStopping] = useState(false)
+  const [noteOpen, setNoteOpen] = useState(false)
   const streaming = phase === "streaming"
+  const busy = phase === "planning" || phase === "retrieving" || streaming
+  const hasSelection = selectionText.trim().length > 0
+  const showActions = hasSelection && !busy
   useEffect(() => {
     if (!streaming) {
       setStopping(false)
@@ -98,11 +104,17 @@ export function InterpretationCard({
   }, [streaming])
 
   return (
-    <Card className={cn("overflow-hidden", className)}>
-      <CardHeader className="border-b bg-muted/30">
+    <div className={cn("flex min-h-full flex-col", className)}>
+      <div className="border-b pb-3">
         <div className="flex items-start justify-between gap-3">
-          <div>
-            <CardTitle>解读</CardTitle>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
+                <Sparkles className="h-4 w-4 text-primary" />
+                Spark
+              </span>
+              <Badge variant="secondary">{lightweight ? "轻量" : "深度"}</Badge>
+            </div>
             <blockquote className="mt-3 border-l-2 border-primary/50 pl-3 font-reading text-sm leading-7 text-muted-foreground">
               {selectionText || "尚未选择文本"}
             </blockquote>
@@ -122,8 +134,8 @@ export function InterpretationCard({
             </Button>
           ) : null}
         </div>
-      </CardHeader>
-      <CardContent className="space-y-4 pt-4">
+      </div>
+      <div className="space-y-4 py-4">
         <PhaseBody
           phase={phase}
           selectionText={selectionText}
@@ -143,55 +155,82 @@ export function InterpretationCard({
             {sanitizeInternalReferenceText(runtimeHint)}
           </p>
         ) : null}
-        {askOpen ? (
+      </div>
+      {showActions ? (
+        <div className="mt-auto space-y-3 border-t pt-3">
           <div className="flex gap-2 rounded-md border bg-background p-2">
             <textarea
-              className="min-h-20 flex-1 resize-none bg-transparent text-sm outline-none"
-              placeholder="输入你的问题或解读要求；会围绕当前选区继续检索证据"
+              className="min-h-16 flex-1 resize-none bg-transparent text-sm outline-none"
+              placeholder="围绕这段继续追问；会检索证据后回答"
               value={question}
               onChange={(event) => onQuestionChange?.(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Escape") {
-                  event.preventDefault()
-                  onAskToggle?.()
-                  return
-                }
                 if (shouldSubmitTextarea(event)) {
                   event.preventDefault()
                   onQuestionSubmit?.()
                 }
               }}
             />
-            <Button size="sm" disabled={question.trim().length === 0} onClick={onQuestionSubmit}>
+            <Button
+              size="sm"
+              className="self-end"
+              disabled={question.trim().length === 0}
+              onClick={onQuestionSubmit}
+            >
               发送
             </Button>
           </div>
-        ) : null}
-        <div className="flex items-center justify-between gap-2 border-t pt-3">
-          <Button size="sm" onClick={onAskToggle} disabled={!selectionText}>
-            <MessageSquareText className="mr-1.5 h-4 w-4" />
-            继续追问
-          </Button>
-          <div className="flex items-center gap-1">
-            <Button size="icon" variant="ghost" aria-label="复制解读" onClick={onCopy} disabled={!selectionText}>
+          {noteOpen ? (
+            <div className="space-y-2 rounded-md border bg-background p-2">
+              <textarea
+                className="min-h-16 w-full resize-none bg-transparent text-sm leading-6 outline-none"
+                placeholder="写下这段文字触发的想法"
+                value={noteDraft}
+                onChange={(event) => onNoteChange?.(event.target.value)}
+              />
+              {noteError ? <InlineError message={noteError} /> : null}
+              <div className="flex justify-end">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={!noteDraft.trim() || noteSaving}
+                  onClick={onSave}
+                >
+                  {noteSaving ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}
+                  保存笔记
+                </Button>
+              </div>
+            </div>
+          ) : null}
+          <div className="flex items-center justify-end gap-1">
+            <Button
+              size="sm"
+              variant={noteOpen ? "secondary" : "ghost"}
+              aria-pressed={noteOpen}
+              onClick={() => setNoteOpen((open) => !open)}
+            >
+              <NotebookPen className="mr-1.5 h-4 w-4" />
+              保存
+            </Button>
+            <Button size="icon" variant="ghost" aria-label="复制解读" onClick={onCopy}>
               <Copy className="h-4 w-4" />
             </Button>
-            <Button
-              size="icon"
-              variant="ghost"
-              aria-label={saveLabel}
-              onClick={onSave}
-              disabled={saveDisabled ?? !selectionText}
-            >
-              <Save className="h-4 w-4" />
-            </Button>
-            <Button size="icon" variant="ghost" aria-label="重新生成解读" onClick={onRegenerate} disabled={!selectionText}>
+            <Button size="icon" variant="ghost" aria-label="重新生成解读" onClick={onRegenerate}>
               <RefreshCcw className="h-4 w-4" />
             </Button>
           </div>
         </div>
-      </CardContent>
-    </Card>
+      ) : null}
+    </div>
+  )
+}
+
+function InlineError({ message }: { message: string }) {
+  return (
+    <div className="flex items-start gap-2 rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm leading-5 text-danger-foreground">
+      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+      <span>{message}</span>
+    </div>
   )
 }
 

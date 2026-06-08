@@ -69,12 +69,6 @@ const defaultSettings: Record<LlmProviderKind, { baseUrl: string; model: string 
 
 const providerOrder: LlmProviderKind[] = ["deep_seek", "open_ai", "anthropic"]
 
-const providerDescriptions: Record<LlmProviderKind, string> = {
-  deep_seek: "推荐默认项，成本低，适合作为日常解读模型。",
-  open_ai: "适合英文论文和复杂推理，使用 OpenAI 兼容接口。",
-  anthropic: "适合长上下文和细致解释，使用 Anthropic Messages API。",
-}
-
 const providerKeyLinks: Record<LlmProviderKind, { label: string; href: string }> = {
   deep_seek: {
     label: "获取 DeepSeek key",
@@ -123,20 +117,13 @@ const defaultMineruSettings = {
 const mineruTokenLink = "https://mineru.net/apiManage/docs"
 const siliconFlowKeyLink = "https://cloud.siliconflow.cn/account/ak"
 
-const browserModeNotice =
-  "浏览器版可查看界面、导入示例书和体验本地兜底；保存密钥、测试连接和 MinerU 云端解析请使用桌面版。"
+const browserModeSaveMessage = "保存设置请使用桌面版。"
 
-const browserModeSettingsMessage =
-  "浏览器版可体验界面和本地兜底；保存密钥和测试连接请使用桌面版。"
+const browserModeMineruMessage = "MinerU 云端解析设置请使用桌面版保存。"
 
-const browserModeSaveMessage = "保存设置请使用桌面版；浏览器版可先体验本地兜底。"
+const browserModeTestMessage = "连接测试请使用桌面版。"
 
-const browserModeMineruMessage =
-  "MinerU 云端解析设置请使用桌面版保存；浏览器版可先使用示例书和本地文本体验。"
-
-const browserModeTestMessage = "连接测试请使用桌面版；浏览器版不会读取本机密钥。"
-
-const browserModeSelfCheckMessage = "开发诊断仅桌面版可运行；浏览器版可查看界面和本地兜底体验。"
+const browserModeSelfCheckMessage = "开发诊断请使用桌面版。"
 
 export function LlmSettingsPanel({
   open,
@@ -177,7 +164,7 @@ export function LlmSettingsPanel({
     let cancelled = false
     if (!isTauriRuntime()) {
       setStatus("idle")
-      setMessage(browserModeSettingsMessage)
+      setMessage("")
       return
     }
 
@@ -314,7 +301,7 @@ export function LlmSettingsPanel({
       setEmbeddingApiKeyConfigured(settings.apiKeyConfigured)
       setEmbeddingApiKey("")
       setEmbeddingStatus("ok")
-      setEmbeddingMessage("Embedding 设置已保存；当前打开的书籍会自动按新配置重建索引")
+      setEmbeddingMessage("Embedding 设置已保存")
       onEmbeddingSettingsSaved?.()
     } catch (error) {
       setEmbeddingStatus("error")
@@ -338,7 +325,7 @@ export function LlmSettingsPanel({
       setMineruApiTokenConfigured(settings.apiTokenConfigured)
       setMineruApiToken("")
       setMineruStatus("ok")
-      setMineruMessage("MinerU 设置已保存；云端解析会使用新的 token")
+      setMineruMessage("MinerU 设置已保存")
     } catch (error) {
       setMineruStatus("error")
       setMineruMessage(settingsErrorMessage(error))
@@ -361,7 +348,7 @@ export function LlmSettingsPanel({
         setProvider(settings.provider)
         setProviderDrafts(() => providerDraftsFromSettings(settings))
         setStatus("ok")
-        setMessage(`${providerLabels[result.provider]} ${result.model} 连通正常，已记录为当前 LLM 设置`)
+        setMessage(`${providerLabels[result.provider]} ${result.model} 连通正常`)
         onLlmSettingsSaved?.(settings)
         return
       }
@@ -453,9 +440,6 @@ export function LlmSettingsPanel({
         <div className="flex items-start justify-between gap-4 border-b p-4">
           <div className="min-w-0">
             <div className="text-base font-semibold">设置</div>
-            <div className="mt-1 text-xs leading-5 text-muted-foreground">
-              推荐模式只需要选择模型服务并填入必要密钥；密钥只保存到本机 .env，不会在界面回显。
-            </div>
           </div>
           <div className="flex shrink-0 rounded-md border bg-background p-1" aria-label="设置模式">
             <Button
@@ -486,9 +470,6 @@ export function LlmSettingsPanel({
               <div className="flex items-center gap-1.5 text-sm font-semibold">
                 <KeyRound className="h-4 w-4 text-muted-foreground" />
                 LLM 解读模型
-              </div>
-              <div className="mt-1 text-xs text-muted-foreground">
-                选择一个预设，只填当前 provider 的 API key 即可开始深度解读。
               </div>
             </div>
             <div className="flex shrink-0 gap-2">
@@ -535,14 +516,10 @@ export function LlmSettingsPanel({
               className="h-9 w-full rounded-md border bg-background px-3 outline-none focus:ring-2 focus:ring-ring"
               type="password"
               value={apiKey}
-              placeholder={apiKeyConfigured ? "留空则沿用已保存密钥" : "输入密钥后保存"}
               onChange={(event) => updateProviderDraft({ apiKey: event.target.value })}
             />
           </label>
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-muted/60 px-3 py-2 text-xs leading-5 text-muted-foreground">
-            <span>
-              当前预设：{providerLabels[provider]} · {model}。{providerDescriptions[provider]}
-            </span>
+          <div className="flex justify-end">
             <ExternalHelpLink href={providerKeyLinks[provider].href}>
               {providerKeyLinks[provider].label}
             </ExternalHelpLink>
@@ -556,9 +533,6 @@ export function LlmSettingsPanel({
                   value={baseUrl}
                   onChange={(event) => updateProviderDraft({ baseUrl: event.target.value })}
                 />
-                <span className="block text-[11px] leading-4 text-muted-foreground">
-                  OpenAI 兼容服务填到 /v1，Anthropic 服务填到主机根地址。
-                </span>
               </label>
               <label className="block space-y-1.5">
                 <span className="text-xs font-medium text-muted-foreground">Model</span>
@@ -567,9 +541,6 @@ export function LlmSettingsPanel({
                   value={model}
                   onChange={(event) => updateProviderDraft({ model: event.target.value })}
                 />
-                <span className="block text-[11px] leading-4 text-muted-foreground">
-                  具体模型 ID；只有切换到自定义模型时需要修改。
-                </span>
               </label>
             </div>
           ) : null}
@@ -585,9 +556,6 @@ export function LlmSettingsPanel({
           <div className="flex items-start justify-between gap-3">
             <div>
               <div className="text-sm font-semibold">MinerU 云端解析</div>
-              <div className="mt-1 text-xs text-muted-foreground">
-                导入 PDF 时保留 Markdown 结构、图片、表格和公式资源；这里通常只需要填 token。
-              </div>
             </div>
             <Button
               size="sm"
@@ -607,12 +575,10 @@ export function LlmSettingsPanel({
               className="h-9 w-full rounded-md border bg-background px-3 outline-none focus:ring-2 focus:ring-ring"
               type="password"
               value={mineruApiToken}
-              placeholder={mineruApiTokenConfigured ? "留空则沿用已保存 token" : "输入 MinerU token 后保存"}
               onChange={(event) => setMineruApiToken(event.target.value)}
             />
           </label>
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-muted/60 px-3 py-2 text-xs leading-5 text-muted-foreground">
-            <span>用于云端解析论文、扫描件、公式和表格；token 只保存到本机。</span>
+          <div className="flex justify-end">
             <ExternalHelpLink href={mineruTokenLink}>获取 MinerU token</ExternalHelpLink>
           </div>
           {advancedOpen ? (
@@ -623,15 +589,8 @@ export function LlmSettingsPanel({
                 value={mineruBaseUrl}
                 onChange={(event) => setMineruBaseUrl(event.target.value)}
               />
-              <span className="block text-[11px] leading-4 text-muted-foreground">
-                MinerU 服务地址；通常保持 https://mineru.net。
-              </span>
             </label>
-          ) : (
-            <div className="rounded-md bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
-              使用默认 MinerU 服务：{mineruBaseUrl}
-            </div>
-          )}
+          ) : null}
           {mineruMessage ? (
             <div className="flex gap-2 rounded-md bg-muted p-2 text-xs">
               {mineruStatus === "ok" ? <CheckCircle2 className="h-4 w-4 text-primary" /> : null}
@@ -644,9 +603,6 @@ export function LlmSettingsPanel({
           <div className="flex items-start justify-between gap-3">
             <div>
               <div className="text-sm font-semibold">检索模式</div>
-              <div className="mt-1 text-xs text-muted-foreground">
-                没有 Embedding key 也能先用本地文本检索；向量检索只是语义召回增强。
-              </div>
             </div>
             <div className="flex shrink-0 items-center gap-2">
               {embeddingEnabled ? (
@@ -683,9 +639,6 @@ export function LlmSettingsPanel({
               onClick={() => setEmbeddingEnabled(false)}
             >
               <span className="block text-sm font-medium">本地文本检索</span>
-              <span className="mt-1 block text-xs text-muted-foreground">
-                无需 key；保留全文搜索、引用回跳和本地兜底解读。
-              </span>
             </button>
             <button
               type="button"
@@ -699,9 +652,6 @@ export function LlmSettingsPanel({
               onClick={() => setEmbeddingEnabled(true)}
             >
               <span className="block text-sm font-medium">语义向量检索</span>
-              <span className="mt-1 block text-xs text-muted-foreground">
-                可选增强；默认使用 SiliconFlow Qwen3 Embedding。
-              </span>
             </button>
           </div>
           {embeddingEnabled ? (
@@ -714,32 +664,23 @@ export function LlmSettingsPanel({
                   className="h-9 w-full rounded-md border bg-background px-3 outline-none focus:ring-2 focus:ring-ring"
                   type="password"
                   value={embeddingApiKey}
-                  placeholder={embeddingApiKeyConfigured ? "留空则沿用已保存密钥" : "可先不填，改用本地文本检索"}
                   onChange={(event) => setEmbeddingApiKey(event.target.value)}
                 />
               </label>
-              <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-muted/60 px-3 py-2 text-xs leading-5 text-muted-foreground">
-                <span>默认使用 SiliconFlow Qwen3 Embedding；也可以切回本地文本检索。</span>
+              <div className="flex justify-end">
                 <ExternalHelpLink href={siliconFlowKeyLink}>获取 SiliconFlow key</ExternalHelpLink>
               </div>
             </>
-          ) : (
-            <div className="rounded-md bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
-              保存后会关闭向量索引；已转换书籍仍可使用 FTS 文本搜索。
-            </div>
-          )}
+          ) : null}
           {advancedOpen && embeddingEnabled ? (
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="block space-y-1.5">
                 <span className="text-xs font-medium text-muted-foreground">Provider ID</span>
                 <input
                   className="h-9 w-full rounded-md border bg-background px-3 outline-none focus:ring-2 focus:ring-ring"
-                  value={embeddingProvider}
-                  onChange={(event) => setEmbeddingProvider(event.target.value)}
-                />
-                <span className="block text-[11px] leading-4 text-muted-foreground">
-                  向量服务名称，用于判断旧索引是否需要重建。
-                </span>
+                value={embeddingProvider}
+                onChange={(event) => setEmbeddingProvider(event.target.value)}
+              />
               </label>
               <label className="block space-y-1.5">
                 <span className="text-xs font-medium text-muted-foreground">Embedding URL</span>
@@ -748,9 +689,6 @@ export function LlmSettingsPanel({
                   value={embeddingBaseUrl}
                   onChange={(event) => setEmbeddingBaseUrl(event.target.value)}
                 />
-                <span className="block text-[11px] leading-4 text-muted-foreground">
-                  兼容 OpenAI embeddings 协议的接口地址。
-                </span>
               </label>
               <label className="block space-y-1.5">
                 <span className="text-xs font-medium text-muted-foreground">Model ID</span>
@@ -759,9 +697,6 @@ export function LlmSettingsPanel({
                   value={embeddingModel}
                   onChange={(event) => setEmbeddingModel(event.target.value)}
                 />
-                <span className="block text-[11px] leading-4 text-muted-foreground">
-                  向量模型 ID；切换后已导入书籍会重建索引。
-                </span>
               </label>
               <label className="block space-y-1.5">
                 <span className="text-xs font-medium text-muted-foreground">向量维度</span>
@@ -771,9 +706,6 @@ export function LlmSettingsPanel({
                   value={embeddingDimension}
                   onChange={(event) => setEmbeddingDimension(event.target.value)}
                 />
-                <span className="block text-[11px] leading-4 text-muted-foreground">
-                  必须匹配模型输出维度；不确定时使用默认值。
-                </span>
               </label>
               <label className="block space-y-1.5">
                 <span className="text-xs font-medium text-muted-foreground">批大小</span>
@@ -783,9 +715,6 @@ export function LlmSettingsPanel({
                   value={embeddingBatchSize}
                   onChange={(event) => setEmbeddingBatchSize(event.target.value)}
                 />
-                <span className="block text-[11px] leading-4 text-muted-foreground">
-                  每次请求的文本数量；provider 限流时后端会自动减半重试。
-                </span>
               </label>
             </div>
           ) : null}
@@ -802,9 +731,6 @@ export function LlmSettingsPanel({
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="text-sm font-semibold">开发诊断</div>
-                <div className="mt-1 text-xs text-muted-foreground">
-                  用临时 PDF 和临时书库验收 Markdown 转换、搜索、解读引用、追问、高亮和历史。
-                </div>
               </div>
               <Button
                 variant="outline"
@@ -846,11 +772,6 @@ export function LlmSettingsPanel({
                 </div>
               </div>
             ) : null}
-          </div>
-        ) : null}
-        {!desktopRuntime ? (
-          <div className="border-b bg-muted/45 px-4 py-2 text-xs text-muted-foreground">
-            {browserModeNotice}
           </div>
         ) : null}
         <div className="flex justify-end gap-2 border-t p-4">

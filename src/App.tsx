@@ -269,7 +269,7 @@ export function App() {
     clearTimers()
     clearInterpretation()
     setCurrentThreadLightweight(lightweight)
-    setWorkbenchTab("current")
+    setWorkbenchTab("spark")
     setPhase("planning")
     schedule(() => {
       void runBackendInterpretation(mode, version, lightweight)
@@ -1086,7 +1086,7 @@ export function App() {
     // 优先用 mode 恢复轻重（plain=轻量）；旧记录无 mode 时回退到 kind==="spark"。
     setCurrentThreadLightweight(lightweightFromSavedInterpretation(item))
     setCurrentThreadError("")
-    setWorkbenchTab("current")
+    setWorkbenchTab("spark")
     setPhase("reading")
   }
 
@@ -1114,7 +1114,7 @@ export function App() {
     // 优先用 mode 恢复轻重（plain=轻量）；旧记录无 mode 时回退到 kind==="spark"。
     setCurrentThreadLightweight(lightweightFromSavedInterpretation(item))
     setCurrentThreadError("")
-    setWorkbenchTab("current")
+    setWorkbenchTab("spark")
   }
 
   async function handleDeleteHighlight(highlightId: string) {

@@ -1,6 +1,7 @@
 import { create } from "zustand"
 import type { NormalizedPageRect } from "@/core/coordinates"
 import type { AgentTask } from "@/core/agent-task"
+import { isCurrentTldrSourceVersion } from "@/core/tldr"
 
 export type ReaderPhase = "empty" | "reading" | "planning" | "retrieving" | "streaming" | "error"
 
@@ -51,7 +52,7 @@ export type AnswerSource = "llm" | "local_fallback"
 export type InterpretationKind = "interpretation" | "spark" | "note"
 
 export type InterpretMode = "deep" | "plain" | "apply"
-export type WorkbenchTab = "current" | "tasks"
+export type WorkbenchTab = "spark" | "tasks"
 
 export type DocumentTldrState = {
   text: string
@@ -403,7 +404,7 @@ export const useReaderStore = create<ReaderState>((set) => ({
   interpretationError: "",
   followUps: [],
   activeInterpretationSessionId: "",
-  workbenchTab: "current",
+  workbenchTab: "spark",
   currentThreadLightweight: false,
   currentNoteDraft: "",
   currentNoteSaving: false,
@@ -453,7 +454,7 @@ export const useReaderStore = create<ReaderState>((set) => ({
       interpretationError: "",
       followUps: [],
       activeInterpretationSessionId: "",
-      workbenchTab: "current",
+      workbenchTab: "spark",
       currentThreadLightweight: false,
       currentNoteDraft: "",
       currentNoteSaving: false,
@@ -500,7 +501,8 @@ export const useReaderStore = create<ReaderState>((set) => ({
       coordinateMode: metadata?.coordinateMode ?? "text-only",
       activeChunkId: "",
       textQuality: metadata?.quality ?? null,
-      tldr: metadata?.tldrText?.trim()
+      tldr:
+        metadata?.tldrText?.trim() && isCurrentTldrSourceVersion(metadata.tldrSourceVersion)
         ? {
             text: metadata.tldrText,
             generatedAt: metadata.tldrGeneratedAt ?? "",
@@ -566,7 +568,7 @@ export const useReaderStore = create<ReaderState>((set) => ({
       followUps: [],
       activeInterpretationSessionId: "",
       activeChunkId: "",
-      workbenchTab: "current",
+      workbenchTab: "spark",
       currentNoteDraft: "",
       currentThreadError: "",
       currentThreadLightweight: false,

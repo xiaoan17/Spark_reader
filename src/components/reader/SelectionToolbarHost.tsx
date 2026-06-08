@@ -4,39 +4,27 @@ import { SelectionToolbar } from "@/components/selection/SelectionToolbar"
 export type SelectionToolbarHostProps = {
   present: boolean
   approximate?: boolean
-  askOpen: boolean
   className?: string
   disabled?: boolean
-  question: string
   suppressed?: boolean
   style?: CSSProperties
   onSizeChange?: (size: { width: number; height: number }) => void
-  onAskToggle: () => void
-  onCopy: () => void
   onExplain: () => void
   onHighlight: () => void
   onPlainExplain: () => void
-  onQuestionChange: (question: string) => void
-  onQuestionSubmit: () => void
 }
 
 export function SelectionToolbarHost({
   present,
   approximate,
-  askOpen,
   className,
   disabled,
-  question,
   suppressed = false,
   style,
   onSizeChange,
-  onAskToggle,
-  onCopy,
   onExplain,
   onHighlight,
   onPlainExplain,
-  onQuestionChange,
-  onQuestionSubmit,
 }: SelectionToolbarHostProps) {
   const shouldRender = useDelayedPresence(present, 80)
   const toolbarRef = useMeasuredToolbarSize(onSizeChange)
@@ -48,19 +36,13 @@ export function SelectionToolbarHost({
     <SelectionToolbar
       ref={toolbarRef}
       approximate={approximate}
-      askOpen={askOpen}
       className={className}
       disabled={disabled}
-      question={question}
       visible={present && !suppressed}
       style={style}
-      onAskToggle={onAskToggle}
-      onCopy={onCopy}
       onExplain={onExplain}
       onHighlight={onHighlight}
       onPlainExplain={onPlainExplain}
-      onQuestionChange={onQuestionChange}
-      onQuestionSubmit={onQuestionSubmit}
     />
   )
 }

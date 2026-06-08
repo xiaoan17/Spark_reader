@@ -27,7 +27,7 @@ fn normalized_interpretation_kind(request: &SaveInterpretationRequest) -> Interp
     request.kind.unwrap_or(InterpretationKind::Interpretation)
 }
 
-pub const TLDR_SOURCE_VERSION: u32 = 2;
+pub const TLDR_SOURCE_VERSION: u32 = 3;
 
 pub fn default_db_path(app_data_dir: Option<PathBuf>) -> Result<PathBuf> {
     let base_dir = match app_data_dir {

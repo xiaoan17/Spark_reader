@@ -238,7 +238,7 @@ export function ReaderShell({
   tldrLoading = false,
   tldrError = "",
   tldrLlmReady = true,
-  workbenchTab = "current",
+  workbenchTab = "spark",
   workbenchRunningTaskCount = 0,
   currentThreadLightweight = false,
   currentNoteDraft = "",
@@ -307,7 +307,6 @@ export function ReaderShell({
 }: ReaderShellProps) {
   const inputRef = useRef<HTMLInputElement | null>(null)
   const loadingPageWindowsRef = useRef(new Set<string>())
-  const [askOpen, setAskOpen] = useState(false)
   const [question, setQuestion] = useState("")
   const [notice, setNotice] = useState("")
   const { panels, setPanelOpen, togglePanel } = useReaderPanels()
@@ -597,14 +596,6 @@ export function ReaderShell({
     pushNotice(noticeMessage)
   }
 
-  async function handleCopy() {
-    if (!selectionText) {
-      pushNotice("请先框选一段文字")
-      return
-    }
-    await navigator.clipboard?.writeText(selectionText)
-  }
-
   async function copyInterpretationResult() {
     const payload = formatInterpretationClipboardText(
       selectionText,
@@ -673,7 +664,6 @@ export function ReaderShell({
     }
     onQuestionSubmit(trimmed)
     setQuestion("")
-    setAskOpen(false)
     pushNotice("追问已提交")
   }
 
@@ -682,7 +672,7 @@ export function ReaderShell({
       pushNotice("请先框选一段文字")
       return
     }
-    onWorkbenchTabChange("current")
+    onWorkbenchTabChange("spark")
     onCurrentThreadLightweightChange(false)
     onDeepInterpret()
   }
@@ -692,7 +682,7 @@ export function ReaderShell({
       pushNotice("请先框选一段文字")
       return
     }
-    onWorkbenchTabChange("current")
+    onWorkbenchTabChange("spark")
     onCurrentThreadLightweightChange(true)
     onPlainExplain()
   }
@@ -712,7 +702,6 @@ export function ReaderShell({
       if (event.key === "Escape") {
         if (selectionText.trim()) {
           event.preventDefault()
-          setAskOpen(false)
           setQuestion("")
           onClearSelection()
         }
@@ -840,24 +829,27 @@ export function ReaderShell({
           gridTemplateColumns: readerLayoutColumns(readerView, sidebarOpen),
         }}
       >
-        <ReaderSidebar
-          sidebarOpen={sidebarOpen}
-          searchOpen={searchOpen}
-          searchQuery={searchQuery}
-          searchStatus={searchStatus}
-          chunkResults={chunkResults}
-          pageResults={searchResults}
-          showReaderOutline={showReaderOutline}
-          readerOutline={readerOutline}
-          currentPage={safePage}
-          outlineTarget={outlineTarget}
-          readerView={readerView}
-          hasParsedPages={parsedPages.length > 0}
-          onSearchQueryChange={setSearchQuery}
-          onSelectChunk={handleChunkSelect}
-          onSelectPage={(pageIndex) => switchReaderView("text", { page: pageIndex + 1 })}
-          onSelectOutline={handleOutlineSelect}
-        />
+        {readerView === "knowledge" ? (
+          <div aria-hidden="true" className="min-w-0 overflow-hidden" />
+        ) : (
+          <ReaderSidebar
+            sidebarOpen={sidebarOpen}
+            searchOpen={searchOpen}
+            searchQuery={searchQuery}
+            searchStatus={searchStatus}
+            chunkResults={chunkResults}
+            pageResults={searchResults}
+            showReaderOutline={showReaderOutline}
+            readerOutline={readerOutline}
+            currentPage={safePage}
+            outlineTarget={outlineTarget}
+            hasParsedPages={parsedPages.length > 0}
+            onSearchQueryChange={setSearchQuery}
+            onSelectChunk={handleChunkSelect}
+            onSelectPage={(pageIndex) => switchReaderView("text", { page: pageIndex + 1 })}
+            onSelectOutline={handleOutlineSelect}
+          />
+        )}
 
         <section
           key={readerView}
@@ -881,15 +873,9 @@ export function ReaderShell({
               selectionRects={selectionRects}
               selectionAnchor={selectionAnchor}
               quality={textQuality}
-              askOpen={askOpen}
-              question={question}
-              onCopySelection={handleCopy}
               onExplain={runDeepInterpretation}
               onPlainExplain={runPlainInterpretation}
               onOpenSparkItem={(item) => onOpenSparkInterpretation(item, "text")}
-              onAskToggle={() => setAskOpen((open) => !open)}
-              onQuestionChange={setQuestion}
-              onQuestionSubmit={handleQuestionSubmit}
               onHighlight={handleHighlight}
               onTextSelection={handleTextSelection}
               onClearSelection={onClearSelection}
@@ -924,20 +910,14 @@ export function ReaderShell({
                 const kind = item.kind ?? "interpretation"
                 return kind === "spark" || kind === "note"
               })}
-              askOpen={askOpen}
-              question={question}
               onCurrentPageChange={onVisiblePageChange}
               onStart={() => void handleStartTranslation(false)}
               onRetranslate={() => void handleStartTranslation(true)}
               onRetryFailed={() => void handleStartTranslation(false)}
               onCancel={() => void handleCancelTranslation()}
-              onCopySelection={handleCopy}
               onExplain={runDeepInterpretation}
               onPlainExplain={runPlainInterpretation}
               onOpenSparkItem={(item) => onOpenSparkInterpretation(item, "translation")}
-              onAskToggle={() => setAskOpen((open) => !open)}
-              onQuestionChange={setQuestion}
-              onQuestionSubmit={handleQuestionSubmit}
               onHighlight={handleHighlight}
               onTextSelection={handleTextSelection}
               onClearSelection={onClearSelection}
@@ -991,15 +971,9 @@ export function ReaderShell({
               onSelection={onSelection}
               onClearSelection={onClearSelection}
               onCurrentPageChange={onVisiblePageChange}
-              askOpen={askOpen}
-              question={question}
-              onAskToggle={() => setAskOpen((open) => !open)}
-              onCopy={handleCopy}
               onExplain={runDeepInterpretation}
               onHighlight={handleHighlight}
               onPlainExplain={runPlainInterpretation}
-              onQuestionChange={setQuestion}
-              onQuestionSubmit={handleQuestionSubmit}
               onRenderError={(message) => {
                 setLoadError(message)
                 void handlePdfRenderError(message)
@@ -1083,18 +1057,15 @@ export function ReaderShell({
             evidence={evidence}
             agentTrace={agentTrace}
             interpretationError={interpretationError}
-            askOpen={askOpen}
             question={question}
             interpretationRuntimeHint={interpretationRuntimeHint}
             tasks={agentTasks}
             tasksDisabled={!bookId}
             onTabChange={onWorkbenchTabChange}
-            onLightweightChange={onCurrentThreadLightweightChange}
             onNoteChange={onCurrentNoteChange}
             onSaveNote={onCurrentNoteSave}
             onCopyInterpretation={copyInterpretationResult}
             onCitationClick={handleEvidenceJump}
-            onAskToggle={() => setAskOpen((open) => !open)}
             onQuestionChange={setQuestion}
             onQuestionSubmit={handleQuestionSubmit}
             onRegenerate={onRegenerate}

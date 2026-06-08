@@ -49,8 +49,8 @@ describe("reader view config", () => {
 
     expect(knowledge?.showsOutline).toBe(false)
     expect(knowledge?.showsInterpretationAside).toBe(false)
-    expect(readerLayoutColumns("knowledge", true)).toBe("240px minmax(760px,1fr) 0px")
-    expect(readerLayoutColumns("knowledge", false)).toBe("0px minmax(760px,1fr) 0px")
+    expect(readerLayoutColumns("knowledge", true)).toBe("0px minmax(0,1fr) 0px")
+    expect(readerLayoutColumns("knowledge", false)).toBe("0px minmax(0,1fr) 0px")
   })
 
   it("keeps header labels separate from short tab labels", () => {

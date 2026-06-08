@@ -77,13 +77,7 @@ describe("PdfDocumentViewer", () => {
         onCurrentPageChange={vi.fn()}
         onExplain={vi.fn()}
         onPlainExplain={vi.fn()}
-        askOpen={false}
-        question=""
-        onAskToggle={vi.fn()}
-        onQuestionChange={vi.fn()}
-        onQuestionSubmit={vi.fn()}
         onHighlight={vi.fn()}
-        onCopy={vi.fn()}
         onRenderError={vi.fn()}
       />,
     )
@@ -116,13 +110,7 @@ describe("PdfDocumentViewer", () => {
         onCurrentPageChange={vi.fn()}
         onExplain={vi.fn()}
         onPlainExplain={vi.fn()}
-        askOpen={false}
-        question=""
-        onAskToggle={vi.fn()}
-        onQuestionChange={vi.fn()}
-        onQuestionSubmit={vi.fn()}
         onHighlight={vi.fn()}
-        onCopy={vi.fn()}
         onRenderError={vi.fn()}
       />,
     )
@@ -134,6 +122,40 @@ describe("PdfDocumentViewer", () => {
 
     expect(container.querySelectorAll("[data-pdf-page-wrapper]").length).toBeLessThan(20)
     expect(pdf.getPage).toHaveBeenCalledTimes(container.querySelectorAll("[data-pdf-page]").length)
+    unmount()
+  })
+
+  it("uses compact PDF page spacing without locking wrapper height", async () => {
+    const { container, unmount } = await renderClient(
+      <PdfDocumentViewer
+        pdf={makePdf()}
+        currentPage={1}
+        totalPages={3}
+        zoom={1}
+        pageTextForPage={(pageIndex) => `page ${pageIndex + 1}`}
+        selectionRects={[]}
+        onSelection={vi.fn()}
+        onClearSelection={vi.fn()}
+        onCurrentPageChange={vi.fn()}
+        onExplain={vi.fn()}
+        onPlainExplain={vi.fn()}
+        onHighlight={vi.fn()}
+        onRenderError={vi.fn()}
+      />,
+    )
+
+    await act(async () => {
+      await new Promise((resolve) => window.requestAnimationFrame(resolve))
+      await Promise.resolve()
+    })
+
+    const wrappers = Array.from(
+      container.querySelectorAll<HTMLElement>("[data-pdf-page-wrapper]"),
+    )
+
+    expect(wrappers[0]?.style.top).toBe("0px")
+    expect(wrappers[1]?.style.top).toBe("804px")
+    expect(wrappers[0]?.style.minHeight).toBe("")
     unmount()
   })
 

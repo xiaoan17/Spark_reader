@@ -58,14 +58,8 @@ function readerProps(overrides: Partial<React.ComponentProps<typeof ConvertedTex
     selectionRects: [],
     selectionAnchor: null,
     quality: null,
-    askOpen: false,
-    question: "",
-    onCopySelection: vi.fn(),
     onExplain: vi.fn(),
     onPlainExplain: vi.fn(),
-    onAskToggle: vi.fn(),
-    onQuestionChange: vi.fn(),
-    onQuestionSubmit: vi.fn(),
     onHighlight: vi.fn(),
     onTextSelection: vi.fn(),
     onClearSelection: vi.fn(),
@@ -127,14 +121,8 @@ describe("ConvertedTextReader", () => {
         selectionRects={[]}
         selectionAnchor={null}
         quality={null}
-        askOpen={false}
-        question=""
-        onCopySelection={vi.fn()}
         onExplain={vi.fn()}
         onPlainExplain={vi.fn()}
-        onAskToggle={vi.fn()}
-        onQuestionChange={vi.fn()}
-        onQuestionSubmit={vi.fn()}
         onHighlight={vi.fn()}
         onTextSelection={vi.fn()}
         onClearSelection={vi.fn()}
@@ -179,14 +167,8 @@ describe("ConvertedTextReader", () => {
           selectionRects={[]}
           selectionAnchor={null}
           quality={null}
-          askOpen={false}
-          question=""
-          onCopySelection={vi.fn()}
           onExplain={vi.fn()}
           onPlainExplain={vi.fn()}
-          onAskToggle={vi.fn()}
-          onQuestionChange={vi.fn()}
-          onQuestionSubmit={vi.fn()}
           onHighlight={vi.fn()}
           onTextSelection={vi.fn()}
           onClearSelection={vi.fn()}

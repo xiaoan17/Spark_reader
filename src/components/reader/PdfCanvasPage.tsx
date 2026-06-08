@@ -46,13 +46,7 @@ type PdfCanvasPageProps = {
   onClearSelection: () => void
   onExplain: () => void
   onPlainExplain: () => void
-  askOpen: boolean
-  question: string
-  onAskToggle: () => void
-  onQuestionChange: (question: string) => void
-  onQuestionSubmit: () => void
   onHighlight: () => void
-  onCopy: () => void
   onRenderError: (message: string) => void
 }
 
@@ -67,6 +61,10 @@ type PageState = {
   width: number
   height: number
 }
+
+const PDF_PAGE_GAP = 12
+const PDF_ESTIMATED_PAGE_WIDTH = 612
+const PDF_ESTIMATED_PAGE_HEIGHT = 792
 
 type ProgrammaticPdfScroll = {
   page: number
@@ -90,13 +88,7 @@ export function PdfDocumentViewer({
   onClearSelection,
   onExplain,
   onPlainExplain,
-  askOpen,
-  question,
-  onAskToggle,
-  onQuestionChange,
-  onQuestionSubmit,
   onHighlight,
-  onCopy,
   onRenderError,
   onCurrentPageChange,
 }: PdfDocumentViewerProps) {
@@ -115,8 +107,8 @@ export function PdfDocumentViewer({
     () =>
       buildVirtualPageMetrics({
         count: totalPages,
-        estimatedHeight: 841 * zoom,
-        gap: 32,
+        estimatedHeight: PDF_ESTIMATED_PAGE_HEIGHT * zoom,
+        gap: PDF_PAGE_GAP,
         measuredHeights: measuredPageHeights,
       }),
     [measuredPageHeights, totalPages, zoom],
@@ -285,7 +277,7 @@ export function PdfDocumentViewer({
   return (
     <div
       ref={scrollerRef}
-      className="h-full min-h-0 overflow-auto px-8 py-8"
+      className="h-full min-h-0 overflow-auto px-8 py-4"
       data-pdf-scroller
       onPointerUp={handleBackgroundPointerUp}
     >
@@ -303,7 +295,6 @@ export function PdfDocumentViewer({
             data-pdf-page-wrapper
             style={{
               top: virtualPage.offsetTop,
-              minHeight: virtualPage.height,
               transform: "translateX(-50%)",
             }}
           >
@@ -319,13 +310,7 @@ export function PdfDocumentViewer({
               onClearSelection={clearSelection}
               onExplain={onExplain}
               onPlainExplain={onPlainExplain}
-              askOpen={askOpen}
-              question={question}
-              onAskToggle={onAskToggle}
-              onQuestionChange={onQuestionChange}
-              onQuestionSubmit={onQuestionSubmit}
               onHighlight={onHighlight}
-              onCopy={onCopy}
               onRenderError={onRenderError}
             />
           </section>
@@ -348,13 +333,7 @@ export function PdfCanvasPage({
   onClearSelection,
   onExplain,
   onPlainExplain,
-  askOpen,
-  question,
-  onAskToggle,
-  onQuestionChange,
-  onQuestionSubmit,
   onHighlight,
-  onCopy,
   onRenderError,
 }: PdfCanvasPageProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -526,8 +505,8 @@ export function PdfCanvasPage({
       onPointerDown={handlePointerDown}
       onPointerUp={handlePointerUp}
       style={{
-        width: pageState?.width ?? 595 * zoom,
-        height: pageState?.height ?? 841 * zoom,
+        width: pageState?.width ?? PDF_ESTIMATED_PAGE_WIDTH * zoom,
+        height: pageState?.height ?? PDF_ESTIMATED_PAGE_HEIGHT * zoom,
       }}
     >
       <canvas ref={canvasRef} className="absolute inset-0" />
@@ -544,17 +523,11 @@ export function PdfCanvasPage({
       {visibleSelectionRects.length > 0 ? (
         <SelectionToolbar
           approximate={approximateSelection}
-          askOpen={askOpen}
           className="absolute z-10 max-w-[calc(100%-2rem)] animate-pop-in"
-          question={question}
           style={toolbarPosition ?? { left: 32, top: 32 }}
-          onAskToggle={onAskToggle}
-          onCopy={onCopy}
           onExplain={onExplain}
           onHighlight={onHighlight}
           onPlainExplain={onPlainExplain}
-          onQuestionChange={onQuestionChange}
-          onQuestionSubmit={onQuestionSubmit}
         />
       ) : null}
     </div>

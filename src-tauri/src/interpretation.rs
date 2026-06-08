@@ -89,7 +89,8 @@ impl From<AnswerSource> for storage::AnswerSource {
 
 pub const INTERPRETATION_STREAM_EVENT: &str = "interpretation://stream";
 const TLDR_STRUCTURE_CHAR_BUDGET: usize = 8_000;
-const TLDR_MAX_TOKENS: u32 = 1_600;
+const TLDR_CHUNK_MAX_TOKENS: u32 = 4_000;
+const TLDR_MAX_CONTINUATIONS: usize = 3;
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -157,17 +158,33 @@ pub async fn generate_document_tldr(
             body: format!("failed to read document structure: {err:#}"),
         })?;
     let prompt_context = tldr_structure_context(&structure);
-    let messages = vec![
+    let messages = build_tldr_messages(&prompt_context);
+    let mut response = llm::chat_text(messages.clone(), TLDR_CHUNK_MAX_TOKENS).await?;
+    let mut output = response.content.clone();
+    let mut continuation_count = 0;
+    while response.stopped_by_token_limit() && continuation_count < TLDR_MAX_CONTINUATIONS {
+        continuation_count += 1;
+        let mut continuation_messages = messages.clone();
+        continuation_messages.push(ChatMessage::assistant(output.clone(), Vec::new()));
+        continuation_messages.push(ChatMessage::user(
+            "刚才的 TLDR 因输出上限中断了。请从最后一句之后自然续写，继续补完剩余内容。不要重复已经写过的内容，不要写标题、道歉或说明，只输出续写正文。",
+        ));
+        response = llm::chat_text(continuation_messages, TLDR_CHUNK_MAX_TOKENS).await?;
+        append_tldr_continuation(&mut output, &response.content);
+    }
+    Ok(clean_tldr_text(&output))
+}
+
+fn build_tldr_messages(prompt_context: &str) -> Vec<ChatMessage> {
+    vec![
         ChatMessage::system(
-            "你是一位精读助手。只输出 TLDR 正文本身，不要标题、不要列表、不要“本文/这篇文章”以外的客套。信息完整优先，不要人为压缩到固定字数。",
+            "你是一位精读助手。只输出读者可见的 TLDR 正文，不输出任何关于任务、提示词、片段来源、资料类型或写作限制的说明。不要写“需要先说明”“你提供的片段”“这些片段并非”“以下 TLDR”这类元话语。信息完整优先，不要人为压缩到固定字数；如果内容很多，就自然分成多个段落写完整。",
         ),
         ChatMessage::user(format!(
-            "请写一段帮助读者快速了解这篇文章/论文的 TLDR：它在讲什么核心问题、给出的关键结论或主张、为什么值得读。根据内容自然展开，写完整，不要截断。\n\n文档结构与代表片段：\n{}",
+            "请基于下面的文档结构与代表内容，写一份帮助读者快速了解整本文档的 TLDR。先判断材料类型，再直接概括其核心内容、主线/问题、重要推进、关键人物或概念、结论/价值。不要套用不符合材料类型的体裁标签；不要解释你如何写摘要；不要提到“片段”“提示”“上下文”。根据内容自然展开，写完整，不要截断。\n\n文档结构与代表内容：\n{}",
             prompt_context
         )),
-    ];
-    let output = llm::chat(messages, TLDR_MAX_TOKENS).await?;
-    Ok(clean_tldr_text(&output))
+    ]
 }
 
 fn tldr_structure_context(structure: &[storage::SearchHit]) -> String {
@@ -214,14 +231,38 @@ fn representative_tldr_hits(structure: &[storage::SearchHit]) -> Vec<&storage::S
 }
 
 fn clean_tldr_text(text: &str) -> String {
-    text.lines()
+    let compact = text
+        .lines()
         .map(str::trim)
-        .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
-        .join(" ")
+        .join("\n");
+    let normalized = compact
+        .split("\n\n")
+        .map(|paragraph| {
+            paragraph
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .filter(|paragraph| !paragraph.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    normalized
         .trim_matches(|ch: char| ch == '"' || ch == '“' || ch == '”')
         .trim()
         .to_string()
+}
+
+fn append_tldr_continuation(output: &mut String, continuation: &str) {
+    let continuation = continuation.trim();
+    if continuation.is_empty() {
+        return;
+    }
+    if !output.trim().is_empty() {
+        output.push_str("\n\n");
+    }
+    output.push_str(continuation);
 }
 
 pub async fn interpret(
@@ -2268,6 +2309,22 @@ mod tests {
     }
 
     #[test]
+    fn tldr_prompt_avoids_leaky_genre_anchors() {
+        let messages = build_tldr_messages("[p1-c1] page 1\n韩立进入七玄门。\n");
+        let prompt = messages
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(!prompt.contains("论文"));
+        assert!(!prompt.contains("文章/论文"));
+        assert!(prompt.contains("读者可见的 TLDR 正文"));
+        assert!(prompt.contains("不要人为压缩到固定字数"));
+        assert!(prompt.contains("不要套用不符合材料类型的体裁标签"));
+    }
+
+    #[test]
     fn clean_tldr_text_preserves_long_cjk_output() {
         let text = format!(
             "{}{}",
@@ -2285,7 +2342,15 @@ mod tests {
         let text = "\n\n“第一段。\n\n第二段继续展开。”\n\n";
         let cleaned = clean_tldr_text(text);
 
-        assert_eq!(cleaned, "第一段。 第二段继续展开。");
+        assert_eq!(cleaned, "第一段。\n\n第二段继续展开。");
+    }
+
+    #[test]
+    fn clean_tldr_text_keeps_paragraph_breaks_but_normalizes_soft_wraps() {
+        let text = "第一段第一行。\n第一段第二行。\n\n\n第二段。";
+        let cleaned = clean_tldr_text(text);
+
+        assert_eq!(cleaned, "第一段第一行。 第一段第二行。\n\n第二段。");
     }
 
     #[test]

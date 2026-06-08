@@ -1,9 +1,8 @@
-import { Network, Search } from "lucide-react"
+import { Search } from "lucide-react"
 import { ReaderOutlinePanel } from "./ReaderOutlinePanel"
 import type { ReaderChunkSearchResult } from "./search-results"
 import type { ReaderOutlineEntry } from "./reader-outline"
 import type { ConvertedTextOutlineTarget } from "./ConvertedTextReader"
-import type { ReaderView } from "./highlight-target-view"
 import type { ParsedChunk, ParsedPage } from "@/stores/reader-store"
 
 type SearchPageResult = { page: ParsedPage }
@@ -19,7 +18,6 @@ type ReaderSidebarProps = {
   readerOutline: ReaderOutlineEntry[]
   currentPage: number
   outlineTarget: ConvertedTextOutlineTarget | null
-  readerView: ReaderView
   hasParsedPages: boolean
   onSearchQueryChange: (query: string) => void
   onSelectChunk: (chunk: ParsedChunk) => void
@@ -42,7 +40,6 @@ export function ReaderSidebar({
   readerOutline,
   currentPage,
   outlineTarget,
-  readerView,
   hasParsedPages,
   onSearchQueryChange,
   onSelectChunk,
@@ -133,15 +130,6 @@ export function ReaderSidebar({
       {showReaderOutline && readerOutline.length === 0 ? (
         <div className="min-h-0 flex-1 rounded-md border border-dashed bg-background px-3 py-8 text-center text-xs text-muted-foreground">
           {hasParsedPages ? "未识别到章节标题目录" : "导入书籍后显示目录"}
-        </div>
-      ) : null}
-      {readerView === "knowledge" ? (
-        <div className="min-h-0 flex-1 rounded-md border bg-background px-3 py-4 text-xs leading-5 text-muted-foreground">
-          <div className="mb-2 flex items-center gap-1.5 font-medium text-foreground">
-            <Network className="h-3.5 w-3.5" />
-            知识体系
-          </div>
-          这是与转换稿同级的整书知识页。点击原文证据会回到转换稿对应段落。
         </div>
       ) : null}
     </aside>

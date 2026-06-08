@@ -178,6 +178,27 @@ pub struct ChatToolResponse {
     pub tool_calls: Vec<ToolCall>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatTextResponse {
+    pub content: String,
+    pub stop_reason: Option<String>,
+}
+
+impl ChatTextResponse {
+    pub fn stopped_by_token_limit(&self) -> bool {
+        self.stop_reason
+            .as_deref()
+            .is_some_and(is_token_limit_stop_reason)
+    }
+}
+
+fn is_token_limit_stop_reason(reason: &str) -> bool {
+    matches!(
+        reason,
+        "length" | "max_tokens" | "max_output_tokens" | "model_length" | "token_limit"
+    )
+}
+
 #[derive(Debug, Clone)]
 pub struct ChatRequest {
     pub messages: Vec<ChatMessage>,
@@ -278,6 +299,7 @@ struct ChatCompletionResponse {
 #[derive(Debug, Deserialize)]
 struct OpenAiChoice {
     message: OpenAiMessage,
+    finish_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -303,6 +325,7 @@ struct OpenAiDelta {
 #[derive(Debug, Deserialize)]
 struct AnthropicMessageResponse {
     content: Vec<AnthropicContentBlock>,
+    stop_reason: Option<String>,
     usage: Option<Value>,
 }
 
@@ -348,6 +371,13 @@ async fn test_connection_for_config(
 }
 
 pub async fn chat(messages: Vec<ChatMessage>, max_tokens: u32) -> Result<String, LlmError> {
+    Ok(chat_text(messages, max_tokens).await?.content)
+}
+
+pub async fn chat_text(
+    messages: Vec<ChatMessage>,
+    max_tokens: u32,
+) -> Result<ChatTextResponse, LlmError> {
     let config = config::llm_config()?;
     let request = ChatRequest::plain(messages, max_tokens);
 
@@ -390,7 +420,7 @@ where
             if cancellation.as_ref().is_some_and(is_cancelled) {
                 return Err(LlmError::Cancelled);
             }
-            let answer = chat_anthropic(&config, request).await?;
+            let answer = chat_anthropic(&config, request).await?.content;
             if cancellation.as_ref().is_some_and(is_cancelled) {
                 return Err(LlmError::Cancelled);
             }
@@ -443,7 +473,7 @@ async fn test_openai_compat(config: &config::LlmConfig) -> Result<(), LlmError> 
 async fn chat_openai_compat(
     config: &config::LlmConfig,
     request: ChatRequest,
-) -> Result<String, LlmError> {
+) -> Result<ChatTextResponse, LlmError> {
     let client = reqwest::Client::new();
     let url = format!("{}/chat/completions", config.base_url.trim_end_matches('/'));
     let body = openai_chat_body(config, &request, false);
@@ -474,9 +504,16 @@ async fn chat_openai_compat(
     parsed
         .choices
         .into_iter()
-        .find_map(|choice| choice.message.content)
-        .map(|content| content.trim().to_string())
-        .filter(|content| !content.is_empty())
+        .find_map(|choice| {
+            choice
+                .message
+                .content
+                .map(|content| ChatTextResponse {
+                    content: content.trim().to_string(),
+                    stop_reason: choice.finish_reason,
+                })
+                .filter(|response| !response.content.is_empty())
+        })
         .ok_or_else(|| LlmError::Provider {
             status: status.as_u16(),
             body: text,
@@ -604,7 +641,7 @@ where
 async fn chat_anthropic(
     config: &config::LlmConfig,
     request: ChatRequest,
-) -> Result<String, LlmError> {
+) -> Result<ChatTextResponse, LlmError> {
     let client = reqwest::Client::new();
     let url = format!("{}/v1/messages", config.base_url.trim_end_matches('/'));
     let system = request
@@ -664,7 +701,10 @@ async fn chat_anthropic(
             body: text,
         })
     } else {
-        Ok(answer)
+        Ok(ChatTextResponse {
+            content: answer,
+            stop_reason: parsed.stop_reason,
+        })
     }
 }
 
@@ -1233,6 +1273,25 @@ mod tests {
             usage_nested_token(&usage, "prompt_tokens_details", "cached_tokens"),
             Some(150)
         );
+    }
+
+    #[test]
+    fn chat_text_response_detects_token_limit_stops() {
+        assert!(ChatTextResponse {
+            content: "未完".to_string(),
+            stop_reason: Some("length".to_string()),
+        }
+        .stopped_by_token_limit());
+        assert!(ChatTextResponse {
+            content: "未完".to_string(),
+            stop_reason: Some("max_tokens".to_string()),
+        }
+        .stopped_by_token_limit());
+        assert!(!ChatTextResponse {
+            content: "完成".to_string(),
+            stop_reason: Some("stop".to_string()),
+        }
+        .stopped_by_token_limit());
     }
 
     #[test]

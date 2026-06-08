@@ -65,20 +65,14 @@ export type TranslationReaderProps = {
   selectionRects: NormalizedPageRect[]
   selectionAnchor: TextSelectionAnchor | null
   sparkItems?: SavedInterpretation[]
-  askOpen: boolean
-  question: string
   onCurrentPageChange: (page: number) => void
   onStart: () => void
   onRetranslate: () => void
   onRetryFailed: () => void
   onCancel: () => void
-  onCopySelection: () => void
   onExplain: () => void
   onPlainExplain: () => void
-  onAskToggle: () => void
   onOpenSparkItem?: (item: SavedInterpretation) => void
-  onQuestionChange: (question: string) => void
-  onQuestionSubmit: () => void
   onHighlight: () => void
   onTextSelection: (
     text: string,
@@ -101,20 +95,14 @@ export function TranslationReader({
   selectionRects,
   selectionAnchor,
   sparkItems = [],
-  askOpen,
-  question,
   onCurrentPageChange,
   onStart,
   onRetranslate,
   onRetryFailed,
   onCancel,
-  onCopySelection,
   onExplain,
   onPlainExplain,
-  onAskToggle,
   onOpenSparkItem,
-  onQuestionChange,
-  onQuestionSubmit,
   onHighlight,
   onTextSelection,
   onClearSelection,
@@ -726,10 +714,8 @@ export function TranslationReader({
                 </section>
                 <SelectionToolbarHost
                   present={shouldShowToolbarForPage}
-                  askOpen={askOpen}
                   className="absolute z-20 max-w-[calc(100%-2rem)] animate-pop-in"
                   disabled={!selectionText.trim()}
-                  question={question}
                   suppressed={toolbarSuppressed}
                   style={
                     toolbarPosition
@@ -737,13 +723,9 @@ export function TranslationReader({
                       : { left: 28, top: 80 }
                   }
                   onSizeChange={handleToolbarSizeChange}
-                  onAskToggle={onAskToggle}
-                  onCopy={onCopySelection}
                   onExplain={onExplain}
                   onHighlight={onHighlight}
                   onPlainExplain={onPlainExplain}
-                  onQuestionChange={onQuestionChange}
-                  onQuestionSubmit={onQuestionSubmit}
                 />
               </article>
             )

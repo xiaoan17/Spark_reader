@@ -2,6 +2,7 @@ import type {
   ConvertedBookManifest,
   ConvertedBookPageWindow,
 } from "@/core/library-api"
+import { isCurrentTldrSourceVersion } from "@/core/tldr"
 import type { ParsedPage } from "@/stores/reader-store"
 
 /** Build a reader asset from a manifest + the currently-loaded page window. */
@@ -45,11 +46,19 @@ export function tldrMetadataFromAsset(asset: {
   tldrModel?: string | null
   tldrSourceVersion?: number | null
 }) {
+  if (!asset.tldrText?.trim() || !isCurrentTldrSourceVersion(asset.tldrSourceVersion)) {
+    return {
+      tldrText: null,
+      tldrGeneratedAt: null,
+      tldrModel: null,
+      tldrSourceVersion: null,
+    }
+  }
   return {
-    tldrText: asset.tldrText ?? null,
+    tldrText: asset.tldrText,
     tldrGeneratedAt: asset.tldrGeneratedAt ?? null,
     tldrModel: asset.tldrModel ?? null,
-    tldrSourceVersion: asset.tldrSourceVersion ?? null,
+    tldrSourceVersion: asset.tldrSourceVersion,
   }
 }
 
