@@ -16,6 +16,9 @@ describe("labelForCardType", () => {
     expect(labelForCardType("highlight")).toBe("高亮")
     expect(labelForCardType("interpretation")).toBe("解读")
     expect(labelForCardType("summary")).toBe("章节")
+    expect(labelForCardType("chapter_outline")).toBe("章节大纲")
+    expect(labelForCardType("knowledge_deck")).toBe("知识册")
+    expect(labelForCardType("agent_report")).toBe("任务报告")
   })
 
   it("falls back to the raw value, then a generic label", () => {

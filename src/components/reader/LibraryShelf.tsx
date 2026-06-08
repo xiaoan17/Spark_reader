@@ -120,7 +120,6 @@ export function LibraryShelf({
                     </div>
                     <LibraryBookGrid
                       books={group.books}
-                      allBooks={books}
                       activeBookId={activeBookId}
                       onOpen={onOpen}
                       onDelete={onDelete}
@@ -154,7 +153,6 @@ export function LibraryShelf({
 
 type LibraryBookGridProps = {
   books: StoredBookSummary[]
-  allBooks: StoredBookSummary[]
   activeBookId: string
   onOpen: (bookId: string) => void
   onDelete: (bookId: string) => void
@@ -162,7 +160,6 @@ type LibraryBookGridProps = {
 
 function LibraryBookGrid({
   books,
-  allBooks,
   activeBookId,
   onOpen,
   onDelete,
@@ -170,7 +167,6 @@ function LibraryBookGrid({
   return (
     <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-4">
       {books.map((book) => {
-        const index = Math.max(0, allBooks.findIndex((candidate) => candidate.bookId === book.bookId))
         return (
           <article
             key={book.bookId}
@@ -179,23 +175,24 @@ function LibraryBookGrid({
             }`}
           >
             <button className="block w-full text-left" onClick={() => onOpen(book.bookId)}>
-              <div
-                className={`flex aspect-[3/4] flex-col justify-between p-4 text-primary-foreground ${coverClassName(index)}`}
-              >
+              <div className="relative flex aspect-[3/4] flex-col justify-between overflow-hidden border-b bg-card p-4 pl-5 text-card-foreground">
+                {/* Teal 书脊：克制的单色强调，替代被品牌禁止的大面积渐变 */}
+                <div className="absolute inset-y-0 left-0 w-1 bg-primary" aria-hidden />
                 <div>
-                  <div className="line-clamp-4 text-lg font-semibold leading-6">
-                    {book.title || "未命名图书"}
+                  <div className="flex items-start gap-1.5">
+                    <h3 className="line-clamp-4 font-reading text-lg font-semibold leading-7">
+                      {book.title || "未命名图书"}
+                    </h3>
+                    {/* spark 收敛为一个点，而非整面发光 */}
+                    <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" aria-hidden />
                   </div>
-                  <div className="mt-2 h-1 w-10 rounded-full bg-white/70" />
                 </div>
-                <div className="space-y-1 text-xs text-white/85">
-                  <div>{book.totalPages || 0} 页</div>
-                  <div>{book.parserEngine || "unknown"}</div>
+                <div className="space-y-0.5 text-xs text-muted-foreground">
+                  <div>{book.totalPages || 0} 页 · {book.textCharCount} 字</div>
+                  <div className="truncate">{book.parserEngine || "unknown"}</div>
                 </div>
               </div>
               <div className="space-y-2 p-3">
-                <div className="line-clamp-2 text-sm font-medium">{book.title}</div>
-                <div className="truncate text-xs text-muted-foreground">{book.textCharCount} 字</div>
                 <div className="flex flex-wrap gap-1">
                   <Badge variant="secondary">{sourceKindLabel(book)}</Badge>
                   {book.originalPdfPath.toLowerCase().endsWith(".pdf") ? <Badge variant="secondary">可校对</Badge> : null}
@@ -211,7 +208,7 @@ function LibraryBookGrid({
               <Button
                 size="icon"
                 variant="ghost"
-                className="h-7 w-7 text-muted-foreground hover:text-red-700"
+                className="h-7 w-7 text-muted-foreground hover:text-danger"
                 aria-label={`删除 ${book.title}`}
                 onClick={() => onDelete(book.bookId)}
               >
@@ -238,15 +235,4 @@ function sourceKindLabel(book: StoredBookSummary) {
 function LibraryBookDateBadge({ book }: { book: StoredBookSummary }) {
   const label = formatLibraryBookDate(book)
   return label ? <Badge variant="outline">{label}</Badge> : null
-}
-
-function coverClassName(index: number) {
-  const classes = [
-    "bg-[linear-gradient(135deg,hsl(164_48%_28%),hsl(33_72%_46%))]",
-    "bg-[linear-gradient(135deg,hsl(214_46%_30%),hsl(146_38%_36%))]",
-    "bg-[linear-gradient(135deg,hsl(344_42%_34%),hsl(41_74%_45%))]",
-    "bg-[linear-gradient(135deg,hsl(188_48%_28%),hsl(12_58%_42%))]",
-    "bg-[linear-gradient(135deg,hsl(260_30%_34%),hsl(152_42%_34%))]",
-  ]
-  return classes[index % classes.length]
 }

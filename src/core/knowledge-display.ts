@@ -20,6 +20,9 @@ export const KNOWLEDGE_CARD_TYPES = [
   "claim",
   "question",
   "summary",
+  "chapter_outline",
+  "knowledge_deck",
+  "agent_report",
 ] as const
 
 export type KnowledgeCardType = (typeof KNOWLEDGE_CARD_TYPES)[number]
@@ -34,6 +37,9 @@ const CARD_TYPE_LABELS: Record<string, string> = {
   event: "事件",
   claim: "论点",
   summary: "章节",
+  chapter_outline: "章节大纲",
+  knowledge_deck: "知识册",
+  agent_report: "任务报告",
 }
 
 const STATUS_LABELS: Record<string, string> = {

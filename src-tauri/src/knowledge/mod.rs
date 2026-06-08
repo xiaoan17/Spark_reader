@@ -35,10 +35,70 @@ const MAX_EVIDENCE_PER_AUTO_CARD: usize = 64;
 const MAX_TEXT_PER_CARD_CHARS: usize = 4_000;
 const MAX_GRAPH_NODES: usize = 220;
 const MAX_SAME_EVIDENCE_CARDS_PER_CHUNK: usize = 24;
+const MAX_SAME_EVIDENCE_EDGES_PER_CHUNK: usize = 8;
 const MAX_KNOWLEDGE_SEARCH_CARDS: usize = 16;
 const MAX_KNOWLEDGE_SEARCH_HITS: usize = 12;
 
+const USER_CARD_TYPES: &[&str] = &[
+    "note",
+    "highlight",
+    "interpretation",
+    "concept",
+    "entity",
+    "event",
+    "claim",
+    "question",
+    "summary",
+    "chapter_outline",
+    "knowledge_deck",
+    "agent_report",
+];
 
+const GRAPH_DISPLAY_CARD_TYPES: &[&str] = &[
+    "highlight",
+    "interpretation",
+    "question",
+    "note",
+    "entity",
+    "concept",
+    "event",
+    "claim",
+    "summary",
+    "chapter_outline",
+    "knowledge_deck",
+    "agent_report",
+];
+
+const MAP_STATION_CARD_TYPES: &[&str] = &[
+    "event",
+    "claim",
+    "concept",
+    "entity",
+    "highlight",
+    "interpretation",
+    "note",
+    "summary",
+    "chapter_outline",
+    "knowledge_deck",
+    "agent_report",
+];
+
+const STRUCTURAL_SOURCE_CARD_TYPES: &[&str] = &[
+    "highlight",
+    "interpretation",
+    "question",
+    "note",
+    "entity",
+    "concept",
+    "event",
+    "claim",
+    "summary",
+    "chapter_outline",
+    "knowledge_deck",
+    "agent_report",
+];
+
+const TASK_ARTIFACT_CARD_TYPES: &[&str] = &["chapter_outline", "knowledge_deck", "agent_report"];
 
 pub fn list_cards(db_path: &Path, book_id: &str) -> Result<Vec<KnowledgeCard>> {
     let conn = storage::open_database(db_path)?;
@@ -76,6 +136,7 @@ pub fn build_knowledge_graph(db_path: &Path, book_id: &str) -> Result<BuildKnowl
     for candidate in &candidates {
         upsert_candidate_card(&conn, book_id, candidate)?;
     }
+    retire_stale_auto_candidate_cards(&conn, book_id, &candidates)?;
 
     conn.execute(
         "UPDATE kb_edges
@@ -167,18 +228,7 @@ pub fn get_knowledge_graph(db_path: &Path, book_id: &str) -> Result<KnowledgeGra
             continue;
         }
         if node_ids.contains(&card.card_id)
-            || matches!(
-                card.card_type.as_str(),
-                "highlight"
-                    | "interpretation"
-                    | "question"
-                    | "note"
-                    | "entity"
-                    | "concept"
-                    | "event"
-                    | "claim"
-                    | "summary"
-            )
+            || GRAPH_DISPLAY_CARD_TYPES.contains(&card.card_type.as_str())
         {
             nodes.push(card_to_graph_node(card));
         }
@@ -657,18 +707,7 @@ pub fn get_book_knowledge_map(db_path: &Path, book_id: &str) -> Result<Knowledge
     let station_cards = cards
         .iter()
         .filter(|card| {
-            !card.evidence.is_empty()
-                && matches!(
-                    card.card_type.as_str(),
-                    "event"
-                        | "claim"
-                        | "concept"
-                        | "entity"
-                        | "highlight"
-                        | "interpretation"
-                        | "note"
-                        | "summary"
-                )
+            !card.evidence.is_empty() && MAP_STATION_CARD_TYPES.contains(&card.card_type.as_str())
         })
         .collect::<Vec<_>>();
     let mut line_ranges = BTreeMap::<String, (u32, u32, usize)>::new();
@@ -1146,6 +1185,53 @@ fn merge_candidate_drafts(candidate_sets: Vec<Vec<CandidateDraft>>) -> Vec<Candi
     candidates
 }
 
+fn retire_stale_auto_candidate_cards(
+    conn: &Connection,
+    book_id: &str,
+    candidates: &[CandidateDraft],
+) -> Result<usize> {
+    let active_candidate_ids = candidates
+        .iter()
+        .map(|candidate| candidate_card_id(book_id, candidate))
+        .collect::<BTreeSet<_>>();
+    let mut stmt = conn
+        .prepare(
+            "SELECT card_id
+             FROM kb_cards
+             WHERE book_id = ?1
+               AND source = 'auto'
+               AND status = 'candidate'
+               AND user_locked = 0
+               AND deleted_at IS NULL
+               AND payload_json LIKE '%\"extractor\":\"local-heuristic\"%'",
+        )
+        .context("failed to prepare stale auto candidate query")?;
+    let stale_ids = stmt
+        .query_map(params![book_id], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .context("failed to map stale auto candidates")?
+        .into_iter()
+        .filter(|card_id| !active_candidate_ids.contains(card_id))
+        .collect::<Vec<_>>();
+    for card_id in &stale_ids {
+        conn.execute(
+            "UPDATE kb_cards
+             SET deleted_at = datetime('now'), updated_at = datetime('now')
+             WHERE book_id = ?1 AND card_id = ?2",
+            params![book_id, card_id],
+        )
+        .context("failed to retire stale auto candidate card")?;
+        conn.execute(
+            "UPDATE kb_edges
+             SET deleted_at = datetime('now'), updated_at = datetime('now')
+             WHERE book_id = ?1 AND (source_card_id = ?2 OR target_card_id = ?2)",
+            params![book_id, card_id],
+        )
+        .context("failed to retire stale auto candidate edges")?;
+    }
+    Ok(stale_ids.len())
+}
+
 fn add_candidate_draft(
     drafts: &mut BTreeMap<String, CandidateDraft>,
     card: &KnowledgeCard,
@@ -1409,38 +1495,46 @@ fn upsert_structural_edges(
         for card in chunk_cards {
             unique_cards.entry(card.card_id.clone()).or_insert(card);
         }
-        let cards_for_chunk = unique_cards
-            .into_values()
-            .take(MAX_SAME_EVIDENCE_CARDS_PER_CHUNK)
-            .collect::<Vec<_>>();
-        for left_index in 0..cards_for_chunk.len() {
-            for right_index in (left_index + 1)..cards_for_chunk.len() {
-                let left = cards_for_chunk[left_index];
-                let right = cards_for_chunk[right_index];
-                let (source_card_id, target_card_id) = ordered_pair(&left.card_id, &right.card_id);
-                if !pairs.insert((
-                    source_card_id.to_string(),
-                    target_card_id.to_string(),
-                    "same_evidence".to_string(),
-                )) {
-                    continue;
-                }
-                let evidence_chunk_ids = vec![chunk_id.clone()];
-                upsert_edge(
-                    conn,
-                    EdgeUpsert {
-                        book_id,
-                        source_card_id,
-                        target_card_id,
-                        edge_type: "same_evidence",
-                        label: "共享原文证据",
-                        evidence_chunk_ids: &evidence_chunk_ids,
-                        confidence: 0.82,
-                        status: "candidate",
-                    },
-                )?;
-                count += 1;
+        let mut cards_for_chunk = unique_cards.into_values().collect::<Vec<_>>();
+        cards_for_chunk.sort_by(|left, right| {
+            structural_card_rank(left)
+                .cmp(&structural_card_rank(right))
+                .then(right.confidence.total_cmp(&left.confidence))
+                .then(left.card_id.cmp(&right.card_id))
+        });
+        cards_for_chunk.truncate(MAX_SAME_EVIDENCE_CARDS_PER_CHUNK);
+        let Some(anchor) = cards_for_chunk.first().copied() else {
+            continue;
+        };
+        for card in cards_for_chunk
+            .iter()
+            .copied()
+            .filter(|card| card.card_id != anchor.card_id)
+            .take(MAX_SAME_EVIDENCE_EDGES_PER_CHUNK)
+        {
+            let (source_card_id, target_card_id) = ordered_pair(&anchor.card_id, &card.card_id);
+            if !pairs.insert((
+                source_card_id.to_string(),
+                target_card_id.to_string(),
+                "same_evidence".to_string(),
+            )) {
+                continue;
             }
+            let evidence_chunk_ids = vec![chunk_id.clone()];
+            upsert_edge(
+                conn,
+                EdgeUpsert {
+                    book_id,
+                    source_card_id,
+                    target_card_id,
+                    edge_type: "same_evidence",
+                    label: "共享原文证据",
+                    evidence_chunk_ids: &evidence_chunk_ids,
+                    confidence: 0.82,
+                    status: "candidate",
+                },
+            )?;
+            count += 1;
         }
     }
 
@@ -1906,6 +2000,7 @@ fn backfill_cards_for_book(conn: &Connection, book_id: &str) -> Result<()> {
                     answer,
                     answer_source,
                     kind,
+                    interpret_mode,
                     evidence_chunk_snapshots_json,
                     created_at
              FROM interpretations
@@ -2280,28 +2375,28 @@ fn row_to_evidence(row: &rusqlite::Row<'_>) -> rusqlite::Result<KnowledgeEvidenc
 fn is_extraction_source_card(card: &KnowledgeCard) -> bool {
     !card.evidence.is_empty()
         && card.status != "rejected"
-        && card.source != "auto"
-        && matches!(
-            card.card_type.as_str(),
-            "highlight" | "interpretation" | "question" | "note" | "claim"
-        )
+        && matches!(card.card_type.as_str(), "highlight" | "note" | "claim")
+        && !source_interpretation_payload(&card.payload_json)
+        && !task_artifact_card_type(card.card_type.as_str())
 }
 
 fn is_structural_source_card(card: &KnowledgeCard) -> bool {
     !card.evidence.is_empty()
         && card.status != "rejected"
-        && matches!(
-            card.card_type.as_str(),
-            "highlight"
-                | "interpretation"
-                | "question"
-                | "note"
-                | "entity"
-                | "concept"
-                | "event"
-                | "claim"
-                | "summary"
-        )
+        && STRUCTURAL_SOURCE_CARD_TYPES.contains(&card.card_type.as_str())
+}
+
+fn structural_card_rank(card: &KnowledgeCard) -> u8 {
+    match card.card_type.as_str() {
+        "highlight" | "interpretation" | "note" | "question" => 0,
+        "summary" => 1,
+        "chapter_outline" | "knowledge_deck" | "agent_report" => 2,
+        "claim" => 3,
+        "event" => 4,
+        "entity" => 5,
+        "concept" => 6,
+        _ => 6,
+    }
 }
 
 fn text_for_candidate_extraction(card: &KnowledgeCard) -> String {
@@ -2322,6 +2417,15 @@ fn text_for_candidate_extraction(card: &KnowledgeCard) -> String {
         .collect::<Vec<_>>()
         .join("\n");
     joined.chars().take(MAX_TEXT_PER_CARD_CHARS).collect()
+}
+
+fn source_interpretation_payload(payload_json: &str) -> bool {
+    payload_json.contains("\"sourceTable\":\"interpretations\"")
+        || payload_json.contains("\"sourceTable\": \"interpretations\"")
+}
+
+fn task_artifact_card_type(card_type: &str) -> bool {
+    TASK_ARTIFACT_CARD_TYPES.contains(&card_type)
 }
 
 fn extract_candidate_terms(text: &str) -> Vec<CandidateTerm> {
@@ -2353,7 +2457,6 @@ fn insert_candidate_term(
         kind: kind.to_string(),
     });
 }
-
 
 fn confidence_for_candidate(candidate: &CandidateDraft) -> f64 {
     let source_bonus = (candidate.source_card_ids.len().saturating_sub(1) as f64 * 0.08).min(0.18);
@@ -2471,6 +2574,27 @@ const KNOWLEDGE_STOPWORDS: &[&str] = &[
     "回答",
     "选区",
     "解读",
+    "直白解释",
+    "上下文依据",
+    "简单总结",
+    "知识图谱的问题",
+    "仅从标题本身看",
+    "表面看",
+    "实际含义",
+    "出处",
+    "引文",
+    "明确写道",
+    "诚实回答",
+    "提到",
+    "需要补充",
+    "需要补充）",
+    "同一篇文章的第",
+    "指向的具体文章",
+    "文章的标题",
+    "文章作者是谁",
+    "发表于何处",
+    "文章的结论部分",
+    "它们都",
     "作者",
     "这句话",
     "为什么",
@@ -2661,18 +2785,7 @@ fn validate_card_status(status: &str) -> Result<()> {
 }
 
 fn validate_card_type(card_type: &str) -> Result<()> {
-    if matches!(
-        card_type,
-        "note"
-            | "highlight"
-            | "interpretation"
-            | "concept"
-            | "entity"
-            | "event"
-            | "claim"
-            | "question"
-            | "summary"
-    ) {
+    if USER_CARD_TYPES.contains(&card_type) {
         Ok(())
     } else {
         Err(anyhow!("invalid knowledge card type: {card_type}"))
@@ -2925,7 +3038,6 @@ fn string_vec_payload(payload: &Value, key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-
 fn sqlite_timestamp(conn: &Connection) -> Result<String> {
     conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', 'now')", [], |row| {
         row.get::<_, String>(0)
@@ -2971,8 +3083,6 @@ fn summary_from_text(value: &str, max_chars: usize) -> String {
     summary.push_str("...");
     summary
 }
-
-
 
 #[cfg(test)]
 mod tests;

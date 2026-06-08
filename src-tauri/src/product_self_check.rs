@@ -309,6 +309,7 @@ async fn run_product_self_check_in_dir(
             answer: interpretation.answer.clone(),
             answer_source: interpretation.answer_source.into(),
             kind: None,
+            mode: None,
             evidence_chunk_snapshots: Vec::new(),
         },
     )?;
@@ -334,6 +335,7 @@ async fn run_product_self_check_in_dir(
             answer: follow_up.answer.clone(),
             answer_source: follow_up.answer_source.into(),
             kind: None,
+            mode: None,
             evidence_chunk_snapshots: Vec::new(),
         },
     )?;

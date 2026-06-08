@@ -59,7 +59,14 @@ describe("SelectionToolbarHost", () => {
     expect(host.container.querySelector("[data-testid='selection-toolbar']")).toBeTruthy()
 
     await act(async () => {
-      vi.advanceTimersByTime(180)
+      vi.advanceTimersByTime(79)
+      await Promise.resolve()
+    })
+
+    expect(host.container.querySelector("[data-testid='selection-toolbar']")).toBeTruthy()
+
+    await act(async () => {
+      vi.advanceTimersByTime(1)
       await Promise.resolve()
     })
 

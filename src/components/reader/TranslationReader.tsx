@@ -75,9 +75,7 @@ export type TranslationReaderProps = {
   onCopySelection: () => void
   onExplain: () => void
   onPlainExplain: () => void
-  onApplyInterpret?: () => void
   onAskToggle: () => void
-  onSpark?: () => void
   onOpenSparkItem?: (item: SavedInterpretation) => void
   onQuestionChange: (question: string) => void
   onQuestionSubmit: () => void
@@ -113,9 +111,7 @@ export function TranslationReader({
   onCopySelection,
   onExplain,
   onPlainExplain,
-  onApplyInterpret = () => undefined,
   onAskToggle,
-  onSpark = () => undefined,
   onOpenSparkItem,
   onQuestionChange,
   onQuestionSubmit,
@@ -717,7 +713,7 @@ export function TranslationReader({
                           className="max-w-none text-[14px] leading-7"
                         />
                       ) : translatedPage?.status === "failed" && row.index === 0 ? (
-                        <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm leading-6 text-red-950">
+                        <div className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm leading-6 text-danger-foreground">
                           {translatedPage.error || "这段内容翻译失败"}
                         </div>
                       ) : translatedPage?.status === "translating" && row.index === 0 ? (
@@ -746,8 +742,6 @@ export function TranslationReader({
                   onExplain={onExplain}
                   onHighlight={onHighlight}
                   onPlainExplain={onPlainExplain}
-                  onApplyInterpret={onApplyInterpret}
-                  onSpark={onSpark}
                   onQuestionChange={onQuestionChange}
                   onQuestionSubmit={onQuestionSubmit}
                 />

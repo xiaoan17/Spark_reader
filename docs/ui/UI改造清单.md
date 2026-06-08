@@ -1,0 +1,316 @@
+# Spark 引读 · UI/UX 改造清单
+
+> 来源:基于 2026-06-07 对实机(`:1420`)与 6 个关键 Storybook 状态(ReaderShell reading / SelectionToolbar / InterpretationCard retrieving / LibraryShelf / KnowledgePanel / Onboarding)的可视化走查。
+> 对照基准:`BRAND.md`、`UI-UX.md`、`coding-style.md`。
+> 每条结构:**问题 → 根因 → 证据文件 → 改法 → 验收标准**。可直接拆成 todo / PR。
+
+---
+
+## 总览
+
+| # | 优先级 | 标题 | 主要文件 | 工作量 |
+|---|---|---|---|---|
+| 1 | 🔴 高 | 书架封面大面积渐变违反品牌 | `LibraryShelf.tsx` | 中 |
+| 2 | 🔴 高 | 框选操作条 6 个动作,稀释主路径 | `SelectionToolbar.tsx` | 中 |
+| 3 | 🔴 高 | 内部 chunk ID 直接暴露给用户 | `KnowledgePanel.tsx`、`citation-display.ts` | 小 |
+| 4 | 🟡 中 | 检索证据 chip 无区分度 | `InterpretationCard.tsx` + store | 中 |
+| 5 | 🟡 中 | 中英文标签混用 | `KnowledgePanel.tsx` | 小 |
+| 6 | 🟡 中 | Storybook 暗色主题未接 `.dark` | `.storybook/preview.*` | 小 |
+| 7 | 🟡 中 | 语义色硬编码,暗色模式会失效 | `InterpretationCard.tsx`、`styles.css` | 中 |
+| 8 | 🟢 低 | `ReaderShell.tsx` 2489 行,超规约 | `ReaderShell.tsx` | 大 |
+| 9 | 🟢 低 | 顶栏在窄屏拥挤 | `ReaderShell.tsx` | 中 |
+| 10 | 🟢 低 | 书架卡片标题重复 | `LibraryShelf.tsx` | 小 |
+| 11 | 🟢 低 | `citation-pulse` 确认 reduced-motion 兜底 | `styles.css`(已基本覆盖) | 小 |
+
+**建议执行顺序:** 1 → 2 → (6 + 7) → (3 + 4) → 其余。
+理由:1 是最高频可见的品牌偏差;2 保护核心 2 步路径;6+7 解锁可信赖的暗色模式走查;3+4 廉价提升"可信副驾"质感。
+
+---
+
+## 🔴 高优先级(违反自身品牌规则)
+
+### 1. 书架封面用大面积对角渐变 —— BRAND.md 明文禁止
+
+**问题**
+书架自动生成全幅渐变封面(其中一本是绿→琥珀渐变),与品牌冲突。
+
+**根因**
+封面靠 `bookId` 算法生成渐变填充,没有走纸感卡片方案。
+
+**证据**
+- `BRAND.md` §9:*"建议避免单一大面积渐变。Spark 的'光'应该是一点理解被点亮,而不是整张画面都在发光。"*
+- `BRAND.md` §8 需避免方向:*"紫橙赛博渐变"*。
+- 走查截图:`LibraryShelf--with-books`,两本书封面均为大面积渐变,其一接近被禁配色。
+
+**改法**(`src/components/reader/LibraryShelf.tsx`)
+1. 移除渐变封面生成逻辑。
+2. 改为纸感卡片封面:
+   - 底色用 `bg-card`(暖白 `--card`),细 `border`。
+   - 书名用 `font-reading`(衬线)居中或左上。
+   - 左侧一道细 teal 书脊条(`bg-primary` 宽 3–4px)。
+   - "spark"克制为一个点:书名旁一个小 teal 圆点(`h-1.5 w-1.5 rounded-full bg-primary`),不要整面发光。
+3. 元信息(页数 / 解析器)放卡片底部,muted UI sans。
+
+**验收标准**
+- [ ] 书架无任何大面积渐变填充。
+- [ ] 封面在浅色/暗色双主题下都为纸感、低干扰。
+- [ ] 整体气质符合 BRAND §9"暖纸色 + 墨黑 + 克制青绿"。
+
+---
+
+### 2. 框选操作条有 6 个动作 —— 稀释"框选是第一动作 / 2 步触达"
+
+**问题**
+解读 / 追问 / 迁移 / Spark / 标记 / 复制 平铺一行,视觉权重相近,主操作不突出;"迁移""Spark"在选区处即出现,术语感强。
+
+**根因**
+所有动作平级摆放,未按热度分层。
+
+**证据**
+- `UI-UX.md` §5 热路径排序:1 导入→阅读、2 框选→深度解读(核心价值,2 步内)。
+- `UI-UX.md` §3.2:主操作 `[深度解读]` 用 primary,其余 ghost。
+- `BRAND.md` §10 原则 2"框选是第一动作"、原则 1"阅读优先,AI 退居其次"。
+- 证据文件:`src/components/selection/SelectionToolbar.tsx:58-87`,6 个按钮同排。
+
+**改法**(`src/components/selection/SelectionToolbar.tsx`)
+- 方案 A(推荐):可见动作收到 ≤3 个 —— `解读`(filled primary)+ `标记`(ghost)+ `⋯` 溢出菜单(追问 / 迁移 / Spark / 复制)。
+- 方案 B:`[解读 ▾]` 分裂按钮,caret 展开 追问 / 迁移。
+- 关键:让眼睛第一落点必然是 `解读`。
+
+**验收标准**
+- [ ] 选区浮条默认可见动作 ≤3 个。
+- [ ] `解读` 为唯一 filled primary,其余为次级。
+- [ ] 从框选到点出"解读"在 2 步内,无术语干扰。
+- [ ] Storybook 补 `selected / overflow-open` 状态。
+
+---
+
+### 3. 内部 chunk ID 直接暴露给用户
+
+**问题**
+KnowledgePanel 卡片与引用来源块直接显示 `[b12345678-p1-c1-abcdef12]` 之类内部 ID,像未完成,破坏"安静、可信"气质。
+
+**根因**
+卡片元信息与来源块直接渲染原始 `chunk_id`,未走 label 化。
+
+**证据**
+- `BRAND.md` §7"品牌语气:安静、清醒、可信"。
+- 走查截图:`KnowledgePanel--populated`,卡片底部与"原文证据"块出现裸 `[b12345678-p1-c1-abcdef12]`。
+- 已有可复用模式:`InterpretationCard.tsx` 的 `CoordinateList`/`sanitizeInternalReferenceText` 把内部信息收进"校对"折叠区。
+
+**改法**
+1. `src/core/citation-display.ts`:扩展 / 复用 `evidenceLabel` 与 `sanitizeInternalReferenceText`,把 chunk ID 映射为人类标签(如"第 1 页 · 复利那段")。
+2. `src/components/knowledge/KnowledgePanel.tsx`:卡片元信息与来源块用人类标签渲染;裸 ID 收进 `title=` 悬浮或"校对"`details` 折叠。
+
+**验收标准**
+- [ ] 用户可见面无裸 `chunk_id`。
+- [ ] 需要时可通过悬浮 / 折叠看到原始 ID(供校对)。
+- [ ] 引用回跳功能不受影响。
+
+---
+
+## 🟡 中优先级(一致性与打磨)
+
+### 4. 检索阶段证据 chip 无区分度
+
+**问题**
+"retrieving"卡片里三个 chip 都写"相关段落",像带步骤的转圈,没把 agentic 过程的"活"感做出来。
+
+**根因**
+检索阶段 chip 用了统一占位 label,未透出实际规划的子问题 / 命中章节。
+
+**证据**
+- `UI-UX.md` §3.3:*"检索阶段:用 Collapsible 展示'AI 正在书中查找:〔子问题1〕〔子问题2〕…',每个检索到的来源是一个小 Badge/HoverCard"*。
+- `BRAND.md` §10 原则 5"AI 的思考过程要可感知"。
+- 证据文件:`src/components/interpretation/InterpretationCard.tsx:203-225`(retrieving 分支 + `evidenceLabel` 回退)。
+
+**改法**
+1. store 侧(`src/stores/reader-store.ts` + 运行时):在 retrieving 阶段透出实际子查询 / 命中章节标题。
+2. `InterpretationCard.tsx`:chip label 优先用子问题 / 章节标题,未知时才回退"第 N 段"(而非统一"相关段落")。
+
+**验收标准**
+- [ ] 检索阶段 chip 体现差异化的子问题 / 来源。
+- [ ] 无数据时回退文案明确且不重复。
+- [ ] Storybook `retrieving` 故事用差异化 mock 数据。
+
+---
+
+### 5. 中英文标签混用
+
+**问题**
+KnowledgePanel 出现 Chinese-UI 卡片带 `highlight`(英文)标签,与 `高亮`/`已确认`(中文)并列。
+
+**根因**
+标签来源未统一本地化。
+
+**证据**
+- 走查截图:`KnowledgePanel--populated`,`highlight` 与 `高亮` 同屏。
+- 受众为中文精读用户(`BRAND.md` §5)。
+
+**改法**
+- 在 `KnowledgePanel.tsx`(或标签数据源)统一本地化:`highlight → 高亮`,其余英文系统标签同理映射。
+
+**验收标准**
+- [ ] 用户可见标签全中文(或全英文)统一。
+- [ ] 内部 type 值可保留英文,仅显示层本地化。
+
+---
+
+### 6. Storybook 暗色主题未接 `.dark` class
+
+**问题**
+切 `globals=theme:dark` 后背景仍是浅纸色,暗色模式无法在 Storybook 走查 → 暗色回归会盲发。
+
+**根因**
+`.storybook/preview` 未把 theme global 映射到 `<html class="dark">`。
+
+**证据**
+- `styles.css:23-37` 已有完整 `.dark` 变量,质量不错,但没暴露在 Storybook。
+- 走查:暗色 global 对 `KnowledgePanel--populated` 无效。
+- `BRAND.md` §9:暗色模式是头部特性(夜读)。
+
+**改法**(`.storybook/preview.ts(x)`)
+- 加 `withThemeByClassName` 类似 decorator,把 theme global 写到根元素 `dark` class;或自定义 decorator 同步 `document.documentElement.classList`。
+- 配 toolbar global `theme: light | dark`。
+
+**验收标准**
+- [ ] 每个 story 可在 light / dark 间切换且生效。
+- [ ] 暗色下背景为 `--background` 暗色,而非浅纸色。
+- [ ] 作为后续第 7 条的走查护栏。
+
+---
+
+### 7. 语义色硬编码,暗色模式会失效
+
+**问题**
+InterpretationCard 的状态色用了字面 Tailwind 调色板:error `bg-red-50 text-red-950`、trust-ok `bg-emerald-50`、fallback `bg-amber-50`。暗色纸夜主题下会变成接近白色的色块。
+
+**根因**
+状态语义色未 token 化,绕过了 CSS 变量主题方案。
+
+**证据**
+- 证据文件:`src/components/interpretation/InterpretationCard.tsx`
+  - `:340` error:`border-red-200 bg-red-50 text-red-950`
+  - `:449-453` trust badge:`bg-emerald-50` / `bg-amber-50` / muted
+  - `:472` / `:475` / `:486` local-fallback:`bg-amber-50` / `bg-amber-100` 等
+- 对照:`--primary` 已正确 token 化(`styles.css`),状态色应一致处理。
+
+**改法**
+1. `src/styles.css`:在 `:root` 与 `.dark` 下新增 `--success / --warning / --danger` 及对应 `-foreground` token(HSL)。
+2. `InterpretationCard.tsx`:字面色类替换为 `bg-[hsl(var(--warning)/0.12)]`、`text-[hsl(var(--warning-foreground))]` 等。
+3. 可选:在 `tailwind.config.ts` 注册为 `success/warning/danger` 颜色,直接 `bg-warning/10`。
+
+**验收标准**
+- [ ] error / trust / fallback 三类状态在暗色下可读、不刺眼。
+- [ ] 无残留字面 `bg-red-50` 等语义色类(grep 校验)。
+- [ ] 配合第 6 条在两主题下逐一走查。
+
+---
+
+## 🟢 低优先级 / 工程打磨
+
+### 8. `ReaderShell.tsx` 2489 行,超出 coding-style 约定
+
+**问题**
+单文件 2489 行,远超 `coding-style.md` 的 200–400 行规约,会成为 UI 迭代瓶颈。
+
+**根因**
+顶栏、右侧解读栏、底栏、状态编排都堆在一个组件里。
+
+**证据**
+- `wc -l src/components/reader/ReaderShell.tsx` → 2489。
+- `coding-style.md`"小文件原则(200-400 行)";超 400 行须拆分。
+
+**改法**
+- 拆出兄弟组件:`ReaderTopBar`、`InterpretationColumn`(右侧解读栏)、`ReaderFooter`。
+- `ReaderShell` 仅保留布局编排与共享 state(对照 UI-UX §7"纯展示组件 / 端相关布局分离")。
+- 拆分时保持现有 store 单一 owner,props 下传。
+
+**验收标准**
+- [x] `ReaderShell.tsx` 降到合理行数(2491 → 1156,降 54%)。
+- [x] 拆出的纯展示组件与端无关(为移动端薄壳铺路)。
+- [x] 现有测试与 Storybook 全绿。
+
+**已落地(2026-06-07)**
+- 展示组件:`ReaderTopBar` / `ReaderSidebar` / `ReaderInterpretationAside`(纯展示,端无关)。
+- 领域 hook:`useReaderTranslation` / `useReaderPdf` / `useReaderImport` / `useReaderLibrary` / `useReaderSearch`(各自拥有所属 state + 副作用)。
+- 共享纯函数模块:`stored-book-asset.ts`(asset 映射 / PDF 判定),并 DRY 掉 5 处重复的 `onParsedDocument(asset)` 尾巴。
+- `ReaderShell` 现为组合层:hooks + 布局组件 + 按视图的内容 switch。278 测试全程绿、build/storybook 绿。
+- 备注:`useReaderImport`(516 行,导入+Zotero 全流程)与 `ReaderShell`(1156 行,主要是 JSX 渲染树)仍超 400;进一步下探需把 `<section>` 视图 switch 抽成 `ReaderContent`,但那会变成 ~50 props 的透传组件(prop-soup),收益低,故停在当前组合边界。
+
+---
+
+### 9. 顶栏在窄屏(~1280px)拥挤
+
+**问题**
+实机 1280 宽时顶栏标签近乎相接(导入 / 书架 / 转换稿 / TLDR / 对照翻译 / 知识体系 / PDF / 搜索 / 主题 / 设置)。
+
+**根因**
+顶栏全部 inline 平铺,无折叠断点。
+
+**证据**
+- 走查实机 `:1420` 顶栏截图,窄屏拥挤。
+
+**改法**(`ReaderShell.tsx` / 顶栏组件)
+- 定义断点:窄屏下把次要项(对照翻译 / 知识体系 / PDF)收进 `⋯` 或 `DropdownMenu`。
+- 保留高频:导入 / 书架 / 转换稿 / 搜索 / 主题。
+
+**验收标准**
+- [ ] ≤1280 宽顶栏不拥挤、不溢出。
+- [ ] 高频动作仍一键可达。
+
+---
+
+### 10. 书架卡片标题重复
+
+**问题**
+LibraryShelf 卡片在封面上与封面下方各显示一次书名。
+
+**根因**
+封面已含标题时,下方标题行冗余。
+
+**证据**
+- 走查截图:`LibraryShelf--with-books`,标题出现两次。
+
+**改法**(`LibraryShelf.tsx`)
+- 封面承载标题时,去掉下方标题行;该行改放"上次阅读时间 / 进度"。
+- 与第 1 条(纸感封面)一并改。
+
+**验收标准**
+- [ ] 每张卡片书名只出现一次。
+- [ ] 释放的行展示有用元信息(进度 / 最近阅读)。
+
+---
+
+### 11. `citation-pulse` 确认 reduced-motion 兜底
+
+**问题**
+引用回跳的 1.5s 呼吸式高亮(很贴合 UI-UX §4)需确认在 `prefers-reduced-motion` 下被正确降级。
+
+**根因**
+属验证项,非缺陷 —— 全局媒体查询已基本覆盖。
+
+**证据**
+- `tailwind.config.ts:80-92` 定义 `citation-pulse`。
+- `styles.css:133-142` 已有 `@media (prefers-reduced-motion: reduce)` 全局降级。
+
+**改法**
+- 验证回跳高亮在 reduced-motion 下不闪烁、仅静态高亮;如有遗漏单独覆盖。
+
+**验收标准**
+- [ ] reduced-motion 下引用回跳无呼吸动画,仍有可见定位反馈。
+
+---
+
+## 附:走查证据索引
+
+| 截图状态 | 主要发现 |
+|---|---|
+| 实机 `:1420`(onboarding + 顶栏) | #9 顶栏拥挤 |
+| `ReaderShell--reading` | 三栏布局达标;trust badge / 引用 chip 工作良好 |
+| `SelectionToolbar--ask-expanded` | #2 六动作平铺 |
+| `InterpretationCard--retrieving` | #4 chip 无区分度 |
+| `LibraryShelf--with-books` | #1 渐变封面、#10 标题重复 |
+| `KnowledgePanel--populated` | #3 裸 chunk ID、#5 中英混用、#6 暗色未生效 |
+
+> 优点保留(勿误改):纸感暖白底 + 单一 teal 强调、衬线阅读字体、克制动效 token、trust-badge 体系、可点击引用 chip、可折叠检索轨迹、Storybook 全状态覆盖。这些已正确落地 BRAND/UI-UX,改造时维持。

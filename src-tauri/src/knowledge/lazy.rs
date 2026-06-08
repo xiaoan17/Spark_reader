@@ -157,7 +157,10 @@ fn build_summary_prompt(card: &KnowledgeCard) -> CardPrompt {
 
 /// Gather the card's title, body and evidence quotes into a bounded prompt blob.
 fn gather_card_text(card: &KnowledgeCard) -> String {
-    let mut parts = vec![card.title.trim().to_string(), card.body_markdown.trim().to_string()];
+    let mut parts = vec![
+        card.title.trim().to_string(),
+        card.body_markdown.trim().to_string(),
+    ];
     for evidence in &card.evidence {
         let quote = evidence.quote.trim();
         if !quote.is_empty() {

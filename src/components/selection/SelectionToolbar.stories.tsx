@@ -16,7 +16,20 @@ const meta = {
 export default meta
 type Story = StoryObj<typeof meta>
 
-export const Selected: Story = {}
+export const SparkPrimary: Story = {}
+
+export const OverflowOpen: Story = {
+  play: async ({ canvasElement }) => {
+    const moreButton = canvasElement.querySelector<HTMLButtonElement>('button[aria-label="更多操作"]')
+    moreButton?.click()
+  },
+}
+
+export const TwoActions: Story = {
+  args: {
+    approximate: false,
+  },
+}
 
 export const AskExpanded: Story = {
   args: {

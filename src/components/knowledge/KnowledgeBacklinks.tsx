@@ -1,6 +1,7 @@
 import { Link2, LocateFixed } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { KnowledgeEmptyBuildAction } from "./KnowledgeEmptyBuildAction"
+import { chunkIdEvidenceLabel } from "@/core/citation-display"
 import type { KnowledgeEdge, KnowledgeGraph, KnowledgeGraphNode } from "@/stores/reader-store"
 
 type KnowledgeBacklinksProps = {
@@ -86,7 +87,7 @@ export function KnowledgeBacklinks({
                         title={chunkId}
                       >
                         <LocateFixed className="h-3 w-3" />
-                        [{chunkId}]
+                        {chunkIdEvidenceLabel(chunkId)}
                       </button>
                     ))}
                   </div>

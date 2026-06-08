@@ -16,8 +16,6 @@ export type SelectionToolbarHostProps = {
   onExplain: () => void
   onHighlight: () => void
   onPlainExplain: () => void
-  onApplyInterpret?: () => void
-  onSpark?: () => void
   onQuestionChange: (question: string) => void
   onQuestionSubmit: () => void
 }
@@ -37,12 +35,10 @@ export function SelectionToolbarHost({
   onExplain,
   onHighlight,
   onPlainExplain,
-  onApplyInterpret = () => undefined,
-  onSpark = () => undefined,
   onQuestionChange,
   onQuestionSubmit,
 }: SelectionToolbarHostProps) {
-  const shouldRender = useDelayedPresence(present, 180)
+  const shouldRender = useDelayedPresence(present, 80)
   const toolbarRef = useMeasuredToolbarSize(onSizeChange)
   if (!shouldRender) {
     return null
@@ -63,8 +59,6 @@ export function SelectionToolbarHost({
       onExplain={onExplain}
       onHighlight={onHighlight}
       onPlainExplain={onPlainExplain}
-      onApplyInterpret={onApplyInterpret}
-      onSpark={onSpark}
       onQuestionChange={onQuestionChange}
       onQuestionSubmit={onQuestionSubmit}
     />

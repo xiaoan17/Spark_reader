@@ -54,7 +54,7 @@ pub struct FollowUpContext {
     pub answer: String,
 }
 
-#[derive(Debug, Deserialize, Clone, Copy)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 #[serde(rename_all = "camelCase")]
 pub enum InterpretMode {
     Deep,
@@ -3552,6 +3552,7 @@ mod tests {
                 answer: response.answer.clone(),
                 answer_source: response.answer_source.into(),
                 kind: None,
+                mode: None,
                 evidence_chunk_snapshots: Vec::new(),
             },
         )

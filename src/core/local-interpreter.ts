@@ -15,7 +15,7 @@ export function makeLocalEvidence(
     .slice(0, 4)
     .map((chunk) => ({
       chunkId: chunk.chunkId,
-      title: `Chunk ${chunk.chunkId}`,
+      title: `第 ${chunk.pageIndex + 1} 页`,
       pageIndex: chunk.pageIndex,
     }))
 

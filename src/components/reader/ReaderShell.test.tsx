@@ -779,6 +779,88 @@ describe("ReaderShell current text selection rendering", () => {
     unmount()
   })
 
+  it("runs Spark with Cmd+E and clears selection with Escape", async () => {
+    const { ReaderShell } = await import("./ReaderShell")
+    const pageText = "第一段正文。快捷键触发 Spark 解读。最后一句。"
+    const selectionText = "快捷键触发 Spark"
+    const selectionStart = pageText.indexOf(selectionText)
+    const onDeepInterpret = vi.fn()
+    const onPlainExplain = vi.fn()
+    const onClearSelection = vi.fn()
+
+    const { unmount } = await renderClient(
+      <ReaderShell
+        phase="reading"
+        bookId="book-shortcut"
+        libraryStatus="indexed"
+        libraryMessage=""
+        bookTitle="快捷键测试"
+        currentPage={1}
+        totalPages={1}
+        selectionText={selectionText}
+        selectionRects={[]}
+        selectionAnchor={{
+          pageIndex: 0,
+          positionStart: selectionStart,
+          positionEnd: selectionStart + selectionText.length,
+        }}
+        evidence={[]}
+        agentTrace={[]}
+        interpretation=""
+        followUps={[]}
+        highlights={[]}
+        interpretationHistory={[]}
+        parsedPages={[
+          {
+            pageIndex: 0,
+            text: pageText,
+            markdown: `## Page 1\n\n${pageText}`,
+          },
+        ]}
+        parsedChunks={[]}
+        parserEngine="test"
+        coordinateMode="normalized-page-rects"
+        activeChunkId=""
+        zoom={1}
+        onBookLoaded={vi.fn()}
+        onLibraryStatus={vi.fn()}
+        onParsedDocument={vi.fn()}
+        onPageChange={vi.fn()}
+        onVisiblePageChange={vi.fn()}
+        onZoomChange={vi.fn()}
+        onSelection={vi.fn()}
+        onClearSelection={onClearSelection}
+        onActiveChunk={vi.fn()}
+        onChunkFocus={vi.fn()}
+        onPhaseChange={vi.fn()}
+        onDeepInterpret={onDeepInterpret}
+        onPlainExplain={onPlainExplain}
+        onQuestionSubmit={vi.fn()}
+        onSaveHighlight={vi.fn(async () => false)}
+        onOpenHighlight={vi.fn()}
+        onDeleteHighlight={vi.fn()}
+        onOpenInterpretation={vi.fn()}
+        onDeleteInterpretation={vi.fn()}
+        onRegenerate={vi.fn()}
+        onStop={vi.fn()}
+      />,
+    )
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "e", metaKey: true, bubbles: true }))
+      await Promise.resolve()
+    })
+    expect(onDeepInterpret).toHaveBeenCalledTimes(1)
+    expect(onPlainExplain).not.toHaveBeenCalled()
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))
+      await Promise.resolve()
+    })
+    expect(onClearSelection).toHaveBeenCalledTimes(1)
+    unmount()
+  })
+
   it("keeps the selection toolbar mounted briefly so it can fade out", async () => {
     const { ReaderShell } = await import("./ReaderShell")
     const pageText = "第一段正文。工具栏淡出测试。最后一句。"
@@ -3335,8 +3417,9 @@ describe("ReaderShell runtime affordances", () => {
 
     await clickAsync(buttonByText(selectedContainer, "对照翻译"))
     await vi.waitFor(() => expect(selectedContainer.querySelector('[data-testid="selection-toolbar"]')).not.toBeNull())
-    click(buttonByText(selectedContainer, "解读"))
-    expect(onDeepInterpret).not.toHaveBeenCalled()
+    click(buttonByText(selectedContainer, "Spark"))
+    expect(onDeepInterpret).toHaveBeenCalledTimes(1)
+    click(buttonByLabel(selectedContainer, "更多操作"))
     click(buttonByText(selectedContainer, "追问", 0))
     const questionBox = inputByPlaceholder(selectedContainer, "输入你的问题或解读要求")
     changeInput(questionBox, "解释这个术语在论文中的作用")
@@ -4281,7 +4364,8 @@ describe("ReaderShell approximate coordinates", () => {
     expect(textContent(container)).not.toContain("坐标锚点")
     const toolbar = container.querySelector('[data-testid="selection-toolbar"]')
     expect(textContent(toolbar)).toContain("近似")
-    expect(buttonByText(container, "解读").disabled).toBe(false)
+    expect(buttonByText(container, "Spark").disabled).toBe(false)
+    expect(buttonByText(container, "轻量").disabled).toBe(false)
     unmount()
   })
 })
@@ -4486,7 +4570,9 @@ describe("ReaderShell product interaction chain", () => {
 
     const toolbars = container.querySelectorAll('[data-testid="selection-toolbar"]')
     expect(toolbars).toHaveLength(1)
-    expect(textContent(toolbars[0])).toContain("解读")
+    expect(textContent(toolbars[0])).toContain("Spark")
+    expect(textContent(toolbars[0])).toContain("轻量")
+    expect(textContent(toolbars[0])).not.toContain("迁移")
     expect(textContent(container)).toContain("复利来自长期坚持")
     expect(textContent(container)).toContain("风险控制让长期计划不被短期波动打断。")
     expect(textContent(container)).toContain("检索轨迹 · 1 步")
@@ -4505,7 +4591,7 @@ describe("ReaderShell product interaction chain", () => {
     click(buttonByText(container, "发送"))
     expect(onQuestionSubmit).toHaveBeenCalledWith("那短期波动怎么处理？")
 
-    await clickAsync(buttonByLabel(container, "保存标记"))
+    await clickAsync(buttonByText(toolbars[0], "标记"))
     await vi.waitFor(() => expect(onSaveHighlight).toHaveBeenCalled())
 
     expect(buttonByText(container, "文本锚点")).toBeUndefined()

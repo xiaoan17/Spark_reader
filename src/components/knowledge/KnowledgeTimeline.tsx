@@ -1,6 +1,7 @@
 import { CalendarDays, LocateFixed } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { KnowledgeEmptyBuildAction } from "./KnowledgeEmptyBuildAction"
+import { knowledgeEvidenceLabel } from "@/core/citation-display"
 import type { KnowledgeGraph, KnowledgeGraphNode } from "@/stores/reader-store"
 
 type KnowledgeTimelineProps = {
@@ -94,10 +95,10 @@ function TimelineItem({
                 type="button"
                 className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] leading-none text-muted-foreground hover:border-primary hover:text-primary"
                 onClick={() => onEvidenceClick(item.chunkId)}
-                title={item.quote || item.chunkId}
+                title={item.quote ? `${item.quote}（${item.chunkId}）` : item.chunkId}
               >
                 <LocateFixed className="h-3 w-3" />
-                [{item.chunkId}]
+                {knowledgeEvidenceLabel(item)}
               </button>
             ))}
           </div>

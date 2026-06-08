@@ -97,8 +97,11 @@ describe("KnowledgePanel", () => {
       await Promise.resolve()
     })
 
+    // The raw chunk id must not leak into the visible label (BRAND §7); it stays
+    // available only via the title attribute for proofreading.
+    expect(container.textContent).not.toContain(card.evidence[0].chunkId)
     const evidenceButton = Array.from(container.querySelectorAll("button")).find((button) =>
-      button.textContent?.includes(card.evidence[0].chunkId),
+      button.getAttribute("title")?.includes(card.evidence[0].chunkId),
     )
     expect(evidenceButton).toBeTruthy()
 
@@ -186,7 +189,7 @@ describe("KnowledgePanel", () => {
     })
 
     const evidenceButton = Array.from(container.querySelectorAll("button")).find((button) =>
-      button.textContent?.includes(card.evidence[0].chunkId),
+      button.getAttribute("title")?.includes(card.evidence[0].chunkId),
     )
     expect(evidenceButton).toBeTruthy()
 

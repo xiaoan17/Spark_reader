@@ -13,7 +13,10 @@ describe("reader store navigation state", () => {
       interpretation: "",
       interpretationError: "",
       followUps: [],
-      interpretationSessionId: "",
+      activeInterpretationSessionId: "",
+      currentNoteDraft: "",
+      currentThreadError: "",
+      currentThreadLightweight: false,
       activeChunkId: "",
       phase: "reading",
     })
@@ -26,7 +29,7 @@ describe("reader store navigation state", () => {
       evidence: [{ chunkId: "missing-local-chunk", title: "Chunk missing-local-chunk", pageIndex: 8 }],
       interpretation: "已有解读。[missing-local-chunk]",
       followUps: [{ id: "turn-1", question: "为什么？", answer: "因为上下文如此。" }],
-      interpretationSessionId: "session-1",
+      activeInterpretationSessionId: "session-1",
     })
 
     useReaderStore.getState().setVisiblePage(9)
@@ -38,7 +41,7 @@ describe("reader store navigation state", () => {
       selectionText: "复利",
       selectionAnchor: { pageIndex: 0, positionStart: 0, positionEnd: 2 },
       interpretation: "已有解读。[missing-local-chunk]",
-      interpretationSessionId: "session-1",
+      activeInterpretationSessionId: "session-1",
     })
     expect(useReaderStore.getState().followUps).toHaveLength(1)
   })
@@ -52,7 +55,7 @@ describe("reader store navigation state", () => {
       evidence: [{ chunkId: "p2-c1", title: "Chunk p2-c1", pageIndex: 1 }],
       interpretation: "原始解读仍应围绕用户框选段落。[p2-c1]",
       followUps: [],
-      interpretationSessionId: "session-1",
+      activeInterpretationSessionId: "session-1",
       activeChunkId: "",
     })
 
@@ -66,7 +69,7 @@ describe("reader store navigation state", () => {
       selectionText: "复利来自长期坚持",
       selectionAnchor: { pageIndex: 0, positionStart: 0, positionEnd: 8 },
       interpretation: "原始解读仍应围绕用户框选段落。[p2-c1]",
-      interpretationSessionId: "session-1",
+      activeInterpretationSessionId: "session-1",
     })
   })
 
@@ -94,25 +97,23 @@ describe("reader store navigation state", () => {
     })
   })
 
-  it("closes the active Spark thread when a new text selection arrives", () => {
+  it("resets the active current thread when a new text selection arrives", () => {
     useReaderStore.setState({
       selectionText: "旧选区",
-      activeSparkSessionId: "spark-session-1",
-      sparkDraft: "临时 note",
-      sparkQuestion: "继续问",
-      sparkError: "旧错误",
-      interpretationSessionId: "deep-session-1",
+      activeInterpretationSessionId: "thread-session-1",
+      currentNoteDraft: "临时 note",
+      currentThreadError: "旧错误",
+      currentThreadLightweight: true,
     })
 
     useReaderStore.getState().setSelection("新选区", [], { pageIndex: 0, positionStart: 0, positionEnd: 3 })
 
     expect(useReaderStore.getState()).toMatchObject({
       selectionText: "新选区",
-      activeSparkSessionId: "",
-      sparkDraft: "",
-      sparkQuestion: "",
-      sparkError: "",
-      interpretationSessionId: "",
+      activeInterpretationSessionId: "",
+      currentNoteDraft: "",
+      currentThreadError: "",
+      currentThreadLightweight: false,
     })
   })
 

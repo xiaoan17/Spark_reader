@@ -1264,10 +1264,11 @@ pub fn save_interpretation(
            answer,
            answer_source,
            kind,
+           interpret_mode,
            evidence_chunk_snapshots_json,
            created_at
          )
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, datetime('now'))",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, datetime('now'))",
         params![
             id,
             request.book_id,
@@ -1285,6 +1286,7 @@ pub fn save_interpretation(
             request.answer,
             request.answer_source.as_str(),
             kind.as_str(),
+            request.mode.as_deref(),
             evidence_snapshot_json
         ],
     )
@@ -1337,6 +1339,7 @@ pub fn list_interpretations_page(
                     i.answer,
                     i.answer_source,
                     i.kind,
+                    i.interpret_mode,
                     i.evidence_chunk_snapshots_json,
                     i.created_at
              FROM interpretations i
@@ -1575,6 +1578,7 @@ pub(crate) fn open_database(path: &Path) -> Result<Connection> {
           answer TEXT NOT NULL,
           answer_source TEXT NOT NULL DEFAULT 'llm',
           kind TEXT NOT NULL DEFAULT 'interpretation',
+          interpret_mode TEXT,
           evidence_chunk_snapshots_json TEXT NOT NULL DEFAULT '[]',
           created_at TEXT NOT NULL
         );
@@ -1807,6 +1811,12 @@ pub(crate) fn open_database(path: &Path) -> Result<Connection> {
         "interpretations",
         "kind",
         "ALTER TABLE interpretations ADD COLUMN kind TEXT NOT NULL DEFAULT 'interpretation'",
+    )?;
+    ensure_column(
+        &conn,
+        "interpretations",
+        "interpret_mode",
+        "ALTER TABLE interpretations ADD COLUMN interpret_mode TEXT",
     )?;
     ensure_column(
         &conn,
@@ -3559,6 +3569,7 @@ fn get_interpretation(conn: &Connection, interpretation_id: &str) -> Result<Save
                 answer,
                 answer_source,
                 kind,
+                interpret_mode,
                 evidence_chunk_snapshots_json,
                 created_at
          FROM interpretations
@@ -3574,7 +3585,7 @@ pub(crate) fn row_to_interpretation(
 ) -> rusqlite::Result<SavedInterpretation> {
     let page_indexes_json: String = row.get(10)?;
     let evidence_json: String = row.get(11)?;
-    let evidence_snapshots_json: String = row.get(16)?;
+    let evidence_snapshots_json: String = row.get(17)?;
     let page_indexes = serde_json::from_str::<Vec<u32>>(&page_indexes_json).map_err(|err| {
         rusqlite::Error::FromSqlConversionFailure(10, rusqlite::types::Type::Text, Box::new(err))
     })?;
@@ -3590,7 +3601,7 @@ pub(crate) fn row_to_interpretation(
         &evidence_snapshots_json,
     )
     .map_err(|err| {
-        rusqlite::Error::FromSqlConversionFailure(16, rusqlite::types::Type::Text, Box::new(err))
+        rusqlite::Error::FromSqlConversionFailure(17, rusqlite::types::Type::Text, Box::new(err))
     })?;
 
     Ok(SavedInterpretation {
@@ -3610,8 +3621,9 @@ pub(crate) fn row_to_interpretation(
         answer: row.get(13)?,
         answer_source: AnswerSource::from_db(&row.get::<_, String>(14)?),
         kind: InterpretationKind::from_db(&row.get::<_, String>(15)?),
+        mode: row.get(16)?,
         evidence_chunk_snapshots,
-        created_at: row.get(17)?,
+        created_at: row.get(18)?,
     })
 }
 
@@ -3686,7 +3698,6 @@ fn make_plain_snippet(text: &str, terms: &[String]) -> String {
     let start = start.saturating_sub(40);
     text.chars().skip(start).take(180).collect()
 }
-
 
 #[cfg(test)]
 mod tests;

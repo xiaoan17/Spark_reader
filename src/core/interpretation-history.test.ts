@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
+  lightweightFromSavedInterpretation,
   restoreTargetForSavedInterpretation,
   summarizeInterpretationSessions,
 } from "./interpretation-history"
@@ -204,14 +205,36 @@ describe("restoreTargetForSavedInterpretation", () => {
     })
   })
 
-  it("excludes spark and note rows from deep interpretation history summaries", () => {
+  it("includes spark and note rows in unified interpretation history summaries", () => {
     const rows = [
       savedInterpretation({ id: "deep", sessionId: "deep-session", kind: "interpretation" }),
       savedInterpretation({ id: "spark", sessionId: "spark-session", kind: "spark" }),
       savedInterpretation({ id: "note", sessionId: "note-session", kind: "note" }),
     ]
 
-    expect(summarizeInterpretationSessions(rows).map((item) => item.id)).toEqual(["deep"])
+    expect(summarizeInterpretationSessions(rows).map((item) => item.id)).toEqual(["deep", "spark", "note"])
+  })
+})
+
+describe("lightweightFromSavedInterpretation", () => {
+  it("uses mode=plain to mark a lightweight thread", () => {
+    expect(lightweightFromSavedInterpretation({ mode: "plain", kind: "interpretation" })).toBe(true)
+  })
+
+  it("treats deep and apply modes as non-lightweight", () => {
+    expect(lightweightFromSavedInterpretation({ mode: "deep", kind: "interpretation" })).toBe(false)
+    expect(lightweightFromSavedInterpretation({ mode: "apply", kind: "interpretation" })).toBe(false)
+  })
+
+  it("prefers mode over kind even when kind disagrees", () => {
+    // 历史 kind 字面值与 mode 可能不一致;mode 是更准确的意图来源。
+    expect(lightweightFromSavedInterpretation({ mode: "deep", kind: "spark" })).toBe(false)
+  })
+
+  it("falls back to kind==='spark' for legacy rows without mode", () => {
+    expect(lightweightFromSavedInterpretation({ kind: "spark" })).toBe(true)
+    expect(lightweightFromSavedInterpretation({ kind: "interpretation" })).toBe(false)
+    expect(lightweightFromSavedInterpretation({})).toBe(false)
   })
 })
 

@@ -65,7 +65,7 @@ export function TldrReader({
               className="font-reading text-[17px] text-foreground [&_p]:my-3 [&_p]:leading-9 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0 [&_li]:leading-9"
             />
           ) : error ? (
-            <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm leading-6 text-red-900">
+            <div className="flex items-start gap-2 rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm leading-6 text-danger-foreground">
               <AlertCircle className="mt-1 h-4 w-4 shrink-0" />
               <span>{error}</span>
             </div>

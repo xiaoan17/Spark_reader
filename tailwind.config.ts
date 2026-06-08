@@ -27,6 +27,18 @@ const config: Config = {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
+        success: {
+          DEFAULT: "hsl(var(--success))",
+          foreground: "hsl(var(--success-foreground))",
+        },
+        warning: {
+          DEFAULT: "hsl(var(--warning))",
+          foreground: "hsl(var(--warning-foreground))",
+        },
+        danger: {
+          DEFAULT: "hsl(var(--danger))",
+          foreground: "hsl(var(--danger-foreground))",
+        },
       },
       borderRadius: {
         lg: "var(--radius)",
@@ -78,9 +90,10 @@ const config: Config = {
           "100%": { backgroundPosition: "-200% 0" },
         },
         "citation-pulse": {
-          "0%, 100%": { backgroundColor: "rgb(186 230 253 / 0.65)", boxShadow: "0 0 0 0 rgb(14 165 233 / 0)" },
-          "35%": { backgroundColor: "rgb(254 240 138 / 0.9)", boxShadow: "0 0 0 4px rgb(245 158 11 / 0.22)" },
-          "70%": { backgroundColor: "rgb(186 230 253 / 0.75)", boxShadow: "0 0 0 1px rgb(14 165 233 / 0.2)" },
+          "0%": { backgroundColor: "rgb(186 230 253 / 0.75)", boxShadow: "0 0 0 0 rgb(14 165 233 / 0)" },
+          "28%": { backgroundColor: "rgb(254 240 138 / 0.9)", boxShadow: "0 0 0 4px rgb(245 158 11 / 0.22)" },
+          "70%": { backgroundColor: "rgb(186 230 253 / 0.55)", boxShadow: "0 0 0 1px rgb(14 165 233 / 0.16)" },
+          "100%": { backgroundColor: "rgb(186 230 253 / 0)", boxShadow: "0 0 0 0 rgb(14 165 233 / 0)" },
         },
       },
       animation: {
@@ -89,7 +102,7 @@ const config: Config = {
         "scale-in": "scale-in 160ms cubic-bezier(0.2, 0, 0, 1)",
         "pop-in": "pop-in 140ms cubic-bezier(0.2, 0, 0, 1)",
         shimmer: "shimmer 1.3s linear infinite",
-        "citation-pulse": "citation-pulse 950ms cubic-bezier(0.2, 0, 0, 1) 2",
+        "citation-pulse": "citation-pulse 1500ms cubic-bezier(0.2, 0, 0, 1) 1",
       },
     },
   },

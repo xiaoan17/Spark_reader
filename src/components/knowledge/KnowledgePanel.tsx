@@ -32,8 +32,10 @@ import {
   KNOWLEDGE_CARD_TYPES,
   formatConfidencePercent,
   labelForCardType,
+  labelForSource,
   labelForStatus,
 } from "@/core/knowledge-display"
+import { knowledgeEvidenceLabel } from "@/core/citation-display"
 
 type KnowledgePanelProps = {
   cards: KnowledgeCard[]
@@ -208,7 +210,7 @@ export function KnowledgePanel({
 
       <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2">
         {error ? (
-          <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs leading-5 text-red-950">
+          <div className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-xs leading-5 text-danger-foreground">
             {error}
           </div>
         ) : null}
@@ -353,7 +355,7 @@ function HealthCell({
   warning?: boolean
 }) {
   return (
-    <div className={["rounded-md border px-2 py-1", warning ? "border-amber-300 bg-amber-50 text-amber-950" : "bg-card"].join(" ")}>
+    <div className={["rounded-md border px-2 py-1", warning ? "border-warning/40 bg-warning/10 text-warning-foreground" : "bg-card"].join(" ")}>
       <div className="text-[10px] text-muted-foreground">{label}</div>
       <div className="text-sm font-semibold">{value}</div>
     </div>
@@ -387,7 +389,7 @@ function KnowledgeCardItem({
               {labelForStatus(card.status)}
             </Badge>
             {(card.driftCount ?? 0) > 0 ? (
-              <Badge variant="outline" className="border-amber-300 text-amber-700">
+              <Badge variant="outline" className="border-warning/40 text-warning-foreground">
                 <ShieldAlert className="mr-1 h-3 w-3" />
                 漂移
               </Badge>
@@ -417,11 +419,11 @@ function KnowledgeCardItem({
             <button
               key={`${card.cardId}-${item.chunkId}-${item.role}`}
               type="button"
-              className="rounded-md border px-2 py-1 text-[11px] leading-none text-muted-foreground hover:border-primary hover:text-primary"
+              className="max-w-full truncate rounded-md border px-2 py-1 text-[11px] leading-none text-muted-foreground hover:border-primary hover:text-primary"
               onClick={() => onEvidenceClick(item.chunkId)}
-              title={item.quote || item.chunkId}
+              title={item.quote ? `${item.quote}（${item.chunkId}）` : item.chunkId}
             >
-              [{item.chunkId}]
+              {knowledgeEvidenceLabel(item)}
             </button>
           ))}
         </div>
@@ -474,7 +476,7 @@ function KnowledgeCardDetail({
             <Badge variant={card.status === "confirmed" ? "secondary" : "outline"}>
               {labelForStatus(card.status)}
             </Badge>
-            <Badge variant="outline">{card.source}</Badge>
+            <Badge variant="outline">{labelForSource(card.source)}</Badge>
             {card.userLocked ? <Badge variant="secondary">用户锁定</Badge> : null}
           </div>
           <h3 className="mt-2 text-sm font-semibold leading-5">{card.title}</h3>
@@ -500,7 +502,7 @@ function KnowledgeCardDetail({
       </div>
 
       {drift.length > 0 ? (
-        <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-950">
+        <div className="mt-3 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs leading-5 text-warning-foreground">
           原文已重解析，{drift.length} 条引用需要复核。
         </div>
       ) : null}
@@ -523,11 +525,12 @@ function KnowledgeCardDetail({
               type="button"
               className="block w-full rounded-md border bg-background px-2 py-1.5 text-left text-[11px] leading-5 hover:border-primary"
               onClick={() => onEvidenceClick(item.chunkId)}
+              title={item.chunkId}
             >
-              <span className="font-medium">[{item.chunkId}]</span>
-              <span className="ml-2 text-muted-foreground">
+              <span className="font-medium">
                 {item.pageIndex === null || item.pageIndex === undefined ? "未知页" : `第 ${item.pageIndex + 1} 页`}
               </span>
+              <span className="ml-2 text-muted-foreground">原文证据</span>
               {item.quote ? <span className="mt-1 block text-muted-foreground">{item.quote}</span> : null}
             </button>
           ))

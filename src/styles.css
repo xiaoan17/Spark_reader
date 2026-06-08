@@ -18,6 +18,13 @@
     --input: 36 16% 82%;
     --ring: 178 42% 28%;
     --radius: 0.5rem;
+    /* 语义状态色（token 化，保证暗色模式生效，参见 BRAND §9） */
+    --success: 152 38% 32%;
+    --success-foreground: 152 44% 22%;
+    --warning: 33 74% 38%;
+    --warning-foreground: 28 60% 26%;
+    --danger: 0 62% 42%;
+    --danger-foreground: 0 60% 32%;
   }
 
   .dark {
@@ -34,6 +41,12 @@
     --border: 220 10% 26%;
     --input: 220 10% 26%;
     --ring: 174 42% 42%;
+    --success: 152 36% 52%;
+    --success-foreground: 152 40% 78%;
+    --warning: 36 64% 56%;
+    --warning-foreground: 36 70% 76%;
+    --danger: 0 58% 62%;
+    --danger-foreground: 0 64% 80%;
   }
 
   * {

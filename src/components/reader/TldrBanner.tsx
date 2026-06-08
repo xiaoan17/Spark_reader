@@ -64,7 +64,7 @@ export function TldrBanner({
               className="mt-1 text-sm text-foreground [&_p]:my-1 [&_p]:leading-6 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0 [&_li]:leading-6 [&_ol]:my-1 [&_ul]:my-1"
             />
           ) : error ? (
-            <div className="mt-1 flex items-start gap-2 text-sm leading-6 text-red-700">
+            <div className="mt-1 flex items-start gap-2 text-sm leading-6 text-danger-foreground">
               <AlertCircle className="mt-1 h-4 w-4 shrink-0" />
               <span>{error}</span>
             </div>

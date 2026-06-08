@@ -53,4 +53,25 @@ describe("MarkdownContent images", () => {
     expect(html).not.toContain("javascript:alert")
     expect(html).not.toContain('alt="bad"')
   })
+
+  it("shows a hover preview for inline citation buttons without leaking chunk ids", () => {
+    const chunkId = "b12345678-p2-c3-abcdef12"
+    const html = renderToStaticMarkup(
+      <MarkdownContent
+        content={`证据见 [${chunkId}]。`}
+        evidence={[
+          {
+            chunkId,
+            pageIndex: 1,
+            title: "第二章 · 风险控制让长期计划不被短期波动打断。",
+          },
+        ]}
+      />,
+    )
+
+    expect(html).toContain("相关段落")
+    expect(html).toContain("第 2 页")
+    expect(html).toContain("风险控制让长期计划")
+    expect(html).not.toContain(chunkId)
+  })
 })

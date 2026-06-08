@@ -2,6 +2,11 @@ import { useRef } from "react"
 import { ReaderShell } from "@/components/reader/ReaderShell"
 import { useReaderStore } from "@/stores/reader-store"
 import {
+  MockAgentTaskRunner,
+  agentTaskToKnowledgeCardRequests,
+  type AgentTaskKind,
+} from "@/core/agent-task"
+import {
   buildKnowledgeGraph,
   cancelInterpretation,
   confirmKnowledgeCard,
@@ -58,6 +63,7 @@ import { focusPageIndexesForSelection, primaryPageIndexForSelection } from "@/co
 import { inferTextSelectionAnchor } from "@/core/selection-anchor"
 import { pageTextByIndex } from "@/core/page-lookup"
 import {
+  lightweightFromSavedInterpretation,
   restoreTargetForSavedInterpretation,
 } from "@/core/interpretation-history"
 import { restoreTargetForSavedHighlight } from "@/core/highlight-restore"
@@ -103,6 +109,9 @@ function localFallbackNotice(error?: unknown, action: "解读" | "追问" = "解
 
 export function App() {
   const timers = useRef<number[]>([])
+  const agentTaskRunner = useRef(new MockAgentTaskRunner())
+  const agentTaskUnsubscribers = useRef(new Map<string, () => void>())
+  const persistedAgentTaskIds = useRef(new Set<string>())
   const requestGuard = useRef(createRequestGuard())
   const streamUnlisten = useRef<(() => void) | null>(null)
   const activeInterpretationRequestId = useRef<string>("")
@@ -128,11 +137,13 @@ export function App() {
     tldrLoading,
     tldrError,
     tldrLlmReady,
-    activeSparkSessionId,
-    sparkMode,
-    sparkDraft,
-    sparkQuestion,
-    sparkError,
+    activeInterpretationSessionId,
+    workbenchTab,
+    currentThreadLightweight,
+    currentNoteDraft,
+    currentNoteSaving,
+    currentThreadError,
+    agentTasks,
     highlights,
     interpretationHistory,
     knowledgeCards,
@@ -163,7 +174,13 @@ export function App() {
     setInterpretation,
     setAnswerSource,
     setInterpretationError,
-    setInterpretationSessionId,
+    setActiveInterpretationSessionId,
+    setWorkbenchTab,
+    setCurrentThreadLightweight,
+    setCurrentNoteDraft,
+    setCurrentNoteSaving,
+    setCurrentThreadError,
+    upsertAgentTask,
     setHighlights,
     setInterpretationHistory,
     setKnowledgeCards,
@@ -179,11 +196,6 @@ export function App() {
     setTldrLoading,
     setTldrError,
     setTldrLlmReady,
-    setActiveSparkSessionId,
-    setSparkMode,
-    setSparkDraft,
-    setSparkQuestion,
-    setSparkError,
     setFollowUps,
     addHighlight,
     addInterpretationHistory,
@@ -247,17 +259,20 @@ export function App() {
     }
   }
 
-  function runLocalInterpretation(mode: InterpretMode = "deep") {
+  function runLocalInterpretation(mode: InterpretMode = "deep", lightweightOverride?: boolean) {
     if (!selectionText.trim()) {
       return
     }
 
     const version = startRequest()
+    const lightweight = lightweightOverride ?? useReaderStore.getState().currentThreadLightweight
     clearTimers()
     clearInterpretation()
+    setCurrentThreadLightweight(lightweight)
+    setWorkbenchTab("current")
     setPhase("planning")
     schedule(() => {
-      void runBackendInterpretation(mode, version)
+      void runBackendInterpretation(mode, version, lightweight)
     }, 300)
   }
 
@@ -385,187 +400,76 @@ export function App() {
       return
     }
     const version = startRequest()
+    const lightweight = useReaderStore.getState().currentThreadLightweight
     clearTimers()
-    void answerFollowUp(question, version)
+    void answerFollowUp(question, version, lightweight)
   }
 
-  function handleOpenSpark() {
+  function handleCurrentThreadLightweightChange(enabled: boolean) {
+    setCurrentThreadLightweight(enabled)
+  }
+
+  async function handleSaveCurrentNote() {
     if (!selectionText.trim()) {
-      setSparkError("请先框选一段文字")
+      setCurrentThreadError("请先框选一段文字")
       return
     }
-    const existingThread = findSparkThreadForSelection()
-    setSparkError("")
-    setSparkMode("spark")
-    if (existingThread) {
-      handleOpenSparkInterpretation(existingThread)
-      if (sparkSessionHasAiTurn(existingThread.sessionId || existingThread.id)) {
-        setSparkMode("spark")
-      }
-      return
-    }
-    if (!activeSparkSessionId) {
-      setActiveSparkSessionId(makeInterpretationSessionId())
-    }
-  }
-
-  function handleCloseSpark() {
-    setActiveSparkSessionId("")
-    setSparkQuestion("")
-    setSparkDraft("")
-    setSparkError("")
-  }
-
-  async function handleSparkAsk() {
-    if (!selectionText.trim()) {
-      setSparkError("请先框选一段文字")
-      return
-    }
-    const trimmedQuestion = sparkQuestion.trim()
-    const version = startRequest()
-    clearTimers()
-    setSparkError("")
-    if (interpretation.trim() || followUps.length > 0) {
-      await answerSparkFollowUp(trimmedQuestion || "请继续围绕这段选区解释。", version)
-    } else {
-      await runSparkInitial(trimmedQuestion || "请用轻量 Spark 方式解释这段选区，并保留必要引用。", version)
-    }
-    if (isCurrentRequest(version)) {
-      setSparkQuestion("")
-    }
-  }
-
-  async function runSparkInitial(question: string, version: number) {
-    if (!isCurrentRequest(version)) {
-      return
-    }
-    setPhase("planning")
-    if (!shouldUseBackendInterpretation({ bookId, libraryStatus, tauriRuntime: isTauriRuntime() })) {
-      await runFallbackSparkInitial(question, version)
-      return
-    }
-    try {
-      const readiness = await backendLlmReadiness("解读")
-      if (!isCurrentRequest(version)) {
-        return
-      }
-      if (!readiness.ready) {
-        setSparkError(readiness.message)
-        await runFallbackSparkInitial(question, version)
-        return
-      }
-      setPhase("retrieving")
-      const requestId = makeRequestId(version)
-      activeInterpretationRequestId.current = requestId
-      await attachInterpretationStream(requestId, version)
-      const result = await interpretSelection({
-        bookId,
-        selectionText,
-        pageIndexes: focusPageIndexes(),
-        selectionRects,
-        focusChunkIds: focusChunkIds(),
-        question,
-        mode: "plain",
-      }, requestId)
-      if (!isCurrentRequest(version)) {
-        return
-      }
-      activeInterpretationRequestId.current = ""
-      clearStreamListener()
-      const evidencePreview = previewEvidence(result.evidence)
-      setEvidence(evidencePreview)
-      setAgentTrace([])
-      setAnswerSource(result.answerSource)
-      setInterpretation(result.answer)
-      void persistInterpretation(result.answer, {
-        evidencePreview,
-        version,
-        answerSource: result.answerSource,
-        kind: "spark",
-        sessionId: activeSparkSessionId || undefined,
-      }).then((saved) => {
-        if (saved) setActiveSparkSessionId(saved.sessionId)
-      })
-      setPhase("streaming")
-      schedule(() => {
-        if (isCurrentRequest(version)) setPhase("reading")
-      }, 350)
-    } catch (error) {
-      activeInterpretationRequestId.current = ""
-      clearStreamListener()
-      setSparkError(localFallbackNotice(error, "解读"))
-      await runFallbackSparkInitial(question, version)
-    }
-  }
-
-  async function runFallbackSparkInitial(question: string, version: number) {
-    if (!isCurrentRequest(version)) {
-      return
-    }
-    const hits = await findEvidenceChunks()
-    if (!isCurrentRequest(version)) {
-      return
-    }
-    const chunks = localFallbackChunks(hits.map(searchHitToChunk))
-    const fallbackPages = selectionRects.length === 0 ? focusPageIndexes() : []
-    const evidencePreview = makeLocalEvidence(selectionRects, parsedPages, chunks, fallbackPages)
-    const answer = makeLocalFollowUpAnswer(
-      question,
-      selectionText,
-      parsedPages,
-      selectionRects,
-      chunks,
-      shouldUseBackendInterpretation({ bookId, libraryStatus, tauriRuntime: isTauriRuntime() }),
-      fallbackPages[0],
-    )
-    setEvidence(evidencePreview)
-    setAgentTrace([])
-    setAnswerSource("local_fallback")
-    setInterpretation(answer)
-    void persistInterpretation(answer, {
-      evidencePreview,
-      version,
-      answerSource: "local_fallback",
-      kind: "spark",
-      sessionId: activeSparkSessionId || undefined,
-    }).then((saved) => {
-      if (saved) setActiveSparkSessionId(saved.sessionId)
-    })
-    setPhase("streaming")
-    schedule(() => {
-      if (isCurrentRequest(version)) setPhase("reading")
-    }, 350)
-  }
-
-  async function answerSparkFollowUp(question: string, version: number) {
-    await answerFollowUp(question, version, {
-      kind: "spark",
-      sessionId: activeSparkSessionId || undefined,
-    })
-  }
-
-  async function handleSparkSaveNote() {
-    if (!selectionText.trim()) {
-      setSparkError("请先框选一段文字")
-      return
-    }
-    const note = sparkDraft.trim()
+    const note = currentNoteDraft.trim()
     if (!note) {
-      setSparkError("Note 不能为空")
+      setCurrentThreadError("Note 不能为空")
       return
     }
-    setSparkError("")
-    const saved = await persistInterpretation(note, {
-      evidencePreview: [],
-      answerSource: "local_fallback",
-      kind: "note",
-      sessionId: activeSparkSessionId || makeInterpretationSessionId(),
-      turnIndex: activeSparkItems.length,
-    })
-    if (saved) {
-      setActiveSparkSessionId(saved.sessionId)
-      setSparkDraft("")
+    setCurrentThreadError("")
+    setCurrentNoteSaving(true)
+    try {
+      const saved = await persistInterpretation(note, {
+        evidencePreview: [],
+        answerSource: "local_fallback",
+        kind: "note",
+        sessionId: activeInterpretationSessionId || makeInterpretationSessionId(),
+        turnIndex: activeThreadItems.length,
+      })
+      if (saved) {
+        setActiveInterpretationSessionId(saved.sessionId)
+        setCurrentNoteDraft("")
+      }
+    } finally {
+      setCurrentNoteSaving(false)
     }
+  }
+
+  async function handleRunAgentTask(kind: AgentTaskKind, prompt?: string) {
+    if (!bookId) {
+      return
+    }
+    const taskId = await agentTaskRunner.current.run(kind, { bookId, prompt })
+    const unsubscribe = agentTaskRunner.current.subscribe(taskId, (task) => {
+      upsertAgentTask(task)
+      if (task.status === "done" && !persistedAgentTaskIds.current.has(task.id)) {
+        persistedAgentTaskIds.current.add(task.id)
+        // Persist artifacts back to the book the task was STARTED for, not the
+        // book currently open — the user may have switched books while a long
+        // task was running. So bind bookId explicitly here instead of routing
+        // through handleSaveKnowledgeCard (which uses the current bookId).
+        const requests = agentTaskToKnowledgeCardRequests(task, bookId)
+        if (requests.length > 0) {
+          void persistAgentTaskCards(bookId, task.id, requests)
+        }
+      }
+      // App.tsx manages side effects explicitly (no useEffect); release the
+      // subscription as soon as the task reaches a terminal state so real
+      // runners (OpenCode) don't leak listeners.
+      if (task.status === "done" || task.status === "stopped" || task.status === "error") {
+        agentTaskUnsubscribers.current.get(taskId)?.()
+        agentTaskUnsubscribers.current.delete(taskId)
+      }
+    })
+    agentTaskUnsubscribers.current.set(taskId, unsubscribe)
+    setWorkbenchTab("tasks")
+  }
+
+  function handleStopAgentTask(taskId: string) {
+    agentTaskRunner.current.stop(taskId)
   }
 
   function handleStop() {
@@ -631,10 +535,10 @@ export function App() {
     focusChunk(page, chunkId, text, rects, preserveInterpretation)
   }
 
-  async function runBackendInterpretation(mode: InterpretMode, version: number) {
+  async function runBackendInterpretation(mode: InterpretMode, version: number, lightweight: boolean) {
     if (!shouldUseBackendInterpretation({ bookId, libraryStatus, tauriRuntime: isTauriRuntime() })) {
       setInterpretationError(localFallbackNotice(undefined, "解读"))
-      await runFallbackInterpretation(mode, version)
+      await runFallbackInterpretation(mode, version, lightweight)
       return
     }
     try {
@@ -647,7 +551,7 @@ export function App() {
       }
       if (!readiness.ready) {
         setInterpretationError(readiness.message)
-        await runFallbackInterpretation(mode, version)
+        await runFallbackInterpretation(mode, version, lightweight)
         return
       }
       setPhase("retrieving")
@@ -660,6 +564,7 @@ export function App() {
         pageIndexes: focusPageIndexes(),
         selectionRects,
         focusChunkIds: focusChunkIds(),
+        lightweight,
         mode,
       }, requestId)
       if (!isCurrentRequest(version)) {
@@ -672,7 +577,13 @@ export function App() {
       setAgentTrace(result.trace)
       setAnswerSource(result.answerSource)
       setInterpretation(result.answer)
-      void persistInterpretation(result.answer, { evidencePreview, version, answerSource: result.answerSource })
+      void persistInterpretation(result.answer, {
+        evidencePreview,
+        version,
+        answerSource: result.answerSource,
+        kind: lightweight ? "spark" : "interpretation",
+        mode,
+      })
       setPhase("streaming")
       schedule(() => {
         if (isCurrentRequest(version)) setPhase("reading")
@@ -684,11 +595,11 @@ export function App() {
         return
       }
       setInterpretationError(localFallbackNotice(error, "解读"))
-      await runFallbackInterpretation(mode, version)
+      await runFallbackInterpretation(mode, version, lightweight)
     }
   }
 
-  async function runFallbackInterpretation(mode: InterpretMode, version: number) {
+  async function runFallbackInterpretation(mode: InterpretMode, version: number, lightweight: boolean) {
     if (!isCurrentRequest(version)) {
       return
     }
@@ -719,7 +630,13 @@ export function App() {
           ? `${text}\n\n应用/迁移提示：当前环境只能基于转换稿做本地兜底，不能替代完整 LLM 的迁移分析；请优先核对上面的原文依据。`
         : text
     setInterpretation(answer)
-    void persistInterpretation(answer, { evidencePreview, version, answerSource: "local_fallback" })
+    void persistInterpretation(answer, {
+      evidencePreview,
+      version,
+      answerSource: "local_fallback",
+      kind: lightweight ? "spark" : "interpretation",
+      mode,
+    })
     setPhase("streaming")
     schedule(() => {
       if (isCurrentRequest(version)) setPhase("reading")
@@ -729,7 +646,7 @@ export function App() {
   async function answerFollowUp(
     question: string,
     version: number,
-    options: { kind?: "interpretation" | "spark"; sessionId?: string } = {},
+    lightweight: boolean,
   ) {
     if (!isCurrentRequest(version)) {
       return
@@ -737,7 +654,7 @@ export function App() {
     setPhase("planning")
     if (!shouldUseBackendInterpretation({ bookId, libraryStatus, tauriRuntime: isTauriRuntime() })) {
       setInterpretationError(localFallbackNotice(undefined, "追问"))
-      await answerFallbackFollowUp(question, version, options)
+      await answerFallbackFollowUp(question, version, lightweight)
       return
     }
     try {
@@ -747,7 +664,7 @@ export function App() {
       }
       if (!readiness.ready) {
         setInterpretationError(readiness.message)
-        await answerFallbackFollowUp(question, version, options)
+        await answerFallbackFollowUp(question, version, lightweight)
         return
       }
       setPhase("retrieving")
@@ -766,8 +683,8 @@ export function App() {
         priorAnswer: interpretation || undefined,
         priorEvidenceChunkIds: evidence.map((item) => item.chunkId),
         followUpHistory: followUps,
-        lightweight: options.kind === "spark",
-        mode: "plain",
+        lightweight,
+        mode: lightweight ? "plain" : "deep",
       }, requestId)
       if (!isCurrentRequest(version)) {
         return
@@ -784,8 +701,8 @@ export function App() {
         version,
         followUpIndex,
         answerSource: result.answerSource,
-        kind: options.kind ?? "interpretation",
-        sessionId: options.sessionId,
+        kind: lightweight ? "spark" : "interpretation",
+        mode: lightweight ? "plain" : "deep",
       })
       replaceStreamingFollowUp(followUpId, question, result.answer)
       setPhase("streaming")
@@ -796,14 +713,14 @@ export function App() {
       activeInterpretationRequestId.current = ""
       clearStreamListener()
       setInterpretationError(localFallbackNotice(error, "追问"))
-      await answerFallbackFollowUp(question, version, options)
+      await answerFallbackFollowUp(question, version, lightweight)
     }
   }
 
   async function answerFallbackFollowUp(
     question: string,
     version: number,
-    options: { kind?: "interpretation" | "spark"; sessionId?: string } = {},
+    lightweight: boolean,
   ) {
     if (!isCurrentRequest(version)) {
       return
@@ -836,8 +753,8 @@ export function App() {
       version,
       followUpIndex,
       answerSource: "local_fallback",
-      kind: options.kind ?? "interpretation",
-      sessionId: options.sessionId,
+      kind: lightweight ? "spark" : "interpretation",
+      mode: lightweight ? "plain" : "deep",
     })
     setPhase("streaming")
     schedule(() => {
@@ -923,6 +840,7 @@ export function App() {
       followUpIndex?: number
       answerSource?: AnswerSource
       kind?: "interpretation" | "spark" | "note"
+      mode?: InterpretMode
       sessionId?: string
       turnIndex?: number
     } = {},
@@ -934,6 +852,7 @@ export function App() {
       followUpIndex,
       answerSource: savedAnswerSource = answerSource,
       kind = "interpretation",
+      mode,
       sessionId,
       turnIndex: explicitTurnIndex,
     } = options
@@ -957,9 +876,7 @@ export function App() {
       const turn = planInterpretationTurn({
         currentSessionId:
           sessionId ??
-          (kind === "interpretation"
-            ? useReaderStore.getState().interpretationSessionId
-            : useReaderStore.getState().activeSparkSessionId),
+          useReaderStore.getState().activeInterpretationSessionId,
         intent: question ? "follow_up" : "initial",
         followUpCount:
           explicitTurnIndex !== undefined
@@ -967,11 +884,8 @@ export function App() {
             : followUpIndex ?? useReaderStore.getState().followUps.length,
         createSessionId: makeInterpretationSessionId,
       })
-      if (turn.createdSession && kind === "interpretation") {
-        setInterpretationSessionId(turn.sessionId)
-      }
-      if (turn.createdSession && kind === "spark") {
-        setActiveSparkSessionId(turn.sessionId)
+      if (turn.createdSession || !useReaderStore.getState().activeInterpretationSessionId) {
+        setActiveInterpretationSessionId(turn.sessionId)
       }
       const request = {
         bookId,
@@ -990,6 +904,7 @@ export function App() {
         answer,
         answerSource: savedAnswerSource,
         kind,
+        mode,
       }
       const saved = isTauriRuntime()
         ? await saveInterpretation(request)
@@ -1002,11 +917,7 @@ export function App() {
       if (version !== undefined && !isCurrentRequest(version)) {
         return
       }
-      if (kind === "interpretation") {
-        setInterpretationSessionId(saved.sessionId)
-      } else if (kind === "spark") {
-        setActiveSparkSessionId(saved.sessionId)
-      }
+      setActiveInterpretationSessionId(saved.sessionId)
       addInterpretationHistory(saved)
       if (isTauriRuntime()) {
         refreshKnowledge(bookId)
@@ -1048,36 +959,6 @@ export function App() {
       focusChunkIds: focusChunkIds(),
       indexedChunks,
       parsedChunks,
-    })
-  }
-
-  function findSparkThreadForSelection() {
-    const normalizedSelection = normalizeSelectionForSpark(selectionText)
-    if (!normalizedSelection) {
-      return null
-    }
-    const selectionPage = selectionAnchor?.pageIndex ?? currentPage - 1
-    return (
-      interpretationHistory
-        .filter((item) => {
-          const kind = item.kind ?? "interpretation"
-          return kind === "spark" || kind === "note"
-        })
-        .filter((item) => normalizeSelectionForSpark(item.selectionText) === normalizedSelection)
-        .filter((item) => {
-          if (item.pageIndex === selectionPage || item.pageIndexes.includes(selectionPage)) {
-            return true
-          }
-          return item.pageIndex === null || item.pageIndex === undefined
-        })
-        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0] ?? null
-    )
-  }
-
-  function sparkSessionHasAiTurn(sessionId: string) {
-    return interpretationHistory.some((item) => {
-      const kind = item.kind ?? "interpretation"
-      return kind === "spark" && (item.sessionId || item.id) === sessionId
     })
   }
 
@@ -1201,9 +1082,11 @@ export function App() {
     setInterpretation(restored.interpretation)
     setAnswerSource(item.answerSource ?? "llm")
     setFollowUps(restored.followUps)
-    if ((item.kind ?? "interpretation") === "interpretation") {
-      setInterpretationSessionId(item.sessionId || item.id)
-    }
+    setActiveInterpretationSessionId(item.sessionId || item.id)
+    // 优先用 mode 恢复轻重（plain=轻量）；旧记录无 mode 时回退到 kind==="spark"。
+    setCurrentThreadLightweight(lightweightFromSavedInterpretation(item))
+    setCurrentThreadError("")
+    setWorkbenchTab("current")
     setPhase("reading")
   }
 
@@ -1227,17 +1110,11 @@ export function App() {
     } else {
       handleOpenInterpretation(item)
     }
-    const sessionId = item.sessionId || item.id
-    const hasAiSparkTurn = sparkSessionHasAiTurn(sessionId)
-    setActiveSparkSessionId(sessionId)
-    setSparkMode(hasAiSparkTurn ? "spark" : (item.kind ?? "interpretation") === "note" ? "note" : "spark")
-    setSparkDraft((item.kind ?? "interpretation") === "note" ? item.answer : "")
-    if (!hasAiSparkTurn) {
-      setInterpretation("")
-      setFollowUps([])
-      setAnswerSource("llm")
-    }
-    setSparkError("")
+    setActiveInterpretationSessionId(item.sessionId || item.id)
+    // 优先用 mode 恢复轻重（plain=轻量）；旧记录无 mode 时回退到 kind==="spark"。
+    setCurrentThreadLightweight(lightweightFromSavedInterpretation(item))
+    setCurrentThreadError("")
+    setWorkbenchTab("current")
   }
 
   async function handleDeleteHighlight(highlightId: string) {
@@ -1456,6 +1333,32 @@ export function App() {
     }
   }
 
+  async function persistAgentTaskCards(
+    targetBookId: string,
+    taskId: string,
+    requests: Omit<UpsertKnowledgeCardRequest, "bookId">[],
+  ) {
+    if (!targetBookId || !isTauriRuntime()) {
+      return
+    }
+    try {
+      for (const request of requests) {
+        await upsertKnowledgeCard({ ...request, bookId: targetBookId })
+      }
+      refreshKnowledge(targetBookId)
+    } catch (error) {
+      const message = normalizeCommandError(error).message
+      const currentTask = useReaderStore.getState().agentTasks.find((task) => task.id === taskId)
+      if (currentTask) {
+        upsertAgentTask({
+          ...currentTask,
+          status: "error",
+          errorMessage: `任务产物保存失败：${message}`,
+        })
+      }
+    }
+  }
+
   const citationChunkIds = [
     ...new Set([
       ...parsedChunks.map((chunk) => chunk.chunkId),
@@ -1463,14 +1366,12 @@ export function App() {
     ]),
   ]
 
-  const activeSparkItems = activeSparkSessionId
+  const activeThreadItems = activeInterpretationSessionId
     ? interpretationHistory
-        .filter((item) => {
-          const kind = item.kind ?? "interpretation"
-          return (kind === "spark" || kind === "note") && (item.sessionId || item.id) === activeSparkSessionId
-        })
+        .filter((item) => (item.sessionId || item.id) === activeInterpretationSessionId)
         .sort((left, right) => left.turnIndex - right.turnIndex || left.createdAt.localeCompare(right.createdAt))
     : []
+  const runningTaskCount = agentTasks.filter((task) => task.status === "queued" || task.status === "running").length
 
   return (
     <ReaderShell
@@ -1495,13 +1396,13 @@ export function App() {
       tldrLoading={tldrLoading}
       tldrError={tldrError}
       tldrLlmReady={tldrLlmReady}
-      sparkPanelOpen={Boolean(activeSparkSessionId)}
-      sparkMode={sparkMode}
-      sparkNoteDraft={sparkDraft}
-      sparkQuestion={sparkQuestion}
-      sparkError={sparkError}
-      sparkLoading={Boolean(activeSparkSessionId) && (phase === "planning" || phase === "retrieving" || phase === "streaming")}
-      sparkNoteItems={activeSparkItems}
+      workbenchTab={workbenchTab}
+      workbenchRunningTaskCount={runningTaskCount}
+      currentThreadLightweight={currentThreadLightweight}
+      currentNoteDraft={currentNoteDraft}
+      currentNoteSaving={currentNoteSaving}
+      currentThreadError={currentThreadError}
+      agentTasks={agentTasks}
       highlights={highlights}
       interpretationHistory={interpretationHistory}
       knowledgeCards={knowledgeCards}
@@ -1540,17 +1441,15 @@ export function App() {
       onActiveChunk={setActiveChunk}
       onChunkFocus={handleChunkFocus}
       onPhaseChange={setPhase}
-      onDeepInterpret={() => runLocalInterpretation("deep")}
-      onPlainExplain={() => runLocalInterpretation("plain")}
-      onApplyInterpret={() => runLocalInterpretation("apply")}
+      onDeepInterpret={() => runLocalInterpretation("deep", false)}
+      onPlainExplain={() => runLocalInterpretation("plain", true)}
       onQuestionSubmit={handleQuestionSubmit}
-      onOpenSpark={handleOpenSpark}
-      onSparkModeChange={setSparkMode}
-      onSparkQuestionChange={setSparkQuestion}
-      onSparkNoteChange={setSparkDraft}
-      onSparkAsk={() => void handleSparkAsk()}
-      onSparkSaveNote={() => void handleSparkSaveNote()}
-      onCloseSpark={handleCloseSpark}
+      onWorkbenchTabChange={setWorkbenchTab}
+      onCurrentThreadLightweightChange={handleCurrentThreadLightweightChange}
+      onCurrentNoteChange={setCurrentNoteDraft}
+      onCurrentNoteSave={() => void handleSaveCurrentNote()}
+      onRunAgentTask={(kind, prompt) => void handleRunAgentTask(kind, prompt)}
+      onStopAgentTask={handleStopAgentTask}
       onGenerateTldr={() => void ensureTldr(bookId, { manual: true })}
       onRegenerateTldr={() => void ensureTldr(bookId, { force: true, manual: true })}
       onSaveHighlight={handleSaveHighlight}
@@ -1572,15 +1471,16 @@ export function App() {
       onRejectKnowledgeCard={(cardId) => void handleRejectKnowledgeCard(cardId)}
       onDeleteKnowledgeCard={(cardId) => void handleDeleteKnowledgeCard(cardId)}
       onSaveKnowledgeCard={(request) => void handleSaveKnowledgeCard(request)}
-      onRegenerate={() => runLocalInterpretation("deep")}
+      onRegenerate={() =>
+        runLocalInterpretation(
+          currentThreadLightweight ? "plain" : "deep",
+          currentThreadLightweight,
+        )
+      }
       onStop={handleStop}
       onOpenSampleBook={handleOpenSampleBook}
     />
   )
-}
-
-function normalizeSelectionForSpark(value: string) {
-  return value.replace(/\s+/g, " ").trim()
 }
 
 function downloadMarkdownFile(filename: string, markdown: string) {

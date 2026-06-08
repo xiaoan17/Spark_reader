@@ -29,6 +29,70 @@ export function evidenceLabel(item: EvidencePreview, allEvidence: EvidencePrevie
   return `相关段落${suffix}`
 }
 
+/**
+ * Differentiated label for a retrieval-phase evidence chip: prefer the source's
+ * own title (chapter/section / planned sub-query), then a page number, and only
+ * fall back to a generic "第 N 段" so the agentic process feels alive rather than
+ * a row of identical spinners (UI-UX §3.3, BRAND §10 原则 5).
+ */
+export function retrievalEvidenceLabel(
+  item: { title?: string | null; pageIndex?: number | null },
+  index = 0,
+): string {
+  const title = (item.title ?? "").replace(/\s+/g, " ").trim()
+  const looksLikeRawId = /^Chunk\s/i.test(title) || isNamespacedChunkId(title)
+  if (title && title !== "当前选区" && !looksLikeRawId) {
+    return summarizeQuote(title, 18)
+  }
+  if (title === "当前选区") {
+    return title
+  }
+  if (item.pageIndex !== null && item.pageIndex !== undefined) {
+    return `第 ${item.pageIndex + 1} 页`
+  }
+  return `第 ${index + 1} 段`
+}
+
+/**
+ * Human-facing label for a knowledge-card evidence chunk, e.g. "第 3 页 · 复利来自时间…".
+ * Keeps the internal `chunkId` out of the UI surface (BRAND §7 "安静、可信"): the raw
+ * id stays available only via tooltip/校对 folds. Falls back gracefully when page or
+ * quote is missing.
+ */
+export function knowledgeEvidenceLabel(item: {
+  pageIndex?: number | null
+  quote?: string | null
+}): string {
+  const pageLabel =
+    item.pageIndex === null || item.pageIndex === undefined
+      ? "未知页"
+      : `第 ${item.pageIndex + 1} 页`
+  const snippet = summarizeQuote(item.quote)
+  return snippet ? `${pageLabel} · ${snippet}` : `${pageLabel} · 原文片段`
+}
+
+/** Trim a quote into a compact, single-line snippet for inline labels. */
+export function summarizeQuote(quote?: string | null, maxLength = 14): string {
+  const normalized = (quote ?? "").replace(/\s+/g, " ").trim()
+  if (!normalized) {
+    return ""
+  }
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}…` : normalized
+}
+
+/**
+ * Human-facing label derived from a bare chunk id (when no page/quote object is
+ * available, e.g. graph edges only carry `evidenceChunkIds`). Surfaces the page
+ * number parsed from the id, never the id itself.
+ */
+export function chunkIdEvidenceLabel(chunkId: string): string {
+  const pageMatch = /(?:^|-)p(\d+)-/i.exec(chunkId)
+  if (pageMatch) {
+    return `第 ${Number(pageMatch[1])} 页 · 原文证据`
+  }
+  return "原文证据"
+}
+
 export function chunkIdsInCitation(value: string) {
   return value
     .split(/[\s,，;；、|]+/)

@@ -172,6 +172,7 @@ export async function saveBrowserInterpretation(
     answer: request.answer,
     answerSource: request.answerSource ?? "llm",
     kind,
+    mode: request.mode ?? null,
     evidenceChunkSnapshots: request.evidenceChunkSnapshots ?? [],
     createdAt: now,
   }

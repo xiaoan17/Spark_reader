@@ -71,9 +71,7 @@ export type ConvertedTextReaderProps = {
   onCopySelection: () => void
   onExplain: () => void
   onPlainExplain: () => void
-  onApplyInterpret?: () => void
   onAskToggle: () => void
-  onSpark?: () => void
   onOpenSparkItem?: (item: SavedInterpretation) => void
   onQuestionChange: (question: string) => void
   onQuestionSubmit: () => void
@@ -114,9 +112,7 @@ export function ConvertedTextReader({
   onCopySelection,
   onExplain,
   onPlainExplain,
-  onApplyInterpret = () => undefined,
   onAskToggle,
-  onSpark = () => undefined,
   onOpenSparkItem,
   onQuestionChange,
   onQuestionSubmit,
@@ -632,8 +628,6 @@ export function ConvertedTextReader({
                 onExplain={onExplain}
                 onHighlight={onHighlight}
                 onPlainExplain={onPlainExplain}
-                onApplyInterpret={onApplyInterpret}
-                onSpark={onSpark}
                 onQuestionChange={onQuestionChange}
                 onQuestionSubmit={onQuestionSubmit}
               />

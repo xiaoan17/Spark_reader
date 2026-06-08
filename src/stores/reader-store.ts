@@ -1,5 +1,6 @@
 import { create } from "zustand"
 import type { NormalizedPageRect } from "@/core/coordinates"
+import type { AgentTask } from "@/core/agent-task"
 
 export type ReaderPhase = "empty" | "reading" | "planning" | "retrieving" | "streaming" | "error"
 
@@ -46,10 +47,11 @@ export type FollowUpTurn = {
   answer: string
 }
 
-export type SparkMode = "spark" | "note"
-
 export type AnswerSource = "llm" | "local_fallback"
 export type InterpretationKind = "interpretation" | "spark" | "note"
+
+export type InterpretMode = "deep" | "plain" | "apply"
+export type WorkbenchTab = "current" | "tasks"
 
 export type DocumentTldrState = {
   text: string
@@ -81,6 +83,8 @@ export type SavedInterpretation = {
   answer: string
   answerSource?: AnswerSource
   kind?: InterpretationKind
+  /** 解读模式（deep/plain/apply），与 kind 正交；旧记录为 null/缺失。 */
+  mode?: InterpretMode | null
   evidenceChunkSnapshots?: EvidenceChunkSnapshot[]
   createdAt: string
 }
@@ -281,7 +285,13 @@ type ReaderState = {
   answerSource: AnswerSource
   interpretationError: string
   followUps: FollowUpTurn[]
-  interpretationSessionId: string
+  activeInterpretationSessionId: string
+  workbenchTab: WorkbenchTab
+  currentThreadLightweight: boolean
+  currentNoteDraft: string
+  currentNoteSaving: boolean
+  currentThreadError: string
+  agentTasks: AgentTask[]
   highlights: SavedHighlight[]
   interpretationHistory: SavedInterpretation[]
   knowledgeCards: KnowledgeCard[]
@@ -298,11 +308,6 @@ type ReaderState = {
   tldrError: string
   tldrDismissed: boolean
   tldrLlmReady: boolean
-  activeSparkSessionId: string
-  sparkMode: SparkMode
-  sparkDraft: string
-  sparkQuestion: string
-  sparkError: string
   parsedPages: ParsedPage[]
   parsedChunks: ParsedChunk[]
   parsedText: string
@@ -344,7 +349,14 @@ type ReaderState = {
   setInterpretation: (interpretation: string) => void
   setAnswerSource: (answerSource: AnswerSource) => void
   setInterpretationError: (message: string) => void
-  setInterpretationSessionId: (sessionId: string) => void
+  setActiveInterpretationSessionId: (sessionId: string) => void
+  setWorkbenchTab: (tab: WorkbenchTab) => void
+  setCurrentThreadLightweight: (lightweight: boolean) => void
+  setCurrentNoteDraft: (draft: string) => void
+  setCurrentNoteSaving: (saving: boolean) => void
+  setCurrentThreadError: (message: string) => void
+  setAgentTasks: (tasks: AgentTask[]) => void
+  upsertAgentTask: (task: AgentTask) => void
   setHighlights: (highlights: SavedHighlight[]) => void
   setInterpretationHistory: (history: SavedInterpretation[]) => void
   setKnowledgeCards: (cards: KnowledgeCard[]) => void
@@ -362,11 +374,6 @@ type ReaderState = {
   setTldrError: (message: string) => void
   setTldrDismissed: (dismissed: boolean) => void
   setTldrLlmReady: (ready: boolean) => void
-  setActiveSparkSessionId: (sessionId: string) => void
-  setSparkMode: (mode: SparkMode) => void
-  setSparkDraft: (draft: string) => void
-  setSparkQuestion: (question: string) => void
-  setSparkError: (message: string) => void
   setFollowUps: (followUps: FollowUpTurn[]) => void
   addInterpretationHistory: (item: SavedInterpretation) => void
   addHighlight: (highlight: SavedHighlight) => void
@@ -395,7 +402,13 @@ export const useReaderStore = create<ReaderState>((set) => ({
   answerSource: "llm",
   interpretationError: "",
   followUps: [],
-  interpretationSessionId: "",
+  activeInterpretationSessionId: "",
+  workbenchTab: "current",
+  currentThreadLightweight: false,
+  currentNoteDraft: "",
+  currentNoteSaving: false,
+  currentThreadError: "",
+  agentTasks: [],
   highlights: [],
   interpretationHistory: [],
   knowledgeCards: [],
@@ -412,11 +425,6 @@ export const useReaderStore = create<ReaderState>((set) => ({
   tldrError: "",
   tldrDismissed: false,
   tldrLlmReady: true,
-  activeSparkSessionId: "",
-  sparkMode: "spark",
-  sparkDraft: "",
-  sparkQuestion: "",
-  sparkError: "",
   parsedPages: [],
   parsedChunks: [],
   parsedText: "",
@@ -444,7 +452,13 @@ export const useReaderStore = create<ReaderState>((set) => ({
       answerSource: "llm",
       interpretationError: "",
       followUps: [],
-      interpretationSessionId: "",
+      activeInterpretationSessionId: "",
+      workbenchTab: "current",
+      currentThreadLightweight: false,
+      currentNoteDraft: "",
+      currentNoteSaving: false,
+      currentThreadError: "",
+      agentTasks: [],
       highlights: [],
       interpretationHistory: [],
       knowledgeCards: [],
@@ -461,11 +475,6 @@ export const useReaderStore = create<ReaderState>((set) => ({
       tldrError: "",
       tldrDismissed: false,
       tldrLlmReady: true,
-      activeSparkSessionId: "",
-      sparkMode: "spark",
-      sparkDraft: "",
-      sparkQuestion: "",
-      sparkError: "",
       parsedPages: [],
       parsedChunks: [],
       parsedText: "",
@@ -535,12 +544,11 @@ export const useReaderStore = create<ReaderState>((set) => ({
       answerSource: "llm",
       interpretationError: "",
       followUps: [],
-      interpretationSessionId: "",
+      activeInterpretationSessionId: "",
       activeChunkId: "",
-      activeSparkSessionId: "",
-      sparkDraft: "",
-      sparkQuestion: "",
-      sparkError: "",
+      currentNoteDraft: "",
+      currentThreadError: "",
+      currentThreadLightweight: false,
       phase: "reading",
     }),
   setVisiblePage: (currentPage) => set({ currentPage }),
@@ -556,12 +564,12 @@ export const useReaderStore = create<ReaderState>((set) => ({
       answerSource: "llm",
       interpretationError: "",
       followUps: [],
-      interpretationSessionId: "",
+      activeInterpretationSessionId: "",
       activeChunkId: "",
-      activeSparkSessionId: "",
-      sparkDraft: "",
-      sparkQuestion: "",
-      sparkError: "",
+      workbenchTab: "current",
+      currentNoteDraft: "",
+      currentThreadError: "",
+      currentThreadLightweight: false,
       phase: "reading",
     }),
   setActiveChunk: (activeChunkId) => set({ activeChunkId }),
@@ -587,7 +595,7 @@ export const useReaderStore = create<ReaderState>((set) => ({
             answerSource: "llm",
             interpretationError: "",
             followUps: [],
-            interpretationSessionId: "",
+            activeInterpretationSessionId: "",
           }),
       phase: "reading",
     }),
@@ -604,7 +612,21 @@ export const useReaderStore = create<ReaderState>((set) => ({
       interpretationError: answerSource === "llm" ? "" : state.interpretationError,
     })),
   setInterpretationError: (interpretationError) => set({ interpretationError }),
-  setInterpretationSessionId: (interpretationSessionId) => set({ interpretationSessionId }),
+  setActiveInterpretationSessionId: (activeInterpretationSessionId) =>
+    set({ activeInterpretationSessionId }),
+  setWorkbenchTab: (workbenchTab) => set({ workbenchTab }),
+  setCurrentThreadLightweight: (currentThreadLightweight) => set({ currentThreadLightweight }),
+  setCurrentNoteDraft: (currentNoteDraft) => set({ currentNoteDraft }),
+  setCurrentNoteSaving: (currentNoteSaving) => set({ currentNoteSaving }),
+  setCurrentThreadError: (currentThreadError) => set({ currentThreadError }),
+  setAgentTasks: (agentTasks) => set({ agentTasks }),
+  upsertAgentTask: (task) =>
+    set((state) => ({
+      agentTasks: [
+        task,
+        ...state.agentTasks.filter((candidate) => candidate.id !== task.id),
+      ].sort((left, right) => right.startedAt.localeCompare(left.startedAt)),
+    })),
   setHighlights: (highlights) => set({ highlights }),
   setInterpretationHistory: (interpretationHistory) => set({ interpretationHistory }),
   setKnowledgeCards: (knowledgeCards) => set({ knowledgeCards, knowledgeError: "", knowledgeLoading: false }),
@@ -641,11 +663,6 @@ export const useReaderStore = create<ReaderState>((set) => ({
   setTldrError: (tldrError) => set({ tldrError, tldrLoading: false }),
   setTldrDismissed: (tldrDismissed) => set({ tldrDismissed }),
   setTldrLlmReady: (tldrLlmReady) => set({ tldrLlmReady }),
-  setActiveSparkSessionId: (activeSparkSessionId) => set({ activeSparkSessionId }),
-  setSparkMode: (sparkMode) => set({ sparkMode }),
-  setSparkDraft: (sparkDraft) => set({ sparkDraft }),
-  setSparkQuestion: (sparkQuestion) => set({ sparkQuestion }),
-  setSparkError: (sparkError) => set({ sparkError }),
   setFollowUps: (followUps) => set({ followUps }),
   addInterpretationHistory: (item) =>
     set((state) => ({
@@ -688,12 +705,11 @@ export const useReaderStore = create<ReaderState>((set) => ({
       answerSource: "llm",
       interpretationError: "",
       followUps: [],
-      interpretationSessionId: "",
+      activeInterpretationSessionId: "",
       activeChunkId: "",
-      activeSparkSessionId: "",
-      sparkDraft: "",
-      sparkQuestion: "",
-      sparkError: "",
+      currentNoteDraft: "",
+      currentThreadError: "",
+      currentThreadLightweight: false,
       phase: "reading",
     }),
   clearSelection: () =>
@@ -707,12 +723,11 @@ export const useReaderStore = create<ReaderState>((set) => ({
       answerSource: "llm",
       interpretationError: "",
       followUps: [],
-      interpretationSessionId: "",
+      activeInterpretationSessionId: "",
       activeChunkId: "",
-      activeSparkSessionId: "",
-      sparkDraft: "",
-      sparkQuestion: "",
-      sparkError: "",
+      currentNoteDraft: "",
+      currentThreadError: "",
+      currentThreadLightweight: false,
       phase: "reading",
     }),
 }))

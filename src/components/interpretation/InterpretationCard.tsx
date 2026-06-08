@@ -2,19 +2,19 @@ import {
   AlertCircle,
   ChevronDown,
   Copy,
+  FileSearch,
   KeyRound,
   RefreshCcw,
   Save,
   Square,
   MessageSquareText,
 } from "lucide-react"
+import { useEffect, useState, type CSSProperties } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import {
-  MarkdownContent,
-  renderMarkdownTextWithCitations,
-} from "@/components/markdown/MarkdownContent"
+import { MarkdownContent } from "@/components/markdown/MarkdownContent"
+import { renderMarkdownTextWithCitations } from "@/components/markdown/markdown-citations"
 import { shouldSubmitTextarea } from "@/components/reader/textarea-submit"
 import type {
   AgentTraceStep,
@@ -30,6 +30,7 @@ import {
   chunkIdsInCitation,
   evidenceLabel,
   internalCitationPattern,
+  retrievalEvidenceLabel,
   sanitizeInternalReferenceText,
 } from "@/core/citation-display"
 
@@ -51,6 +52,8 @@ type InterpretationCardProps = {
   onQuestionSubmit?: () => void
   onCopy?: () => void
   onSave?: () => void
+  saveLabel?: string
+  saveDisabled?: boolean
   onCitationClick?: (chunkId: string) => void
   onRegenerate?: () => void
   onStop?: () => void
@@ -77,6 +80,8 @@ export function InterpretationCard({
   onQuestionSubmit,
   onCopy,
   onSave,
+  saveLabel = "保存标记",
+  saveDisabled,
   onCitationClick,
   onRegenerate,
   onStop,
@@ -84,6 +89,14 @@ export function InterpretationCard({
   runtimeHint,
   className,
 }: InterpretationCardProps) {
+  const [stopping, setStopping] = useState(false)
+  const streaming = phase === "streaming"
+  useEffect(() => {
+    if (!streaming) {
+      setStopping(false)
+    }
+  }, [streaming])
+
   return (
     <Card className={cn("overflow-hidden", className)}>
       <CardHeader className="border-b bg-muted/30">
@@ -94,9 +107,18 @@ export function InterpretationCard({
               {selectionText || "尚未选择文本"}
             </blockquote>
           </div>
-          {phase === "streaming" ? (
-            <Button size="icon" variant="ghost" aria-label="停止生成" onClick={onStop}>
-              <Square className="h-4 w-4" />
+          {streaming ? (
+            <Button
+              size="icon"
+              variant="ghost"
+              aria-label={stopping ? "停止中" : "停止生成"}
+              disabled={stopping}
+              onClick={() => {
+                setStopping(true)
+                onStop?.()
+              }}
+            >
+              {stopping ? <RefreshCcw className="h-4 w-4 animate-spin" /> : <Square className="h-4 w-4" />}
             </Button>
           ) : null}
         </div>
@@ -129,6 +151,11 @@ export function InterpretationCard({
               value={question}
               onChange={(event) => onQuestionChange?.(event.target.value)}
               onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault()
+                  onAskToggle?.()
+                  return
+                }
                 if (shouldSubmitTextarea(event)) {
                   event.preventDefault()
                   onQuestionSubmit?.()
@@ -149,7 +176,13 @@ export function InterpretationCard({
             <Button size="icon" variant="ghost" aria-label="复制解读" onClick={onCopy} disabled={!selectionText}>
               <Copy className="h-4 w-4" />
             </Button>
-            <Button size="icon" variant="ghost" aria-label="保存标记" onClick={onSave} disabled={!selectionText}>
+            <Button
+              size="icon"
+              variant="ghost"
+              aria-label={saveLabel}
+              onClick={onSave}
+              disabled={saveDisabled ?? !selectionText}
+            >
               <Save className="h-4 w-4" />
             </Button>
             <Button size="icon" variant="ghost" aria-label="重新生成解读" onClick={onRegenerate} disabled={!selectionText}>
@@ -205,19 +238,29 @@ function PhaseBody({
       evidence.length > 0
         ? evidence
         : [{ chunkId: "local-selection", title: "当前选区", pageIndex: 0 }]
+    const retrievalSteps = retrievalTraceItems(agentTrace, visibleEvidence)
     return (
       <div className="animate-fade-in space-y-3">
-        <p className="text-sm text-muted-foreground">正在书中查找相关证据</p>
-        <div className="flex flex-wrap gap-2">
-          {visibleEvidence.map((item, index) => (
-            <Badge
-              key={item.chunkId}
-              variant="secondary"
-              className="animate-slide-in-up"
+        <p className="text-sm text-muted-foreground">AI 正在书中查找</p>
+        <div className="space-y-2">
+          {retrievalSteps.map((step, index) => (
+            <div
+              key={`${step.label}-${index}`}
+              className="animate-slide-in-up rounded-md border bg-background px-3 py-2"
               style={staggerStyle(index)}
             >
-              {evidenceLabel(item, evidence)}
-            </Badge>
+              <div className="flex items-start gap-2 text-sm font-medium">
+                <FileSearch className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                <span>{step.label}</span>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {step.evidence.map((item, evidenceIndex) => (
+                  <Badge key={`${step.label}-${item.chunkId}`} variant="secondary">
+                    {retrievalEvidenceLabel(item, evidenceIndex)}
+                  </Badge>
+                ))}
+              </div>
+            </div>
           ))}
         </div>
       </div>
@@ -248,14 +291,13 @@ function PhaseBody({
         {evidence.length > 0 ? (
           <div className="flex flex-wrap gap-2">
             {evidence.map((item, index) => (
-              <button
+              <CitationPreviewButton
                 key={item.chunkId}
-                className="animate-slide-in-up rounded-md border bg-background px-2 py-1 text-xs transition-[background-color,box-shadow,transform] duration-interactive ease-reader hover:bg-muted hover:shadow-sm active:scale-[0.98]"
+                item={item}
+                label={evidenceLabel(item, evidence, index)}
                 style={staggerStyle(index)}
                 onClick={() => onCitationClick?.(item.chunkId)}
-              >
-                {evidenceLabel(item, evidence, index)}
-              </button>
+              />
             ))}
           </div>
         ) : null}
@@ -263,6 +305,9 @@ function PhaseBody({
           <div className="space-y-3 border-t pt-3">
             {followUps.map((turn, index) => (
               <div key={turn.id} className="animate-slide-in-up space-y-2" style={staggerStyle(index)}>
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Badge variant="secondary">追问 #{index + 1}</Badge>
+                </div>
                 <div className="rounded-md bg-accent px-3 py-2 text-accent-foreground">
                   {turn.question}
                 </div>
@@ -292,14 +337,13 @@ function PhaseBody({
           {evidence.length > 0 ? (
             <div className="mt-3 flex flex-wrap gap-2">
               {evidence.map((item, index) => (
-                <button
+                <CitationPreviewButton
                   key={item.chunkId}
-                  className="animate-slide-in-up rounded-md border bg-background px-2 py-1 text-xs transition-[background-color,box-shadow,transform] duration-interactive ease-reader hover:bg-muted hover:shadow-sm active:scale-[0.98]"
+                  item={item}
+                  label={evidenceLabel(item, evidence)}
                   style={staggerStyle(index)}
                   onClick={() => onCitationClick?.(item.chunkId)}
-                >
-                  {evidenceLabel(item, evidence)}
-                </button>
+                />
               ))}
             </div>
           ) : null}
@@ -315,7 +359,11 @@ function PhaseBody({
         </div>
       )
     }
-    return <p className="text-sm text-muted-foreground">在转换稿上框选一段文字，右侧会显示解读入口。</p>
+    return (
+      <div className="rounded-md border bg-muted/20 px-3 py-4 text-sm leading-6 text-muted-foreground">
+        在文中框选一段，Spark 会显示深度解读、证据和引用回跳。
+      </div>
+    )
   }
 
   if (phase === "streaming" || phase === "reading") {
@@ -337,19 +385,26 @@ function PhaseBody({
 
   if (phase === "error") {
     return (
-      <div className="flex animate-fade-in gap-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-950">
+      <div className="flex animate-fade-in gap-3 rounded-md border border-danger/30 bg-danger/10 p-3 text-sm text-danger-foreground">
         <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
         <div>
           <p className="font-medium">解读失败</p>
-          <p className="mt-1 text-red-900/80">
+          <p className="mt-1 text-danger-foreground/85">
             {errorMessage || "完整 LLM 解读暂时不可用，已保留当前选区和检索证据。"}
           </p>
+          {evidence.length > 0 ? (
+            <p className="mt-2 text-xs text-danger-foreground/75">已检索证据：{evidence.length} 段</p>
+          ) : null}
         </div>
       </div>
     )
   }
 
-  return <p className="text-sm text-muted-foreground">选择一段文字后开始解读。</p>
+  return (
+    <div className="rounded-md border bg-muted/20 px-3 py-4 text-sm leading-6 text-muted-foreground">
+      框选一段试试；Spark 会先找证据，再给出可回跳的解释。
+    </div>
+  )
 }
 
 function FollowUpList({
@@ -367,6 +422,9 @@ function FollowUpList({
     <div className="space-y-3 border-t pt-3 text-sm leading-7">
       {followUps.map((turn, index) => (
         <div key={turn.id} className="animate-slide-in-up space-y-2" style={staggerStyle(index)}>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Badge variant="secondary">追问 #{index + 1}</Badge>
+          </div>
           <div className="rounded-md bg-accent px-3 py-2 text-accent-foreground">
             {turn.question}
           </div>
@@ -383,6 +441,65 @@ function FollowUpList({
       ))}
     </div>
   )
+}
+
+function CitationPreviewButton({
+  item,
+  label,
+  style,
+  onClick,
+}: {
+  item: EvidencePreview
+  label: string
+  style?: CSSProperties
+  onClick?: () => void
+}) {
+  const preview = sanitizeInternalReferenceText(item.title)
+    .replace(/[A-Za-z0-9]{6,}-p\d+-c\d+-[A-Za-z0-9]{6,}/g, "引用")
+    .slice(0, 140)
+  return (
+    <span className="group relative inline-flex">
+      <button
+        type="button"
+        className="animate-slide-in-up rounded-md border bg-background px-2 py-1 text-xs transition-[background-color,box-shadow,transform] duration-interactive ease-reader hover:bg-muted hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-ring active:scale-[0.98]"
+        style={style}
+        onClick={onClick}
+        aria-label={`${label}，点击回到原文`}
+      >
+        {label}
+      </button>
+      <span className="pointer-events-none absolute bottom-full left-0 z-20 mb-2 hidden w-64 rounded-md border bg-popover px-3 py-2 text-left text-xs leading-5 text-popover-foreground shadow-lg group-focus-within:block group-hover:block">
+        <span className="block font-medium">第 {item.pageIndex + 1} 页</span>
+        <span className="mt-1 block text-muted-foreground">{preview || "原文证据预览"}</span>
+      </span>
+    </span>
+  )
+}
+
+function retrievalTraceItems(
+  agentTrace: AgentTraceStep[],
+  fallbackEvidence: EvidencePreview[],
+) {
+  const retrievalSteps = agentTrace.filter((step) => step.phase === "plan" || step.phase === "retrieve")
+  if (retrievalSteps.length === 0) {
+    return [
+      {
+        label: "当前选区的上下文和相邻证据",
+        evidence: fallbackEvidence,
+      },
+    ]
+  }
+
+  return retrievalSteps.slice(0, 4).map((step, index) => {
+    const stepEvidence = fallbackEvidence.filter((item) => step.chunkIds.includes(item.chunkId))
+    return {
+      label:
+        traceQueryLabel(step.query) ||
+        sanitizeInternalReferenceText(step.note).slice(0, 64) ||
+        `检索子问题 ${index + 1}`,
+      evidence: stepEvidence.length > 0 ? stepEvidence : fallbackEvidence.slice(0, 3),
+    }
+  })
 }
 
 type InterpretationTrustState = {
@@ -447,9 +564,9 @@ function interpretationTrustState(
 function InterpretationTrustBadge({ trust }: { trust: InterpretationTrustState }) {
   const className =
     trust.tone === "ok"
-      ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+      ? "border-success/30 bg-success/10 text-success-foreground"
       : trust.tone === "warn"
-        ? "border-amber-300 bg-amber-50 text-amber-950"
+        ? "border-warning/40 bg-warning/10 text-warning-foreground"
         : "border-muted bg-muted/60 text-muted-foreground"
   return (
     <div className={`inline-flex flex-wrap items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs ${className}`}>
@@ -469,10 +586,10 @@ function LocalFallbackNotice({
   onOpenSettings?: () => void
 }) {
   return (
-    <div className="flex gap-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-6 text-amber-950">
-      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+    <div className="flex gap-3 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs leading-6 text-warning-foreground">
+      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
       <div className="space-y-1">
-        <Badge variant="secondary" className="bg-amber-100 text-amber-950">
+        <Badge variant="secondary" className="bg-warning/15 text-warning-foreground">
           本地模板兜底
         </Badge>
         <p>
@@ -483,7 +600,7 @@ function LocalFallbackNotice({
           <Button
             size="sm"
             variant="outline"
-            className="mt-1 h-7 border-amber-300 bg-amber-100 px-2 text-xs text-amber-950 hover:bg-amber-200"
+            className="mt-1 h-7 border-warning/40 bg-warning/15 px-2 text-xs text-warning-foreground hover:bg-warning/25"
             onClick={onOpenSettings}
           >
             <KeyRound className="mr-1.5 h-3.5 w-3.5" />

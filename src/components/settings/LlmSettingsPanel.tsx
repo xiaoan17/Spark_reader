@@ -576,7 +576,7 @@ export function LlmSettingsPanel({
           {message ? (
             <div className="flex gap-2 rounded-md bg-muted p-2 text-xs">
               {status === "ok" ? <CheckCircle2 className="h-4 w-4 text-primary" /> : null}
-              {status === "error" ? <XCircle className="h-4 w-4 text-red-600" /> : null}
+              {status === "error" ? <XCircle className="h-4 w-4 text-danger" /> : null}
               <span>{message}</span>
             </div>
           ) : null}
@@ -635,7 +635,7 @@ export function LlmSettingsPanel({
           {mineruMessage ? (
             <div className="flex gap-2 rounded-md bg-muted p-2 text-xs">
               {mineruStatus === "ok" ? <CheckCircle2 className="h-4 w-4 text-primary" /> : null}
-              {mineruStatus === "error" ? <XCircle className="h-4 w-4 text-red-600" /> : null}
+              {mineruStatus === "error" ? <XCircle className="h-4 w-4 text-danger" /> : null}
               <span>{mineruMessage}</span>
             </div>
           ) : null}
@@ -792,7 +792,7 @@ export function LlmSettingsPanel({
           {embeddingMessage ? (
             <div className="flex gap-2 rounded-md bg-muted p-2 text-xs">
               {embeddingStatus === "ok" ? <CheckCircle2 className="h-4 w-4 text-primary" /> : null}
-              {embeddingStatus === "error" ? <XCircle className="h-4 w-4 text-red-600" /> : null}
+              {embeddingStatus === "error" ? <XCircle className="h-4 w-4 text-danger" /> : null}
               <span>{embeddingMessage}</span>
             </div>
           ) : null}
@@ -819,7 +819,7 @@ export function LlmSettingsPanel({
             {selfCheckMessage ? (
               <div className="flex gap-2 rounded-md bg-muted p-2 text-xs">
                 {selfCheckStatus === "ok" ? <CheckCircle2 className="h-4 w-4 text-primary" /> : null}
-                {selfCheckStatus === "error" ? <XCircle className="h-4 w-4 text-red-600" /> : null}
+                {selfCheckStatus === "error" ? <XCircle className="h-4 w-4 text-danger" /> : null}
                 <span>{selfCheckMessage}</span>
               </div>
             ) : null}
@@ -835,7 +835,7 @@ export function LlmSettingsPanel({
                       {step.ok ? (
                         <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
                       ) : (
-                        <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-600" />
+                        <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-danger" />
                       )}
                       <div className="min-w-0">
                         <span className="font-medium">{selfCheckDisplayText(step.label)}</span>

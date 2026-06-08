@@ -4,7 +4,6 @@
 
 use super::*;
 
-
 #[derive(Debug, Deserialize)]
 pub struct SaveBookRequest {
     pub title: String,
@@ -317,6 +316,8 @@ pub struct SaveInterpretationRequest {
     #[serde(default)]
     pub kind: Option<InterpretationKind>,
     #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
     pub evidence_chunk_snapshots: Vec<EvidenceChunkSnapshot>,
 }
 
@@ -339,6 +340,7 @@ pub struct SavedInterpretation {
     pub answer: String,
     pub answer_source: AnswerSource,
     pub kind: InterpretationKind,
+    pub mode: Option<String>,
     pub evidence_chunk_snapshots: Vec<EvidenceChunkSnapshot>,
     pub created_at: String,
 }

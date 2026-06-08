@@ -479,6 +479,8 @@ export type SaveInterpretationRequest = {
   answer: string
   answerSource?: AnswerSource
   kind?: InterpretationKind
+  /** 解读模式（deep/plain/apply），与 kind 正交：完整记录用户解读意图。 */
+  mode?: InterpretMode
   evidenceChunkSnapshots?: {
     chunkId: string
     chunkIdVersion: number

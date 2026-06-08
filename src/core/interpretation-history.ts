@@ -32,9 +32,23 @@ export type InterpretationSessionSummary = SavedInterpretation & {
   lastCreatedAt: string
 }
 
+/**
+ * 从一条已保存解读恢复「轻重」状态。
+ * 优先用 mode(plain=轻量);旧记录无 mode 时回退到 kind==="spark"。
+ * 注意:UI 语义下 Spark=深度解读,但历史 kind 字面值 "spark" 仍指轻量(保留以兼容旧数据)。
+ */
+export function lightweightFromSavedInterpretation(
+  item: Pick<SavedInterpretation, "mode" | "kind">,
+): boolean {
+  if (item.mode) {
+    return item.mode === "plain"
+  }
+  return (item.kind ?? "interpretation") === "spark"
+}
+
 export function summarizeInterpretationSessions(items: SavedInterpretation[]): InterpretationSessionSummary[] {
   const sessions = new Map<string, SavedInterpretation[]>()
-  for (const item of items.filter((item) => (item.kind ?? "interpretation") === "interpretation")) {
+  for (const item of items) {
     const sessionId = item.sessionId || item.id
     const group = sessions.get(sessionId) ?? []
     group.push(item)
@@ -83,10 +97,11 @@ export function restoreTargetForSavedInterpretation(
   const pagesByIndex = new Map(pages.map((page) => [page.pageIndex, page]))
   const evidence = item.evidenceChunkIds.map((chunkId) => {
     const chunk = chunksById.get(chunkId)
+    const pageIndex = chunk?.pageIndex ?? item.pageIndexes[0] ?? 0
     return {
       chunkId,
-      title: `Chunk ${chunkId}`,
-      pageIndex: chunk?.pageIndex ?? item.pageIndexes[0] ?? 0,
+      title: `第 ${pageIndex + 1} 页`,
+      pageIndex,
     }
   })
   const firstEvidenceChunk = item.evidenceChunkIds

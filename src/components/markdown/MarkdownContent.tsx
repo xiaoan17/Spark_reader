@@ -17,14 +17,11 @@ import remarkMath from "remark-math"
 import { cn } from "@/lib/utils"
 import type { EvidencePreview } from "@/stores/reader-store"
 import {
-  chunkIdsInCitation,
-  citationLabelForChunkId,
   citationLabelMap,
-  internalCitationPattern,
-  sanitizeInternalReferenceText,
 } from "@/core/citation-display"
 import { markdownImageSrc } from "@/core/markdown-assets"
 import { normalizeWhitespace, resolveTextQuoteSelector } from "@/core/text-quote-selector"
+import { renderMarkdownTextWithCitations } from "./markdown-citations"
 
 type MarkdownContentProps = {
   content: string
@@ -83,6 +80,7 @@ function MarkdownContentBase({
       ? new Set(evidence.map((item) => item.chunkId))
       : undefined
   const citationLabels = citationLabelMap(evidence)
+  const citationEvidence = citationEvidenceMap(evidence)
   const source = allowRawHtml
     ? content.trim() || emptyText
     : sanitizeRawHtmlTags(content.trim() || emptyText)
@@ -103,6 +101,7 @@ function MarkdownContentBase({
         }
         components={markdownComponents({
           clickableCitations,
+          citationEvidence,
           citationLabels,
           headingAnchor,
           highlightState,
@@ -145,6 +144,10 @@ function shallowEvidenceEqual(left: EvidencePreview[] = [], right: EvidencePrevi
   )
 }
 
+function citationEvidenceMap(evidence: EvidencePreview[]) {
+  return new Map(evidence.map((item) => [item.chunkId, item]))
+}
+
 function shallowStringArrayEqual(left: string[] = [], right: string[] = []) {
   if (left === right) return true
   if (left.length !== right.length) return false
@@ -170,70 +173,16 @@ function shallowHighlightsEqual(
   })
 }
 
-export function renderMarkdownTextWithCitations(
-  text: string,
-  onCitationClick?: (chunkId: string) => void,
-  clickableCitations?: ReadonlySet<string>,
-  citationLabels?: ReadonlyMap<string, string>,
-) {
-  const sanitizedText = sanitizeInternalReferenceText(text, citationLabels)
-  internalCitationPattern.lastIndex = 0
-  if (!internalCitationPattern.test(text) && sanitizedText === text) {
-    internalCitationPattern.lastIndex = 0
-    return text
-  }
-  internalCitationPattern.lastIndex = 0
-
-  const nodes = []
-  let lastIndex = 0
-
-  for (const match of text.matchAll(internalCitationPattern)) {
-    const matchIndex = match.index ?? 0
-    const chunkIds = chunkIdsInCitation(match[1] ?? "").filter(
-      (chunkId) => !clickableCitations || clickableCitations.has(chunkId),
-    )
-    if (chunkIds.length === 0) {
-      continue
-    }
-    if (matchIndex > lastIndex) {
-      nodes.push(
-        <span key={`text-${lastIndex}`}>
-          {sanitizeInternalReferenceText(text.slice(lastIndex, matchIndex), citationLabels)}
-        </span>,
-      )
-    }
-    for (const chunkId of chunkIds) {
-      nodes.push(
-        <CitationButton
-          key={`${chunkId}-${matchIndex}-${nodes.length}`}
-          chunkId={chunkId}
-          label={citationLabelForChunkId(chunkId, citationLabels)}
-          onClick={onCitationClick}
-        />,
-      )
-    }
-    lastIndex = matchIndex + match[0].length
-  }
-
-  if (lastIndex < text.length) {
-    nodes.push(
-      <span key={`text-${lastIndex}`}>
-        {sanitizeInternalReferenceText(text.slice(lastIndex), citationLabels)}
-      </span>,
-    )
-  }
-
-  return nodes
-}
-
 function markdownComponents({
   clickableCitations,
+  citationEvidence,
   citationLabels,
   headingAnchor,
   highlightState,
   onCitationClick,
 }: {
   clickableCitations?: ReadonlySet<string>
+  citationEvidence?: ReadonlyMap<string, EvidencePreview>
   citationLabels?: ReadonlyMap<string, string>
   headingAnchor?: MarkdownHeadingAnchor | null
   highlightState?: MarkdownHighlightState
@@ -245,6 +194,7 @@ function markdownComponents({
       onCitationClick,
       clickableCitations,
       citationLabels,
+      citationEvidence,
       highlightState,
     )
 
@@ -423,6 +373,7 @@ function renderMarkdownChildrenWithCitations(
   onCitationClick?: (chunkId: string) => void,
   clickableCitations?: ReadonlySet<string>,
   citationLabels?: ReadonlyMap<string, string>,
+  citationEvidence?: ReadonlyMap<string, EvidencePreview>,
   highlightState?: MarkdownHighlightState,
 ): ReactNode {
   return Children.toArray(children).map((child, index) => {
@@ -432,6 +383,7 @@ function renderMarkdownChildrenWithCitations(
         onCitationClick,
         clickableCitations,
         citationLabels,
+        citationEvidence,
         highlightState,
         index,
       )
@@ -447,6 +399,7 @@ function renderMarkdownChildrenWithCitations(
           onCitationClick,
           clickableCitations,
           citationLabels,
+          citationEvidence,
           highlightState,
         ),
       })
@@ -509,6 +462,7 @@ function renderMarkdownTextWithHighlights(
   onCitationClick?: (chunkId: string) => void,
   clickableCitations?: ReadonlySet<string>,
   citationLabels?: ReadonlyMap<string, string>,
+  citationEvidence?: ReadonlyMap<string, EvidencePreview>,
   highlightState?: MarkdownHighlightState,
   keyPrefix = 0,
 ) {
@@ -519,6 +473,7 @@ function renderMarkdownTextWithHighlights(
       onCitationClick,
       clickableCitations,
       citationLabels,
+      citationEvidence,
     )
   }
 
@@ -528,6 +483,7 @@ function renderMarkdownTextWithHighlights(
       onCitationClick,
       clickableCitations,
       citationLabels,
+      citationEvidence,
     )
     if (!segment.highlightId) {
       return <span key={`text-${keyPrefix}-${index}`}>{rendered}</span>
@@ -715,26 +671,5 @@ function normalizeStandaloneDisplayMath(source: string) {
   return source.replace(
     /^([ \t]*)\$\$[ \t]*(\S[\s\S]*?\S|\S)[ \t]*\$\$[ \t]*$/gm,
     (_match, indent: string, formula: string) => `${indent}$$\n${formula}\n${indent}$$`,
-  )
-}
-
-function CitationButton({
-  chunkId,
-  label,
-  onClick,
-}: {
-  chunkId: string
-  label: string
-  onClick?: (chunkId: string) => void
-}) {
-  return (
-    <button
-      type="button"
-      className="mx-1 inline-flex translate-y-[-1px] rounded border bg-accent px-1.5 py-0.5 text-[11px] font-medium text-accent-foreground transition-[background-color,box-shadow,transform] duration-interactive ease-reader hover:bg-accent/80 hover:shadow-sm hover:ring-1 hover:ring-primary/25 active:scale-95"
-      onClick={() => onClick?.(chunkId)}
-      title={label}
-    >
-      {label}
-    </button>
   )
 }

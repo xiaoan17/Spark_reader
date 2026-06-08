@@ -219,7 +219,10 @@ function seedIndexedSelection() {
     answerSource: "llm",
     interpretationError: "",
     followUps: [],
-    interpretationSessionId: "",
+    activeInterpretationSessionId: "",
+    currentThreadLightweight: false,
+    currentNoteDraft: "",
+    currentThreadError: "",
     highlights: [],
     interpretationHistory: [],
     parsedPages: [

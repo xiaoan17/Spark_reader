@@ -73,7 +73,7 @@ export function ZoteroImportPanel({
         {message ? (
           <div
             className={`border-b px-5 py-2 text-sm ${
-              status === "error" ? "bg-red-50 text-red-950" : "bg-muted/50 text-muted-foreground"
+              status === "error" ? "bg-danger/10 text-danger-foreground" : "bg-muted/50 text-muted-foreground"
             }`}
           >
             {message}
