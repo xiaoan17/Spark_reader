@@ -1,4 +1,4 @@
-import { Highlighter, Zap } from "lucide-react"
+import { Highlighter, MessageSquare, Zap } from "lucide-react"
 import { forwardRef, type CSSProperties } from "react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -12,6 +12,7 @@ type SelectionToolbarProps = {
   disabled?: boolean
   onExplain?: () => void
   onPlainExplain?: () => void
+  onComment?: () => void
   onHighlight?: () => void
 }
 
@@ -23,6 +24,7 @@ export const SelectionToolbar = forwardRef<HTMLDivElement, SelectionToolbarProps
   disabled = false,
   onExplain,
   onPlainExplain,
+  onComment,
   onHighlight,
 }: SelectionToolbarProps, ref) {
   return (
@@ -30,7 +32,7 @@ export const SelectionToolbar = forwardRef<HTMLDivElement, SelectionToolbarProps
       ref={ref}
       data-testid="selection-toolbar"
       className={cn(
-        "w-fit rounded-lg border bg-card p-2 text-card-foreground shadow-lg transition-[opacity,transform,box-shadow,left,top] duration-subtle ease-reader will-change-transform",
+        "w-fit rounded-lg border bg-card p-2 text-card-foreground shadow-lg transition-[opacity,transform,box-shadow] duration-subtle ease-reader will-change-transform",
         visible
           ? "pointer-events-auto translate-y-0 scale-100 opacity-100"
           : "pointer-events-none -translate-y-1 scale-95 opacity-0",
@@ -53,10 +55,20 @@ export const SelectionToolbar = forwardRef<HTMLDivElement, SelectionToolbarProps
           size="sm"
           variant="ghost"
           disabled={disabled}
-          title="轻量解读：跳过检索，快速解释当前选区"
+          title="轻量解读：快速解释当前选区"
           onClick={onPlainExplain}
         >
           轻量
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={disabled}
+          title="批注：把你的 comment 保存为一个 Spark"
+          onClick={onComment}
+        >
+          <MessageSquare className="mr-1.5 h-4 w-4" />
+          批注
         </Button>
         {/* 次级常用：标记 */}
         <Button size="sm" variant="ghost" disabled={disabled} onClick={onHighlight}>

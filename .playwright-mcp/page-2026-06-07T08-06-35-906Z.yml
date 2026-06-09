@@ -1,0 +1,107 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - button "收起阅读侧栏" [ref=e6] [cursor=pointer]:
+        - img [ref=e7]
+      - generic [ref=e10]:
+        - generic [ref=e11]: 未导入书籍
+        - generic [ref=e12]:
+          - generic [ref=e13]: 等待导入
+          - generic [ref=e14]: 浏览器版
+          - generic "浏览器版不会读取本机 LLM provider" [ref=e15]: "AI: 本地兜底"
+    - navigation "阅读工具栏" [ref=e16]:
+      - button "导入" [ref=e17] [cursor=pointer]:
+        - img [ref=e18]
+        - text: 导入
+      - button "打开书架" [ref=e21] [cursor=pointer]:
+        - img [ref=e22]
+        - text: 书架
+      - generic [ref=e24]:
+        - button "转换稿" [disabled]:
+          - img
+          - text: 转换稿
+        - button "TLDR" [disabled]:
+          - img
+          - text: TLDR
+        - button "对照翻译" [disabled]:
+          - img
+          - text: 对照翻译
+        - button "知识体系" [disabled]:
+          - img
+          - text: 知识体系
+        - button "PDF" [disabled]:
+          - img
+          - text: PDF
+      - button "搜索" [ref=e25] [cursor=pointer]:
+        - img [ref=e26]
+      - button "主题" [ref=e29] [cursor=pointer]:
+        - img [ref=e30]
+      - button "设置" [ref=e36] [cursor=pointer]:
+        - img [ref=e37]
+  - generic [ref=e41]:
+    - generic [ref=e42]:
+      - generic [ref=e43]:
+        - generic [ref=e44]: 先看一次框选精读链路
+        - generic [ref=e45]: 不配置 key 也能先体验选区、证据和引用回跳。
+      - button "关闭" [ref=e46] [cursor=pointer]
+    - generic [ref=e47]:
+      - generic [ref=e48]:
+        - generic [ref=e49]: "1"
+        - generic [ref=e50]: 框选一段
+        - paragraph [ref=e51]: 示例书会预置一段选区，让你直接看到阅读焦点如何被固定。
+      - generic [ref=e52]:
+        - generic [ref=e53]: "2"
+        - generic [ref=e54]: 查看证据
+        - paragraph [ref=e55]: 每个关键判断都会带上可点击引用，点一下就能回到原文核对。
+      - generic [ref=e56]:
+        - generic [ref=e57]: "3"
+        - generic [ref=e58]: 再导入 PDF
+        - paragraph [ref=e59]: 熟悉链路后再选择本地 PDF、Zotero 文献或已有 MinerU 输出。
+    - generic [ref=e60]:
+      - paragraph [ref=e61]: 示例书使用本地兜底解读展示产品主流程；连接 LLM key 后，同一套选区和证据会进入完整多轮检索解读。
+      - generic [ref=e62]:
+        - button "导入自己的 PDF" [ref=e63] [cursor=pointer]:
+          - img [ref=e64]
+          - text: 导入自己的 PDF
+        - button "打开示例书" [ref=e67] [cursor=pointer]:
+          - img [ref=e68]
+          - text: 打开示例书
+  - main [ref=e70]:
+    - complementary [ref=e71]:
+      - generic [ref=e72]: 导入书籍后显示目录
+    - generic [ref=e74]:
+      - img [ref=e75]
+      - heading "先体验框选精读，或导入自己的 PDF" [level=1] [ref=e78]
+      - paragraph [ref=e79]: 示例书无需配置 key，会直接打开一段已转换文本；也可以选择 PDF，或将 PDF 拖到此处。
+      - generic [ref=e80]:
+        - button "打开示例书" [ref=e81] [cursor=pointer]:
+          - img [ref=e82]
+          - text: 打开示例书
+        - button "选择 PDF" [ref=e84] [cursor=pointer]:
+          - img [ref=e85]
+          - text: 选择 PDF
+        - button "查看引导" [ref=e88] [cursor=pointer]:
+          - img [ref=e89]
+          - text: 查看引导
+    - complementary [ref=e91]:
+      - generic [ref=e92]:
+        - generic [ref=e93]: 解读
+        - generic [ref=e94]: 可回跳引用
+      - generic [ref=e95]:
+        - generic [ref=e98]:
+          - heading "解读" [level=3] [ref=e99]
+          - blockquote [ref=e100]: 尚未选择文本
+        - generic [ref=e101]:
+          - paragraph [ref=e102]: 选择一段文字后开始解读。
+          - paragraph [ref=e103]: 浏览器版会使用已转换文本做本地兜底解读；完整 LLM 解读、云端向量检索、MinerU 云端解析和开发诊断请使用桌面版。
+          - generic [ref=e104]:
+            - button "继续追问" [disabled]:
+              - img
+              - text: 继续追问
+            - generic [ref=e105]:
+              - button "复制解读" [disabled]:
+                - img
+              - button "保存标记" [disabled]:
+                - img
+              - button "重新生成解读" [disabled]:
+                - img

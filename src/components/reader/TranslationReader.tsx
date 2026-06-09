@@ -83,6 +83,7 @@ export type TranslationReaderProps = {
   onCancel: () => void
   onExplain: () => void
   onPlainExplain: () => void
+  onComment?: () => void
   onOpenSparkItem?: (item: SavedInterpretation) => void
   onHighlight: () => void
   onTextSelection: (
@@ -113,6 +114,7 @@ export function TranslationReader({
   onCancel,
   onExplain,
   onPlainExplain,
+  onComment,
   onOpenSparkItem,
   onHighlight,
   onTextSelection,
@@ -774,7 +776,7 @@ export function TranslationReader({
                 </section>
                 <SelectionToolbarHost
                   present={shouldShowToolbarForPage}
-                  className="absolute z-20 max-w-[calc(100%-2rem)] animate-pop-in"
+                  className="absolute z-20 max-w-[calc(100%-2rem)]"
                   disabled={!selectionText.trim()}
                   suppressed={toolbarSuppressed}
                   style={
@@ -786,6 +788,7 @@ export function TranslationReader({
                   onExplain={onExplain}
                   onHighlight={onHighlight}
                   onPlainExplain={onPlainExplain}
+                  onComment={onComment}
                 />
               </article>
             )

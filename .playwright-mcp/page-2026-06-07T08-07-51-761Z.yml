@@ -1,0 +1,60 @@
+- generic [ref=e2]:
+  - generic [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e5]: 书架
+      - generic [ref=e6]: 2 本已转换图书
+    - generic [ref=e7]:
+      - button "刷新" [ref=e8] [cursor=pointer]:
+        - img [ref=e9]
+        - text: 刷新
+      - button "关闭" [ref=e14] [cursor=pointer]
+  - generic [ref=e16]:
+    - generic [ref=e17]:
+      - generic [ref=e18]:
+        - img
+        - textbox "搜索书名、解析器或标签" [ref=e19]
+      - generic "书架时间筛选" [ref=e20]:
+        - button "全部" [ref=e21] [cursor=pointer]
+        - button "今天" [ref=e22] [cursor=pointer]
+        - button "本周" [ref=e23] [cursor=pointer]
+        - button "本月及以前" [ref=e24] [cursor=pointer]
+    - region "本周" [ref=e26]:
+      - generic [ref=e27]:
+        - generic [ref=e28]: 本周
+        - generic [ref=e29]: 2 本
+      - generic [ref=e30]:
+        - article [ref=e31]:
+          - button "财富公式 163 页 mineru-layout 财富公式 120000 字 源 PDF 可校对 6/3" [ref=e32] [cursor=pointer]:
+            - generic [ref=e33]:
+              - generic [ref=e35]: 财富公式
+              - generic [ref=e37]:
+                - generic [ref=e38]: 163 页
+                - generic [ref=e39]: mineru-layout
+            - generic [ref=e40]:
+              - generic [ref=e41]: 财富公式
+              - generic [ref=e42]: 120000 字
+              - generic [ref=e43]:
+                - generic [ref=e44]: 源 PDF
+                - generic [ref=e45]: 可校对
+                - generic [ref=e46]: 6/3
+          - generic [ref=e47]:
+            - generic [ref=e48]: normalized-page-rects
+            - button "删除 财富公式" [ref=e49] [cursor=pointer]:
+              - img [ref=e50]
+        - article [ref=e53]:
+          - button "Retrieval-Augmented Generation Survey 42 页 pdfjs Retrieval-Augmented Generation Survey 48000 字 转换稿 6/2" [ref=e54] [cursor=pointer]:
+            - generic [ref=e55]:
+              - generic [ref=e57]: Retrieval-Augmented Generation Survey
+              - generic [ref=e59]:
+                - generic [ref=e60]: 42 页
+                - generic [ref=e61]: pdfjs
+            - generic [ref=e62]:
+              - generic [ref=e63]: Retrieval-Augmented Generation Survey
+              - generic [ref=e64]: 48000 字
+              - generic [ref=e65]:
+                - generic [ref=e66]: 转换稿
+                - generic [ref=e67]: 6/2
+          - generic [ref=e68]:
+            - generic [ref=e69]: text-only
+            - button "删除 Retrieval-Augmented Generation Survey" [ref=e70] [cursor=pointer]:
+              - img [ref=e71]

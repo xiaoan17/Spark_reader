@@ -1,5 +1,6 @@
 import {
   AlertCircle,
+  Bot,
   ChevronDown,
   Copy,
   FileSearch,
@@ -7,10 +8,12 @@ import {
   Loader2,
   NotebookPen,
   RefreshCcw,
+  Send,
   Sparkles,
   Square,
+  User,
 } from "lucide-react"
-import { useEffect, useState, type CSSProperties } from "react"
+import { useEffect, useRef, useState, type CSSProperties } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { MarkdownContent } from "@/components/markdown/MarkdownContent"
@@ -50,8 +53,9 @@ type InterpretationCardProps = {
   noteDraft?: string
   noteSaving?: boolean
   noteError?: string
+  noteInitiallyOpen?: boolean
   onQuestionChange?: (question: string) => void
-  onQuestionSubmit?: () => void
+  onQuestionSubmit?: (question?: string) => void
   onNoteChange?: (note: string) => void
   onCopy?: () => void
   onSave?: () => void
@@ -79,6 +83,7 @@ export function InterpretationCard({
   noteDraft = "",
   noteSaving = false,
   noteError = "",
+  noteInitiallyOpen = false,
   onQuestionChange,
   onQuestionSubmit,
   onNoteChange,
@@ -92,20 +97,40 @@ export function InterpretationCard({
   className,
 }: InterpretationCardProps) {
   const [stopping, setStopping] = useState(false)
-  const [noteOpen, setNoteOpen] = useState(false)
+  const [noteOpen, setNoteOpen] = useState(noteInitiallyOpen)
+  const previousNoteSaving = useRef(noteSaving)
   const streaming = phase === "streaming"
   const busy = phase === "planning" || phase === "retrieving" || streaming
   const hasSelection = selectionText.trim().length > 0
   const showActions = hasSelection && !busy
+  const submitQuestion = (value = question) => {
+    const trimmed = value.trim()
+    if (!trimmed) {
+      return
+    }
+    onQuestionSubmit?.(trimmed)
+  }
   useEffect(() => {
     if (!streaming) {
       setStopping(false)
     }
   }, [streaming])
+  useEffect(() => {
+    if (noteInitiallyOpen) {
+      setNoteOpen(true)
+    }
+  }, [noteInitiallyOpen])
+  useEffect(() => {
+    const wasSaving = previousNoteSaving.current
+    previousNoteSaving.current = noteSaving
+    if (noteOpen && wasSaving && !noteSaving && !noteError && !noteDraft.trim()) {
+      setNoteOpen(false)
+    }
+  }, [noteDraft, noteError, noteOpen, noteSaving])
 
   return (
-    <div className={cn("flex min-h-full flex-col", className)}>
-      <div className="border-b pb-3">
+    <div className={cn("flex h-full min-h-0 flex-col", className)}>
+      <div className="shrink-0 border-b pb-3">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
@@ -135,7 +160,7 @@ export function InterpretationCard({
           ) : null}
         </div>
       </div>
-      <div className="space-y-4 py-4">
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto py-4 pr-1">
         <PhaseBody
           phase={phase}
           selectionText={selectionText}
@@ -157,7 +182,7 @@ export function InterpretationCard({
         ) : null}
       </div>
       {showActions ? (
-        <div className="mt-auto space-y-3 border-t pt-3">
+        <div className="-mx-3 mt-auto shrink-0 space-y-3 border-t bg-card/95 px-3 pt-3 backdrop-blur">
           <div className="flex gap-2 rounded-md border bg-background p-2">
             <textarea
               className="min-h-16 flex-1 resize-none bg-transparent text-sm outline-none"
@@ -167,19 +192,28 @@ export function InterpretationCard({
               onKeyDown={(event) => {
                 if (shouldSubmitTextarea(event)) {
                   event.preventDefault()
-                  onQuestionSubmit?.()
+                  submitQuestion()
                 }
               }}
             />
             <Button
               size="sm"
-              className="self-end"
+              className="self-end gap-1.5"
               disabled={question.trim().length === 0}
-              onClick={onQuestionSubmit}
+              onClick={() => submitQuestion()}
             >
+              <Send className="h-4 w-4" />
               发送
             </Button>
           </div>
+          <SuggestedFollowUps
+            selectionText={selectionText}
+            followUps={followUps}
+            onPick={(suggestion) => {
+              onQuestionChange?.(suggestion)
+              submitQuestion(suggestion)
+            }}
+          />
           {noteOpen ? (
             <div className="space-y-2 rounded-md border bg-background p-2">
               <textarea
@@ -320,49 +354,13 @@ function PhaseBody({
             正在生成
           </p>
         ) : null}
-        <MarkdownContent
-          content={interpretation}
+        <ConversationTimeline
+          interpretation={interpretation}
+          followUps={followUps}
           evidence={evidence}
           citationChunkIds={citationChunkIds}
           onCitationClick={onCitationClick}
-          className="text-sm"
         />
-        {evidence.length > 0 ? (
-          <div className="flex flex-wrap gap-2">
-            {evidence.map((item, index) => (
-              <CitationPreviewButton
-                key={item.chunkId}
-                item={item}
-                label={evidenceLabel(item, evidence, index)}
-                style={staggerStyle(index)}
-                onClick={() => onCitationClick?.(item.chunkId)}
-              />
-            ))}
-          </div>
-        ) : null}
-        {followUps.length > 0 ? (
-          <div className="space-y-3 border-t pt-3">
-            {followUps.map((turn, index) => (
-              <div key={turn.id} className="animate-slide-in-up space-y-2" style={staggerStyle(index)}>
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <Badge variant="secondary">追问 #{index + 1}</Badge>
-                </div>
-                <div className="rounded-md bg-accent px-3 py-2 text-accent-foreground">
-                  {turn.question}
-                </div>
-                <div className="rounded-md bg-muted/60 px-3 py-2">
-                  <MarkdownContent
-                    content={turn.answer}
-                    evidence={evidence}
-                    citationChunkIds={citationChunkIds}
-                    onCitationClick={onCitationClick}
-                    className="text-sm"
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : null}
         {selectionRects.length > 0 ? <CoordinateList selectionRects={selectionRects} /> : null}
         <TraceList agentTrace={agentTrace} />
       </div>
@@ -446,6 +444,65 @@ function PhaseBody({
   )
 }
 
+function ConversationTimeline({
+  interpretation,
+  followUps,
+  evidence,
+  citationChunkIds,
+  onCitationClick,
+}: {
+  interpretation: string
+  followUps: FollowUpTurn[]
+  evidence: EvidencePreview[]
+  citationChunkIds?: string[]
+  onCitationClick?: (chunkId: string) => void
+}) {
+  return (
+    <div className="space-y-4">
+      {interpretation ? (
+        <AssistantTurn
+          label="Spark"
+          content={interpretation}
+          evidence={evidence}
+          citationChunkIds={citationChunkIds}
+          onCitationClick={onCitationClick}
+        >
+          {evidence.length > 0 ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {evidence.map((item, index) => (
+                <CitationPreviewButton
+                  key={item.chunkId}
+                  item={item}
+                  label={evidenceLabel(item, evidence, index)}
+                  style={staggerStyle(index)}
+                  onClick={() => onCitationClick?.(item.chunkId)}
+                />
+              ))}
+            </div>
+          ) : null}
+        </AssistantTurn>
+      ) : null}
+      {followUps.length > 0 ? (
+        <div className="space-y-4 border-t pt-4">
+          {followUps.map((turn, index) => (
+            <div key={turn.id} className="animate-slide-in-up space-y-3" style={staggerStyle(index)}>
+              <UserTurn label={`你 · 追问 ${index + 1}`}>{turn.question}</UserTurn>
+              <AssistantTurn
+                label="Spark"
+                content={turn.answer}
+                evidence={evidence}
+                citationChunkIds={citationChunkIds}
+                streaming={turn.answer.trim().length === 0}
+                onCitationClick={onCitationClick}
+              />
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function FollowUpList({
   followUps,
   evidence = [],
@@ -458,28 +515,123 @@ function FollowUpList({
   onCitationClick?: (chunkId: string) => void
 }) {
   return (
-    <div className="space-y-3 border-t pt-3 text-sm leading-7">
+    <div className="space-y-4 border-t pt-4 text-sm leading-7">
       {followUps.map((turn, index) => (
-        <div key={turn.id} className="animate-slide-in-up space-y-2" style={staggerStyle(index)}>
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Badge variant="secondary">追问 #{index + 1}</Badge>
-          </div>
-          <div className="rounded-md bg-accent px-3 py-2 text-accent-foreground">
-            {turn.question}
-          </div>
-          <div className="rounded-md bg-muted/60 px-3 py-2">
-            <MarkdownContent
-              content={turn.answer}
-              evidence={evidence}
-              citationChunkIds={citationChunkIds}
-              onCitationClick={onCitationClick}
-              className="text-sm"
-            />
-          </div>
+        <div key={turn.id} className="animate-slide-in-up space-y-3" style={staggerStyle(index)}>
+          <UserTurn label={`你 · 追问 ${index + 1}`}>{turn.question}</UserTurn>
+          <AssistantTurn
+            label="Spark"
+            content={turn.answer}
+            evidence={evidence}
+            citationChunkIds={citationChunkIds}
+            streaming={turn.answer.trim().length === 0}
+            onCitationClick={onCitationClick}
+          />
         </div>
       ))}
     </div>
   )
+}
+
+function AssistantTurn({
+  label,
+  content,
+  evidence,
+  citationChunkIds,
+  streaming = false,
+  children,
+  onCitationClick,
+}: {
+  label: string
+  content: string
+  evidence: EvidencePreview[]
+  citationChunkIds?: string[]
+  streaming?: boolean
+  children?: React.ReactNode
+  onCitationClick?: (chunkId: string) => void
+}) {
+  return (
+    <section className="rounded-md border bg-background px-3 py-3 shadow-sm">
+      <div className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-foreground">
+        <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-primary">
+          <Bot className="h-3.5 w-3.5" />
+        </span>
+        {label}
+      </div>
+      {streaming ? (
+        <p className="inline-flex items-center gap-1.5 rounded-md bg-muted px-2.5 py-1 text-xs text-muted-foreground">
+          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
+          正在回答
+        </p>
+      ) : (
+        <MarkdownContent
+          content={content}
+          evidence={evidence}
+          citationChunkIds={citationChunkIds}
+          onCitationClick={onCitationClick}
+          className="text-sm"
+        />
+      )}
+      {children}
+    </section>
+  )
+}
+
+function UserTurn({
+  label,
+  children,
+}: {
+  label: string
+  children: React.ReactNode
+}) {
+  return (
+    <section className="ml-6 rounded-md bg-accent px-3 py-2 text-accent-foreground">
+      <div className="mb-1 flex items-center gap-2 text-xs font-medium text-accent-foreground/70">
+        <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-background/70">
+          <User className="h-3 w-3" />
+        </span>
+        {label}
+      </div>
+      <p className="whitespace-pre-wrap text-sm leading-6">{children}</p>
+    </section>
+  )
+}
+
+function SuggestedFollowUps({
+  selectionText,
+  followUps,
+  onPick,
+}: {
+  selectionText: string
+  followUps: FollowUpTurn[]
+  onPick: (question: string) => void
+}) {
+  const suggestions = followUpSuggestions(selectionText, followUps.length)
+  return (
+    <div className="flex flex-wrap gap-2">
+      {suggestions.map((suggestion) => (
+        <button
+          key={suggestion}
+          type="button"
+          className="rounded-md border bg-background px-2 py-1 text-xs text-muted-foreground transition-[background-color,color,box-shadow,transform] duration-interactive ease-reader hover:bg-muted hover:text-foreground hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-ring active:scale-[0.98]"
+          onClick={() => onPick(suggestion)}
+        >
+          {suggestion}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function followUpSuggestions(selectionText: string, followUpCount: number) {
+  const shortSelection = selectionText.trim().length < 80
+  if (followUpCount > 0) {
+    return ["继续追问证据", "换个角度解释", "和前文怎么接上？"]
+  }
+  if (shortSelection) {
+    return ["它在说什么？", "为什么重要？", "前后文依据是什么？"]
+  }
+  return ["概括核心意思", "这段的隐含前提是什么？", "找书中呼应证据"]
 }
 
 function CitationPreviewButton({

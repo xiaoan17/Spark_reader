@@ -1,0 +1,97 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - button "收起阅读侧栏" [ref=e6] [cursor=pointer]:
+        - img [ref=e7]
+      - generic [ref=e10]:
+        - generic [ref=e11]: 财富公式
+        - generic [ref=e12]:
+          - generic [ref=e13]: 转换稿主视图
+          - generic [ref=e14]: 浏览器版
+          - generic "浏览器版不会读取本机 LLM provider" [ref=e15]: "AI: 本地兜底"
+    - navigation "阅读工具栏" [ref=e16]:
+      - button "导入" [ref=e17] [cursor=pointer]:
+        - img [ref=e18]
+        - text: 导入
+      - button "打开书架" [ref=e21] [cursor=pointer]:
+        - img [ref=e22]
+        - text: 书架
+      - generic [ref=e24]:
+        - button "转换稿" [ref=e25] [cursor=pointer]:
+          - img [ref=e26]
+          - text: 转换稿
+        - button "TLDR" [ref=e29] [cursor=pointer]:
+          - img [ref=e30]
+          - text: TLDR
+        - button "对照翻译" [disabled]:
+          - img
+          - text: 对照翻译
+        - button "知识体系" [ref=e32] [cursor=pointer]:
+          - img [ref=e33]
+          - text: 知识体系
+        - button "PDF" [disabled]:
+          - img
+          - text: PDF
+      - button "搜索" [ref=e38] [cursor=pointer]:
+        - img [ref=e39]
+      - button "主题" [ref=e42] [cursor=pointer]:
+        - img [ref=e43]
+      - button "设置" [ref=e49] [cursor=pointer]:
+        - img [ref=e50]
+  - main [ref=e53]:
+    - complementary [ref=e54]:
+      - generic [ref=e55]:
+        - generic [ref=e57]:
+          - img [ref=e58]
+          - text: 目录
+        - button "1.1复利的时间尺度" [ref=e61] [cursor=pointer]:
+          - generic [ref=e62]: 1.1复利的时间尺度
+    - generic [ref=e65]:
+      - article [ref=e66]
+      - article [ref=e72]
+      - article [ref=e78]
+      - article [ref=e84]
+      - article [ref=e90]
+      - article [ref=e96]
+    - complementary [ref=e102]:
+      - generic [ref=e103]:
+        - generic [ref=e104]: 解读
+        - generic [ref=e105]: 可回跳引用
+      - generic [ref=e106]:
+        - generic [ref=e109]:
+          - heading "解读" [level=3] [ref=e110]
+          - blockquote [ref=e111]: 复利的力量并不来自某一次惊人的收益，而来自足够长的时间里持续保持正确方向。
+        - generic [ref=e112]:
+          - generic [ref=e113]:
+            - generic [ref=e114]:
+              - generic [ref=e115]: 全部引用可核验
+              - generic [ref=e116]: 接地 1
+              - generic [ref=e117]: LLM
+            - generic [ref=e118]:
+              - paragraph [ref=e119]:
+                - text: 这段文字的直接焦点是：“复利的力量并不来自某一次惊人的收益，而来自足够长的时间里持续保持正确方向。”
+                - button "相关段落 · 引用 1" [ref=e120] [cursor=pointer]
+              - paragraph [ref=e121]: 当前版本先展示本地解读闭环。
+            - generic [ref=e122]:
+              - button "相关段落 · 引用 1" [ref=e123] [cursor=pointer]
+              - button "相关段落 · 引用 2" [ref=e124] [cursor=pointer]
+              - button "相关段落 · 引用 3" [ref=e125] [cursor=pointer]
+            - group [ref=e126]:
+              - generic "PDF 坐标选区（校对）· 归一化页坐标 · 2 个矩形" [ref=e127] [cursor=pointer]:
+                - generic [ref=e128]: PDF 坐标选区（校对）· 归一化页坐标 · 2 个矩形
+                - img [ref=e129]
+            - group [ref=e131]:
+              - generic "检索轨迹 · 2 步" [ref=e132] [cursor=pointer]:
+                - generic [ref=e133]: 检索轨迹 · 2 步
+                - img [ref=e134]
+          - generic [ref=e136]:
+            - button "继续追问" [ref=e137] [cursor=pointer]:
+              - img [ref=e138]
+              - text: 继续追问
+            - generic [ref=e140]:
+              - button "复制解读" [ref=e141] [cursor=pointer]:
+                - img [ref=e142]
+              - button "保存标记" [ref=e145] [cursor=pointer]:
+                - img [ref=e146]
+              - button "重新生成解读" [ref=e150] [cursor=pointer]:
+                - img [ref=e151]

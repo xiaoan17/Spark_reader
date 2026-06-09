@@ -130,7 +130,10 @@ type ReaderShellProps = {
   workbenchTab?: WorkbenchTab
   workbenchRunningTaskCount?: number
   currentThreadLightweight?: boolean
+  currentThreadSelectionText?: string
+  currentThreadSelectionRects?: NormalizedPageRect[]
   currentNoteDraft?: string
+  currentNoteOpen?: boolean
   currentNoteSaving?: boolean
   currentThreadError?: string
   agentTasks?: AgentTask[]
@@ -187,6 +190,7 @@ type ReaderShellProps = {
   onPhaseChange: (phase: ReaderPhase) => void
   onDeepInterpret: () => void
   onPlainExplain: () => void
+  onComment?: () => void
   onQuestionSubmit: (question: string) => void
   onWorkbenchTabChange?: (tab: WorkbenchTab) => void
   onCurrentThreadLightweightChange?: (enabled: boolean) => void
@@ -241,7 +245,10 @@ export function ReaderShell({
   workbenchTab = "spark",
   workbenchRunningTaskCount = 0,
   currentThreadLightweight = false,
+  currentThreadSelectionText,
+  currentThreadSelectionRects,
   currentNoteDraft = "",
+  currentNoteOpen = false,
   currentNoteSaving = false,
   currentThreadError = "",
   agentTasks = [],
@@ -277,6 +284,7 @@ export function ReaderShell({
   onPhaseChange,
   onDeepInterpret,
   onPlainExplain,
+  onComment = () => undefined,
   onQuestionSubmit,
   onWorkbenchTabChange = () => undefined,
   onCurrentThreadLightweightChange = () => undefined,
@@ -324,6 +332,11 @@ export function ReaderShell({
   const [llmSettings, setLlmSettings] = useState<LlmSettings | null>(null)
   const [llmSettingsError, setLlmSettingsError] = useState("")
   const canUseLibrary = isTauriRuntime() || browserLibraryAvailable()
+  const hasCurrentThreadSelection = (currentThreadSelectionText ?? "").trim().length > 0
+  const sparkSelectionText = hasCurrentThreadSelection ? (currentThreadSelectionText ?? "") : selectionText
+  const sparkSelectionRects = hasCurrentThreadSelection
+    ? (currentThreadSelectionRects ?? [])
+    : selectionRects
 
   useEffect(() => {
     if (phase !== "empty" || totalPages > 0 || parsedPages.length > 0) {
@@ -598,7 +611,7 @@ export function ReaderShell({
 
   async function copyInterpretationResult() {
     const payload = formatInterpretationClipboardText(
-      selectionText,
+      sparkSelectionText,
       interpretation,
       followUps,
       evidence,
@@ -657,8 +670,8 @@ export function ReaderShell({
     })
   }
 
-  function handleQuestionSubmit() {
-    const trimmed = question.trim()
+  function handleQuestionSubmit(forcedQuestion?: string) {
+    const trimmed = (forcedQuestion ?? question).trim()
     if (!trimmed) {
       return
     }
@@ -685,6 +698,15 @@ export function ReaderShell({
     onWorkbenchTabChange("spark")
     onCurrentThreadLightweightChange(true)
     onPlainExplain()
+  }
+
+  function startComment() {
+    if (!selectionText.trim()) {
+      pushNotice("请先框选一段文字")
+      return
+    }
+    onWorkbenchTabChange("spark")
+    onComment()
   }
 
   useEffect(() => {
@@ -867,7 +889,7 @@ export function ReaderShell({
               highlights={highlights}
               sparkItems={interpretationHistory.filter((item) => {
                 const kind = item.kind ?? "interpretation"
-                return kind === "spark" || kind === "note"
+                return kind === "interpretation" || kind === "spark" || kind === "note"
               })}
               selectionText={selectionText}
               selectionRects={selectionRects}
@@ -875,6 +897,7 @@ export function ReaderShell({
               quality={textQuality}
               onExplain={runDeepInterpretation}
               onPlainExplain={runPlainInterpretation}
+              onComment={startComment}
               onOpenSparkItem={(item) => onOpenSparkInterpretation(item, "text")}
               onHighlight={handleHighlight}
               onTextSelection={handleTextSelection}
@@ -908,7 +931,7 @@ export function ReaderShell({
               selectionAnchor={selectionAnchor}
               sparkItems={interpretationHistory.filter((item) => {
                 const kind = item.kind ?? "interpretation"
-                return kind === "spark" || kind === "note"
+                return kind === "interpretation" || kind === "spark" || kind === "note"
               })}
               onCurrentPageChange={onVisiblePageChange}
               onStart={() => void handleStartTranslation(false)}
@@ -917,6 +940,7 @@ export function ReaderShell({
               onCancel={() => void handleCancelTranslation()}
               onExplain={runDeepInterpretation}
               onPlainExplain={runPlainInterpretation}
+              onComment={startComment}
               onOpenSparkItem={(item) => onOpenSparkInterpretation(item, "translation")}
               onHighlight={handleHighlight}
               onTextSelection={handleTextSelection}
@@ -974,6 +998,7 @@ export function ReaderShell({
               onExplain={runDeepInterpretation}
               onHighlight={handleHighlight}
               onPlainExplain={runPlainInterpretation}
+              onComment={startComment}
               onRenderError={(message) => {
                 setLoadError(message)
                 void handlePdfRenderError(message)
@@ -1043,12 +1068,13 @@ export function ReaderShell({
           <AiWorkbench
             tab={workbenchTab}
             runningTaskCount={workbenchRunningTaskCount}
-            selectionText={selectionText}
-            selectionRects={selectionRects}
+            selectionText={sparkSelectionText}
+            selectionRects={sparkSelectionRects}
             interpretation={interpretation}
             answerSource={answerSource}
             followUps={followUps}
             noteDraft={currentNoteDraft}
+            noteInitiallyOpen={currentNoteOpen}
             noteSaving={currentNoteSaving}
             noteError={currentThreadError}
             lightweight={currentThreadLightweight}
@@ -1061,6 +1087,7 @@ export function ReaderShell({
             interpretationRuntimeHint={interpretationRuntimeHint}
             tasks={agentTasks}
             tasksDisabled={!bookId}
+            interpretationHistory={interpretationHistory}
             onTabChange={onWorkbenchTabChange}
             onNoteChange={onCurrentNoteChange}
             onSaveNote={onCurrentNoteSave}
@@ -1073,6 +1100,7 @@ export function ReaderShell({
             onOpenSettings={() => setPanelOpen("settingsOpen", true)}
             onRunTask={onRunAgentTask}
             onStopTask={onStopAgentTask}
+            onOpenSparkItem={(item) => onOpenSparkInterpretation(item)}
           />
         ) : null}
       </main>

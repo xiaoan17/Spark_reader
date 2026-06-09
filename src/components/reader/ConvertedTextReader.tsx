@@ -68,6 +68,7 @@ export type ConvertedTextReaderProps = {
   quality?: TextQuality | null
   onExplain: () => void
   onPlainExplain: () => void
+  onComment?: () => void
   onOpenSparkItem?: (item: SavedInterpretation) => void
   onHighlight: () => void
   onTextSelection: (
@@ -103,6 +104,7 @@ export function ConvertedTextReader({
   quality,
   onExplain,
   onPlainExplain,
+  onComment,
   onOpenSparkItem,
   onHighlight,
   onTextSelection,
@@ -530,6 +532,7 @@ export function ConvertedTextReader({
                     textRefs.current.delete(page.pageIndex)
                   }
                 }}
+                data-spark-text-root
                 data-source-text={page.text}
                 className="relative font-ui text-[15px] leading-8 text-foreground"
               >
@@ -600,7 +603,7 @@ export function ConvertedTextReader({
               <SelectionToolbarHost
                 present={shouldShowToolbarForPage}
                 approximate={approximateSelection}
-                className="absolute z-20 max-w-[calc(100%-2rem)] animate-pop-in"
+                className="absolute z-20 max-w-[calc(100%-2rem)]"
                 disabled={!selectionText.trim()}
                 suppressed={toolbarSuppressed}
                 style={
@@ -612,6 +615,7 @@ export function ConvertedTextReader({
                 onExplain={onExplain}
                 onHighlight={onHighlight}
                 onPlainExplain={onPlainExplain}
+                onComment={onComment}
               />
             </article>
           )
@@ -758,15 +762,15 @@ function stripGeneratedPageHeading(markdown: string) {
 
 function readableHighlightClassName(id: string) {
   if (id === "current-text-selection") {
-    return "reader-current-text-selection box-decoration-clone rounded-sm bg-amber-200/80 px-0.5 text-foreground ring-1 ring-amber-500/35 dark:bg-amber-300/35"
+    return "reader-current-text-selection box-decoration-clone rounded-sm bg-amber-200/80 text-foreground ring-1 ring-amber-500/35 dark:bg-amber-300/35"
   }
   if (id === "active-citation-target") {
-    return "box-decoration-clone rounded-sm bg-sky-200/75 px-0.5 text-foreground ring-1 ring-sky-500/25 animate-citation-pulse dark:bg-sky-300/30"
+    return "box-decoration-clone rounded-sm bg-sky-200/75 text-foreground ring-1 ring-sky-500/25 animate-citation-pulse dark:bg-sky-300/30"
   }
   if (id.startsWith("spark-anchor-")) {
     return "reader-spark-text-anchor"
   }
-  return "box-decoration-clone rounded-sm bg-teal-300/35 px-0.5 text-foreground dark:bg-teal-300/25"
+  return "box-decoration-clone rounded-sm bg-teal-300/35 text-foreground dark:bg-teal-300/25"
 }
 
 function readableHighlightType(id: string) {

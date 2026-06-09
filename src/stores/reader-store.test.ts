@@ -15,8 +15,13 @@ describe("reader store navigation state", () => {
       followUps: [],
       activeInterpretationSessionId: "",
       currentNoteDraft: "",
+      currentNoteOpen: false,
       currentThreadError: "",
       currentThreadLightweight: false,
+      currentThreadSelectionText: "",
+      currentThreadSelectionRects: [],
+      currentThreadSelectionAnchor: null,
+      currentThreadPageIndex: null,
       activeChunkId: "",
       phase: "reading",
     })
@@ -111,9 +116,84 @@ describe("reader store navigation state", () => {
     expect(useReaderStore.getState()).toMatchObject({
       selectionText: "新选区",
       activeInterpretationSessionId: "",
+      currentThreadSelectionText: "新选区",
       currentNoteDraft: "",
       currentThreadError: "",
       currentThreadLightweight: false,
+    })
+  })
+
+  it("keeps a generated thread after clearing the visible selection", () => {
+    useReaderStore.setState({
+      selectionText: "复利来自长期坚持",
+      selectionAnchor: { pageIndex: 0, positionStart: 0, positionEnd: 8 },
+      currentThreadSelectionText: "复利来自长期坚持",
+      currentThreadSelectionAnchor: { pageIndex: 0, positionStart: 0, positionEnd: 8 },
+      currentThreadPageIndex: 0,
+      interpretation: "已有 Spark 解读",
+      activeInterpretationSessionId: "session-1",
+    })
+
+    useReaderStore.getState().clearSelection()
+
+    expect(useReaderStore.getState()).toMatchObject({
+      selectionText: "",
+      selectionAnchor: null,
+      currentThreadSelectionText: "复利来自长期坚持",
+      currentThreadSelectionAnchor: { pageIndex: 0, positionStart: 0, positionEnd: 8 },
+      currentThreadPageIndex: 0,
+      interpretation: "已有 Spark 解读",
+      activeInterpretationSessionId: "session-1",
+    })
+  })
+
+  it("drops a transient selection when clearing before any Spark content exists", () => {
+    useReaderStore.setState({
+      selectionText: "临时选区",
+      selectionAnchor: { pageIndex: 0, positionStart: 0, positionEnd: 4 },
+      currentThreadSelectionText: "临时选区",
+      currentThreadSelectionAnchor: { pageIndex: 0, positionStart: 0, positionEnd: 4 },
+      currentThreadPageIndex: 0,
+      interpretation: "",
+      followUps: [],
+      activeInterpretationSessionId: "",
+      currentNoteDraft: "",
+      currentNoteOpen: false,
+    })
+
+    useReaderStore.getState().clearSelection()
+
+    expect(useReaderStore.getState()).toMatchObject({
+      selectionText: "",
+      currentThreadSelectionText: "",
+      currentThreadSelectionAnchor: null,
+      currentThreadPageIndex: null,
+    })
+  })
+
+  it("keeps the current Spark focus while a new comment panel is open", () => {
+    useReaderStore.setState({
+      selectionText: "可批注选区",
+      selectionAnchor: { pageIndex: 0, positionStart: 0, positionEnd: 5 },
+      currentThreadSelectionText: "可批注选区",
+      currentThreadSelectionAnchor: { pageIndex: 0, positionStart: 0, positionEnd: 5 },
+      currentThreadPageIndex: 0,
+      currentNoteOpen: true,
+      interpretation: "",
+      followUps: [],
+      activeInterpretationSessionId: "",
+      currentNoteDraft: "",
+    })
+
+    useReaderStore.getState().clearSelection()
+
+    expect(useReaderStore.getState()).toMatchObject({
+      selectionText: "",
+      selectionAnchor: null,
+      currentThreadSelectionText: "可批注选区",
+      currentThreadSelectionAnchor: { pageIndex: 0, positionStart: 0, positionEnd: 5 },
+      currentThreadPageIndex: 0,
+      currentNoteOpen: true,
     })
   })
 

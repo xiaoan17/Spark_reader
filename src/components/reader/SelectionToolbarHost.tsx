@@ -12,6 +12,7 @@ export type SelectionToolbarHostProps = {
   onExplain: () => void
   onHighlight: () => void
   onPlainExplain: () => void
+  onComment?: () => void
 }
 
 export function SelectionToolbarHost({
@@ -25,6 +26,7 @@ export function SelectionToolbarHost({
   onExplain,
   onHighlight,
   onPlainExplain,
+  onComment,
 }: SelectionToolbarHostProps) {
   const shouldRender = useDelayedPresence(present, 80)
   const toolbarRef = useMeasuredToolbarSize(onSizeChange)
@@ -43,6 +45,7 @@ export function SelectionToolbarHost({
       onExplain={onExplain}
       onHighlight={onHighlight}
       onPlainExplain={onPlainExplain}
+      onComment={onComment}
     />
   )
 }

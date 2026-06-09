@@ -71,6 +71,7 @@ const meta = {
     interpretationRuntimeHint: "桌面版会使用完整多轮证据检索。",
     tasks,
     tasksDisabled: false,
+    interpretationHistory: [],
     onTabChange: () => undefined,
     onNoteChange: () => undefined,
     onSaveNote: () => undefined,
@@ -83,6 +84,7 @@ const meta = {
     onOpenSettings: () => undefined,
     onRunTask: () => undefined,
     onStopTask: () => undefined,
+    onOpenSparkItem: () => undefined,
   },
   decorators: [
     (Story) => (
@@ -106,6 +108,51 @@ export const SparkEmpty: Story = {
     evidence: [],
     agentTrace: [],
     runningTaskCount: 0,
+  },
+}
+
+export const SparkHistory: Story = {
+  args: {
+    selectionText: "",
+    interpretation: "",
+    followUps: [],
+    evidence: [],
+    agentTrace: [],
+    runningTaskCount: 0,
+    interpretationHistory: [
+      {
+        id: "history-1",
+        bookId: "book-1",
+        selectionText: "复利的力量并不来自某一次惊人的收益，而来自足够长的时间。",
+        sessionId: "session-1",
+        turnIndex: 0,
+        pageIndex: 7,
+        pageIndexes: [7],
+        evidenceChunkIds: [chunkId],
+        question: null,
+        answer: "这段在强调长期复合。",
+        answerSource: "llm",
+        kind: "interpretation",
+        mode: "deep",
+        createdAt: "2026-06-08T08:00:00.000Z",
+      },
+      {
+        id: "history-2",
+        bookId: "book-1",
+        selectionText: "风险控制保证长期计划不中断。",
+        sessionId: "session-2",
+        turnIndex: 0,
+        pageIndex: 8,
+        pageIndexes: [8],
+        evidenceChunkIds: [],
+        question: null,
+        answer: "这是风险控制与复利的关系。",
+        answerSource: "llm",
+        kind: "spark",
+        mode: "plain",
+        createdAt: "2026-06-08T07:20:00.000Z",
+      },
+    ],
   },
 }
 

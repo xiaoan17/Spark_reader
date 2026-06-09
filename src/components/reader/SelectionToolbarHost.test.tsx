@@ -7,6 +7,7 @@ import { SelectionToolbarHost } from "./SelectionToolbarHost"
   .IS_REACT_ACT_ENVIRONMENT = true
 
 const defaultProps = {
+  onComment: vi.fn(),
   onExplain: vi.fn(),
   onHighlight: vi.fn(),
   onPlainExplain: vi.fn(),
@@ -38,6 +39,7 @@ async function renderHost(present: boolean, extra: Partial<Parameters<typeof Sel
 describe("SelectionToolbarHost", () => {
   beforeEach(() => {
     vi.useFakeTimers()
+    vi.clearAllMocks()
   })
 
   afterEach(() => {
@@ -88,5 +90,24 @@ describe("SelectionToolbarHost", () => {
     expect(onSizeChange).toHaveBeenCalledWith({ width: 242, height: 49 })
     host.unmount()
     HTMLElement.prototype.getBoundingClientRect = originalGetBoundingClientRect
+  })
+
+  it("wires the comment action through the selection toolbar", async () => {
+    const onComment = vi.fn()
+    const host = await renderHost(true, { onComment })
+
+    const button = [...host.container.querySelectorAll("button")].find((element) =>
+      element.textContent?.includes("批注"),
+    )
+    expect(button).toBeTruthy()
+
+    await act(async () => {
+      button?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+      await Promise.resolve()
+    })
+
+    expect(onComment).toHaveBeenCalledTimes(1)
+    expect(defaultProps.onExplain).not.toHaveBeenCalled()
+    host.unmount()
   })
 })

@@ -7,6 +7,7 @@ import type {
   EvidencePreview,
   FollowUpTurn,
   ReaderPhase,
+  SavedInterpretation,
   WorkbenchTab,
 } from "@/stores/reader-store"
 import type { NormalizedPageRect } from "@/core/coordinates"
@@ -25,6 +26,7 @@ type AiWorkbenchProps = {
   noteDraft: string
   noteSaving?: boolean
   noteError?: string
+  noteInitiallyOpen?: boolean
   lightweight: boolean
   citationChunkIds?: string[]
   phase: ReaderPhase
@@ -35,18 +37,20 @@ type AiWorkbenchProps = {
   interpretationRuntimeHint?: string
   tasks: AgentTask[]
   tasksDisabled?: boolean
+  interpretationHistory?: SavedInterpretation[]
   onTabChange: (tab: WorkbenchTab) => void
   onNoteChange: (note: string) => void
   onSaveNote: () => void
   onCopyInterpretation: () => void
   onCitationClick: (chunkId: string) => void
   onQuestionChange: (question: string) => void
-  onQuestionSubmit: () => void
+  onQuestionSubmit: (question?: string) => void
   onRegenerate: () => void
   onStop: () => void
   onOpenSettings: () => void
   onRunTask: (kind: AgentTaskKind, prompt?: string) => void
   onStopTask: (taskId: string) => void
+  onOpenSparkItem?: (item: SavedInterpretation) => void
 }
 
 export function AiWorkbench({
@@ -60,6 +64,7 @@ export function AiWorkbench({
   noteDraft,
   noteSaving = false,
   noteError = "",
+  noteInitiallyOpen = false,
   lightweight,
   citationChunkIds,
   phase,
@@ -70,6 +75,7 @@ export function AiWorkbench({
   interpretationRuntimeHint,
   tasks,
   tasksDisabled = false,
+  interpretationHistory = [],
   onTabChange,
   onNoteChange,
   onSaveNote,
@@ -82,10 +88,11 @@ export function AiWorkbench({
   onOpenSettings,
   onRunTask,
   onStopTask,
+  onOpenSparkItem = () => undefined,
 }: AiWorkbenchProps) {
   return (
-    <aside className="min-h-0 animate-fade-in overflow-y-auto border-l bg-card/65 p-3 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none">
-      <div className="sticky top-0 z-10 -mx-3 -mt-3 mb-3 border-b bg-card/95 px-3 py-3 backdrop-blur">
+    <aside className="flex h-full min-h-0 animate-fade-in flex-col overflow-hidden border-l bg-card/65 p-3 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none">
+      <div className="-mx-3 -mt-3 mb-3 shrink-0 border-b bg-card/95 px-3 py-3 backdrop-blur">
         <div className="mb-3 flex items-start justify-between gap-2">
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-sm font-semibold">
@@ -131,43 +138,50 @@ export function AiWorkbench({
         </div>
       </div>
 
-      {tab === "spark" ? (
-        <CurrentThread
-          selectionText={selectionText}
-          selectionRects={selectionRects}
-          interpretation={interpretation}
-          answerSource={answerSource}
-          followUps={followUps}
-          noteDraft={noteDraft}
-          noteSaving={noteSaving}
-          noteError={noteError}
-          lightweight={lightweight}
-          citationChunkIds={citationChunkIds}
-          phase={phase}
-          evidence={evidence}
-          agentTrace={agentTrace}
-          interpretationError={interpretationError}
-          question={question}
-          runtimeHint={interpretationRuntimeHint}
-          onNoteChange={onNoteChange}
-          onSaveNote={onSaveNote}
-          onCopyInterpretation={onCopyInterpretation}
-          onCitationClick={onCitationClick}
-          onQuestionChange={onQuestionChange}
-          onQuestionSubmit={onQuestionSubmit}
-          onRegenerate={onRegenerate}
-          onStop={onStop}
-          onOpenSettings={onOpenSettings}
-        />
-      ) : (
-        <TasksPanel
-          tasks={tasks}
-          runningCount={runningTaskCount}
-          disabled={tasksDisabled}
-          onRunTask={onRunTask}
-          onStopTask={onStopTask}
-        />
-      )}
+      <div className="min-h-0 flex-1 overflow-hidden">
+        {tab === "spark" ? (
+          <CurrentThread
+            selectionText={selectionText}
+            selectionRects={selectionRects}
+            interpretation={interpretation}
+            answerSource={answerSource}
+            followUps={followUps}
+            noteDraft={noteDraft}
+            noteSaving={noteSaving}
+            noteError={noteError}
+            noteInitiallyOpen={noteInitiallyOpen}
+            lightweight={lightweight}
+            citationChunkIds={citationChunkIds}
+            phase={phase}
+            evidence={evidence}
+            agentTrace={agentTrace}
+            interpretationError={interpretationError}
+            interpretationHistory={interpretationHistory}
+            question={question}
+            runtimeHint={interpretationRuntimeHint}
+            onNoteChange={onNoteChange}
+            onSaveNote={onSaveNote}
+            onCopyInterpretation={onCopyInterpretation}
+            onCitationClick={onCitationClick}
+            onQuestionChange={onQuestionChange}
+            onQuestionSubmit={onQuestionSubmit}
+            onRegenerate={onRegenerate}
+            onStop={onStop}
+            onOpenSettings={onOpenSettings}
+            onOpenHistoryItem={onOpenSparkItem}
+          />
+        ) : (
+          <div className="h-full min-h-0 overflow-y-auto pr-1">
+            <TasksPanel
+              tasks={tasks}
+              runningCount={runningTaskCount}
+              disabled={tasksDisabled}
+              onRunTask={onRunTask}
+              onStopTask={onStopTask}
+            />
+          </div>
+        )}
+      </div>
     </aside>
   )
 }

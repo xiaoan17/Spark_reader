@@ -18,37 +18,71 @@ import type { FollowUpTurn } from "@/stores/reader-store"
 
 type MockReaderShellProps = {
   selectionText: string
+  currentThreadSelectionText?: string
   interpretation: string
   answerSource?: string
   interpretationError?: string
   followUps: FollowUpTurn[]
+  currentNoteDraft?: string
+  currentNoteOpen?: boolean
+  currentNoteSaving?: boolean
+  currentThreadError?: string
   onDeepInterpret: () => void
+  onComment?: () => void
   onQuestionSubmit: (question: string) => void
+  onCurrentNoteChange?: (note: string) => void
+  onCurrentNoteSave?: () => void
+  onClearSelection: () => void
 }
 
 vi.mock("@/components/reader/ReaderShell", () => ({
   ReaderShell: ({
     selectionText,
+    currentThreadSelectionText,
     interpretation,
     answerSource,
     interpretationError,
     followUps,
+    currentNoteDraft,
+    currentNoteOpen,
+    currentNoteSaving,
+    currentThreadError,
     onDeepInterpret,
+    onComment,
     onQuestionSubmit,
+    onCurrentNoteChange,
+    onCurrentNoteSave,
+    onClearSelection,
   }: MockReaderShellProps) => (
     <main>
-      <div data-testid="selection">{selectionText}</div>
+      <div data-testid="selection">{currentThreadSelectionText || selectionText}</div>
       <div data-testid="answer-source">{answerSource ?? ""}</div>
       <div data-testid="interpretation-error">{interpretationError ?? ""}</div>
       <div data-testid="interpretation">{interpretation}</div>
+      <div data-testid="note-open">{currentNoteOpen ? "open" : "closed"}</div>
+      <div data-testid="note-draft">{currentNoteDraft ?? ""}</div>
+      <div data-testid="note-saving">{currentNoteSaving ? "saving" : "idle"}</div>
+      <div data-testid="thread-error">{currentThreadError ?? ""}</div>
       <div data-testid="follow-ups">
         {followUps.map((turn) => `${turn.question}\n${turn.answer}`).join("\n")}
       </div>
       <button type="button" onClick={onDeepInterpret}>
         深度解读
       </button>
+      <button type="button" onClick={onComment}>
+        批注
+      </button>
+      <button type="button" onClick={() => onCurrentNoteChange?.("这是我的 comment")}>
+        写批注
+      </button>
+      <button type="button" onClick={onCurrentNoteSave}>
+        保存笔记
+      </button>
       <button type="button" onClick={() => onQuestionSubmit("为什么强调长期？")}>
         追问
+      </button>
+      <button type="button" onClick={onClearSelection}>
+        取消选中
       </button>
     </main>
   ),
@@ -192,6 +226,79 @@ describe("App LLM key preflight", () => {
 
     unmount()
   })
+
+  it("keeps the active Spark thread available after clearing the text selection", async () => {
+    const { container, unmount } = await renderApp()
+
+    await clickButton(container, "深度解读")
+    await act(async () => {
+      vi.advanceTimersByTime(300)
+      await flushPromises()
+    })
+    await flushPromises()
+
+    await clickButton(container, "取消选中")
+
+    expect(useReaderStore.getState().selectionText).toBe("")
+    expect(useReaderStore.getState().currentThreadSelectionText).toBe("复利来自长期坚持")
+    expect(textByTestId(container, "selection")).toBe("复利来自长期坚持")
+
+    vi.mocked(searchBook).mockClear()
+    await clickButton(container, "追问")
+    await flushPromises()
+
+    expect(searchBook).toHaveBeenCalledWith("book-1", "复利来自长期坚持", 6)
+    expect(useReaderStore.getState().followUps).toHaveLength(1)
+
+    unmount()
+  })
+
+  it("saves a comment as a note Spark without requesting an AI answer", async () => {
+    const { container, unmount } = await renderApp()
+
+    await clickButton(container, "批注")
+
+    expect(useReaderStore.getState()).toMatchObject({
+      currentThreadSelectionText: "复利来自长期坚持",
+      currentNoteOpen: true,
+      phase: "reading",
+    })
+    expect(textByTestId(container, "note-open")).toBe("open")
+    expect(interpretSelection).not.toHaveBeenCalled()
+    expect(listenInterpretationStream).not.toHaveBeenCalled()
+    expect(searchBook).not.toHaveBeenCalled()
+
+    await clickButton(container, "写批注")
+    expect(useReaderStore.getState().currentNoteDraft).toBe("这是我的 comment")
+
+    await clickButton(container, "保存笔记")
+    await flushPromises()
+
+    expect(saveInterpretation).toHaveBeenCalledTimes(1)
+    const request = vi.mocked(saveInterpretation).mock.calls[0]?.[0]
+    expect(request).toMatchObject({
+      bookId: "book-1",
+      selectionText: "复利来自长期坚持",
+      turnIndex: 0,
+      question: null,
+      answer: "这是我的 comment",
+      answerSource: "local_fallback",
+      kind: "note",
+      pageIndex: 0,
+      positionStart: 0,
+      positionEnd: "复利来自长期坚持".length,
+    })
+    expect(request?.sessionId).toContain("interpretation-session-")
+    expect(useReaderStore.getState()).toMatchObject({
+      currentNoteDraft: "",
+      currentNoteOpen: false,
+    })
+    expect(interpretSelection).not.toHaveBeenCalled()
+    expect(listenInterpretationStream).not.toHaveBeenCalled()
+    expect(searchBook).not.toHaveBeenCalled()
+
+    unmount()
+  })
 })
 
 function seedIndexedSelection() {
@@ -221,7 +328,12 @@ function seedIndexedSelection() {
     followUps: [],
     activeInterpretationSessionId: "",
     currentThreadLightweight: false,
+    currentThreadSelectionText: "",
+    currentThreadSelectionRects: [],
+    currentThreadSelectionAnchor: null,
+    currentThreadPageIndex: null,
     currentNoteDraft: "",
+    currentNoteOpen: false,
     currentThreadError: "",
     highlights: [],
     interpretationHistory: [],

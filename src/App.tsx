@@ -140,7 +140,12 @@ export function App() {
     activeInterpretationSessionId,
     workbenchTab,
     currentThreadLightweight,
+    currentThreadSelectionText,
+    currentThreadSelectionRects,
+    currentThreadSelectionAnchor,
+    currentThreadPageIndex,
     currentNoteDraft,
+    currentNoteOpen,
     currentNoteSaving,
     currentThreadError,
     agentTasks,
@@ -177,7 +182,9 @@ export function App() {
     setActiveInterpretationSessionId,
     setWorkbenchTab,
     setCurrentThreadLightweight,
+    setCurrentThreadSelection,
     setCurrentNoteDraft,
+    setCurrentNoteOpen,
     setCurrentNoteSaving,
     setCurrentThreadError,
     upsertAgentTask,
@@ -246,8 +253,31 @@ export function App() {
     streamUnlisten.current = null
   }
 
+  function currentThreadFocus() {
+    const text = (currentThreadSelectionText || selectionText).trim()
+    const rects =
+      currentThreadSelectionText.trim().length > 0
+        ? currentThreadSelectionRects
+        : selectionRects
+    const anchor =
+      currentThreadSelectionText.trim().length > 0
+        ? currentThreadSelectionAnchor
+        : selectionAnchor
+    const pageIndex =
+      currentThreadPageIndex ??
+      anchor?.pageIndex ??
+      rects[0]?.pageIndex ??
+      Math.max(0, currentPage - 1)
+    return {
+      text,
+      rects,
+      anchor,
+      pageIndex,
+    }
+  }
+
   async function findEvidenceChunks(): Promise<SearchBookHit[]> {
-    const focus = selectionText.trim()
+    const focus = currentThreadFocus().text
     if (!bookId || libraryStatus !== "indexed" || !focus) {
       return []
     }
@@ -260,13 +290,15 @@ export function App() {
   }
 
   function runLocalInterpretation(mode: InterpretMode = "deep", lightweightOverride?: boolean) {
-    if (!selectionText.trim()) {
+    const focus = currentThreadFocus()
+    if (!focus.text) {
       return
     }
 
     const version = startRequest()
     const lightweight = lightweightOverride ?? useReaderStore.getState().currentThreadLightweight
     clearTimers()
+    setCurrentThreadSelection(focus.text, focus.rects, focus.anchor, focus.pageIndex)
     clearInterpretation()
     setCurrentThreadLightweight(lightweight)
     setWorkbenchTab("spark")
@@ -396,7 +428,7 @@ export function App() {
   }
 
   function handleQuestionSubmit(question: string) {
-    if (!selectionText) {
+    if (!currentThreadFocus().text) {
       return
     }
     const version = startRequest()
@@ -409,8 +441,23 @@ export function App() {
     setCurrentThreadLightweight(enabled)
   }
 
+  function handleStartComment() {
+    const focus = currentThreadFocus()
+    if (!focus.text) {
+      return
+    }
+    stopActiveRequest()
+    clearInterpretation()
+    setCurrentThreadSelection(focus.text, focus.rects, focus.anchor, focus.pageIndex)
+    setCurrentThreadLightweight(false)
+    setCurrentThreadError("")
+    setCurrentNoteOpen(true)
+    setWorkbenchTab("spark")
+    setPhase("reading")
+  }
+
   async function handleSaveCurrentNote() {
-    if (!selectionText.trim()) {
+    if (!currentThreadFocus().text) {
       setCurrentThreadError("请先框选一段文字")
       return
     }
@@ -432,6 +479,7 @@ export function App() {
       if (saved) {
         setActiveInterpretationSessionId(saved.sessionId)
         setCurrentNoteDraft("")
+        setCurrentNoteOpen(false)
       }
     } finally {
       setCurrentNoteSaving(false)
@@ -560,9 +608,9 @@ export function App() {
       await attachInterpretationStream(requestId, version)
       const result = await interpretSelection({
         bookId,
-        selectionText,
+        selectionText: currentThreadFocus().text,
         pageIndexes: focusPageIndexes(),
-        selectionRects,
+        selectionRects: currentThreadFocus().rects,
         focusChunkIds: focusChunkIds(),
         lightweight,
         mode,
@@ -609,15 +657,16 @@ export function App() {
     }
     const indexedChunks = hits.map(searchHitToChunk)
     const chunks = localFallbackChunks(indexedChunks)
-    const fallbackPages = selectionRects.length === 0 ? focusPageIndexes() : []
-    const evidencePreview = makeLocalEvidence(selectionRects, parsedPages, chunks, fallbackPages)
+    const focus = currentThreadFocus()
+    const fallbackPages = focus.rects.length === 0 ? focusPageIndexes() : []
+    const evidencePreview = makeLocalEvidence(focus.rects, parsedPages, chunks, fallbackPages)
     setEvidence(evidencePreview)
     setAgentTrace([])
     setAnswerSource("local_fallback")
     setPhase("retrieving")
     const text = makeLocalInterpretation(
-      selectionText,
-      selectionRects,
+      focus.text,
+      focus.rects,
       parsedPages,
       chunks,
       shouldUseBackendInterpretation({ bookId, libraryStatus, tauriRuntime: isTauriRuntime() }),
@@ -675,9 +724,9 @@ export function App() {
       await attachInterpretationStream(requestId, version, question, followUpId)
       const result = await interpretSelection({
         bookId,
-        selectionText,
+        selectionText: currentThreadFocus().text,
         pageIndexes: focusPageIndexes(),
-        selectionRects,
+        selectionRects: currentThreadFocus().rects,
         focusChunkIds: focusChunkIds(),
         question,
         priorAnswer: interpretation || undefined,
@@ -730,17 +779,18 @@ export function App() {
       return
     }
     const indexedChunks = hits.map(searchHitToChunk)
-    const fallbackPages = selectionRects.length === 0 ? focusPageIndexes() : []
+    const focus = currentThreadFocus()
+    const fallbackPages = focus.rects.length === 0 ? focusPageIndexes() : []
     const chunks = localFallbackChunks(indexedChunks)
-    const evidencePreview = makeLocalEvidence(selectionRects, parsedPages, chunks, fallbackPages)
+    const evidencePreview = makeLocalEvidence(focus.rects, parsedPages, chunks, fallbackPages)
     setEvidence(evidencePreview)
     setAgentTrace([])
     setAnswerSource("local_fallback")
     const answer = makeLocalFollowUpAnswer(
       question,
-      selectionText,
+      focus.text,
       parsedPages,
-      selectionRects,
+      focus.rects,
       chunks,
       shouldUseBackendInterpretation({ bookId, libraryStatus, tauriRuntime: isTauriRuntime() }),
       fallbackPages[0],
@@ -859,18 +909,19 @@ export function App() {
     if (version !== undefined && !isCurrentRequest(version)) {
       return
     }
-    if (!bookId || libraryStatus !== "indexed" || !selectionText.trim() || !answer.trim()) {
+    const focus = currentThreadFocus()
+    if (!bookId || libraryStatus !== "indexed" || !focus.text || !answer.trim()) {
       return
     }
 
     try {
       const pageIndexes = focusPageIndexes()
-      const pageIndex = pageIndexes[0] ?? currentPage - 1
+      const pageIndex = pageIndexes[0] ?? focus.pageIndex
       const preferredPositionStart =
-        selectionAnchor?.pageIndex === pageIndex ? selectionAnchor.positionStart : null
+        focus.anchor?.pageIndex === pageIndex ? focus.anchor.positionStart : null
       const selector = makeTextQuoteSelector(
         pageTextByIndex(parsedPages, pageIndex),
-        selectionText,
+        focus.text,
         preferredPositionStart,
       )
       const turn = planInterpretationTurn({
@@ -889,7 +940,7 @@ export function App() {
       }
       const request = {
         bookId,
-        selectionText,
+        selectionText: focus.text,
         sessionId: turn.sessionId,
         turnIndex: explicitTurnIndex ?? turn.turnIndex,
         prefix: selector.prefix,
@@ -929,14 +980,20 @@ export function App() {
   }
 
   function focusPageIndexes() {
-    return focusPageIndexesForSelection({ selectionRects, selectionAnchor, currentPage })
+    const focus = currentThreadFocus()
+    return focusPageIndexesForSelection({
+      selectionRects: focus.rects,
+      selectionAnchor: focus.anchor,
+      currentPage,
+    })
   }
 
   function focusChunkIds() {
+    const focus = currentThreadFocus()
     return focusChunkIdsForSelection({
-      selectionText,
-      selectionRects,
-      selectionAnchor,
+      selectionText: focus.text,
+      selectionRects: focus.rects,
+      selectionAnchor: focus.anchor,
       currentPage,
       chunks: parsedChunks,
       pages: parsedPages,
@@ -1075,7 +1132,12 @@ export function App() {
       restored.selectionRects,
       true,
     )
-    setSelection(restored.selectionText, restored.selectionRects, restored.selectionAnchor)
+    setCurrentThreadSelection(
+      restored.selectionText,
+      restored.selectionRects,
+      restored.selectionAnchor,
+      restored.pageNumber - 1,
+    )
     setActiveChunk(restored.activeChunkId)
     setEvidence(restored.evidence)
     setAgentTrace([])
@@ -1099,7 +1161,12 @@ export function App() {
     )
     if (sourceView === "translation") {
       setVisiblePage(restored.pageNumber)
-      setSelection(restored.selectionText, restored.selectionRects, restored.selectionAnchor)
+      setCurrentThreadSelection(
+        restored.selectionText,
+        restored.selectionRects,
+        restored.selectionAnchor,
+        restored.pageNumber - 1,
+      )
       setActiveChunk(restored.activeChunkId)
       setEvidence(restored.evidence)
       setAgentTrace([])
@@ -1399,7 +1466,10 @@ export function App() {
       workbenchTab={workbenchTab}
       workbenchRunningTaskCount={runningTaskCount}
       currentThreadLightweight={currentThreadLightweight}
+      currentThreadSelectionText={currentThreadSelectionText}
+      currentThreadSelectionRects={currentThreadSelectionRects}
       currentNoteDraft={currentNoteDraft}
+      currentNoteOpen={currentNoteOpen}
       currentNoteSaving={currentNoteSaving}
       currentThreadError={currentThreadError}
       agentTasks={agentTasks}
@@ -1443,6 +1513,7 @@ export function App() {
       onPhaseChange={setPhase}
       onDeepInterpret={() => runLocalInterpretation("deep", false)}
       onPlainExplain={() => runLocalInterpretation("plain", true)}
+      onComment={handleStartComment}
       onQuestionSubmit={handleQuestionSubmit}
       onWorkbenchTabChange={setWorkbenchTab}
       onCurrentThreadLightweightChange={handleCurrentThreadLightweightChange}

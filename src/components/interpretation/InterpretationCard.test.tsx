@@ -1,5 +1,7 @@
+import { act } from "react"
+import { createRoot } from "react-dom/client"
 import { renderToStaticMarkup } from "react-dom/server"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { InterpretationCard, renderCitations } from "./InterpretationCard"
 
 const chunkA = "b12345678-p1-c1-abcdef12"
@@ -148,6 +150,71 @@ describe("InterpretationCard citations", () => {
     expect(html).toContain("<button")
     expect(html).toContain("相关段落")
     expect(html).not.toContain(`[${chunkA}]`)
+  })
+
+  it("renders the initial answer and follow-ups as a visible conversation", () => {
+    const html = renderToStaticMarkup(
+      <InterpretationCard
+        phase="reading"
+        selectionText="复利来自长期坚持"
+        selectionRects={[]}
+        evidence={[{ chunkId: chunkA, title: `Chunk ${chunkA}`, pageIndex: 0 }]}
+        interpretation={`这是首轮解读。[${chunkA}]`}
+        followUps={[
+          {
+            id: "turn-1",
+            question: "为什么强调长期？",
+            answer: `因为时间会放大差异。[${chunkA}]`,
+          },
+        ]}
+      />,
+    )
+
+    expect(html).toContain("Spark")
+    expect(html).toContain("你 · 追问 1")
+    expect(html).toContain("这是首轮解读")
+    expect(html).toContain("为什么强调长期")
+    expect(html).toContain("因为时间会放大差异")
+  })
+
+  it("offers one-click follow-up prompts that submit the picked question", async () => {
+    const host = document.createElement("div")
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const onQuestionChange = vi.fn()
+    const onQuestionSubmit = vi.fn()
+
+    await act(async () => {
+      root.render(
+        <InterpretationCard
+          phase="reading"
+          selectionText="复利来自长期坚持"
+          selectionRects={[]}
+          evidence={[]}
+          interpretation="这是一段解读。"
+          followUps={[]}
+          onQuestionChange={onQuestionChange}
+          onQuestionSubmit={onQuestionSubmit}
+        />,
+      )
+    })
+
+    const suggestion = [...host.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("为什么重要？"),
+    ) as HTMLButtonElement | undefined
+    expect(suggestion).toBeTruthy()
+
+    await act(async () => {
+      suggestion?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    })
+
+    expect(onQuestionChange).toHaveBeenCalledWith("为什么重要？")
+    expect(onQuestionSubmit).toHaveBeenCalledWith("为什么重要？")
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
   })
 
   it("keeps a restored follow-up separate from the main interpretation", () => {

@@ -289,7 +289,12 @@ type ReaderState = {
   activeInterpretationSessionId: string
   workbenchTab: WorkbenchTab
   currentThreadLightweight: boolean
+  currentThreadSelectionText: string
+  currentThreadSelectionRects: NormalizedPageRect[]
+  currentThreadSelectionAnchor: TextSelectionAnchor | null
+  currentThreadPageIndex: number | null
   currentNoteDraft: string
+  currentNoteOpen: boolean
   currentNoteSaving: boolean
   currentThreadError: string
   agentTasks: AgentTask[]
@@ -353,7 +358,14 @@ type ReaderState = {
   setActiveInterpretationSessionId: (sessionId: string) => void
   setWorkbenchTab: (tab: WorkbenchTab) => void
   setCurrentThreadLightweight: (lightweight: boolean) => void
+  setCurrentThreadSelection: (
+    text: string,
+    rects: NormalizedPageRect[],
+    anchor?: TextSelectionAnchor | null,
+    pageIndex?: number | null,
+  ) => void
   setCurrentNoteDraft: (draft: string) => void
+  setCurrentNoteOpen: (open: boolean) => void
   setCurrentNoteSaving: (saving: boolean) => void
   setCurrentThreadError: (message: string) => void
   setAgentTasks: (tasks: AgentTask[]) => void
@@ -406,7 +418,12 @@ export const useReaderStore = create<ReaderState>((set) => ({
   activeInterpretationSessionId: "",
   workbenchTab: "spark",
   currentThreadLightweight: false,
+  currentThreadSelectionText: "",
+  currentThreadSelectionRects: [],
+  currentThreadSelectionAnchor: null,
+  currentThreadPageIndex: null,
   currentNoteDraft: "",
+  currentNoteOpen: false,
   currentNoteSaving: false,
   currentThreadError: "",
   agentTasks: [],
@@ -456,7 +473,12 @@ export const useReaderStore = create<ReaderState>((set) => ({
       activeInterpretationSessionId: "",
       workbenchTab: "spark",
       currentThreadLightweight: false,
+      currentThreadSelectionText: "",
+      currentThreadSelectionRects: [],
+      currentThreadSelectionAnchor: null,
+      currentThreadPageIndex: null,
       currentNoteDraft: "",
+      currentNoteOpen: false,
       currentNoteSaving: false,
       currentThreadError: "",
       agentTasks: [],
@@ -540,26 +562,21 @@ export const useReaderStore = create<ReaderState>((set) => ({
       selectionText: "",
       selectionRects: [],
       selectionAnchor: null,
-      evidence: [],
-      agentTrace: [],
-      interpretation: "",
-      answerSource: "llm",
-      interpretationError: "",
-      followUps: [],
-      activeInterpretationSessionId: "",
       activeChunkId: "",
-      currentNoteDraft: "",
-      currentThreadError: "",
-      currentThreadLightweight: false,
       phase: "reading",
     }),
   setVisiblePage: (currentPage) => set({ currentPage }),
   setZoom: (zoom) => set({ zoom }),
   setSelection: (selectionText, selectionRects, selectionAnchor = null) =>
-    set({
+    set((state) => ({
       selectionText,
       selectionRects,
       selectionAnchor,
+      currentThreadSelectionText: selectionText,
+      currentThreadSelectionRects: selectionRects,
+      currentThreadSelectionAnchor: selectionAnchor,
+      currentThreadPageIndex:
+        selectionAnchor?.pageIndex ?? selectionRects[0]?.pageIndex ?? Math.max(0, state.currentPage - 1),
       evidence: [],
       agentTrace: [],
       interpretation: "",
@@ -570,10 +587,11 @@ export const useReaderStore = create<ReaderState>((set) => ({
       activeChunkId: "",
       workbenchTab: "spark",
       currentNoteDraft: "",
+      currentNoteOpen: false,
       currentThreadError: "",
       currentThreadLightweight: false,
       phase: "reading",
-    }),
+    })),
   setActiveChunk: (activeChunkId) => set({ activeChunkId }),
   focusChunk: (
     currentPage,
@@ -591,6 +609,10 @@ export const useReaderStore = create<ReaderState>((set) => ({
             selectionText,
             selectionRects,
             selectionAnchor: null,
+            currentThreadSelectionText: selectionText,
+            currentThreadSelectionRects: selectionRects,
+            currentThreadSelectionAnchor: null,
+            currentThreadPageIndex: selectionRects[0]?.pageIndex ?? Math.max(0, currentPage - 1),
             evidence: [],
             agentTrace: [],
             interpretation: "",
@@ -618,7 +640,20 @@ export const useReaderStore = create<ReaderState>((set) => ({
     set({ activeInterpretationSessionId }),
   setWorkbenchTab: (workbenchTab) => set({ workbenchTab }),
   setCurrentThreadLightweight: (currentThreadLightweight) => set({ currentThreadLightweight }),
+  setCurrentThreadSelection: (
+    currentThreadSelectionText,
+    currentThreadSelectionRects,
+    currentThreadSelectionAnchor = null,
+    currentThreadPageIndex = null,
+  ) =>
+    set({
+      currentThreadSelectionText,
+      currentThreadSelectionRects,
+      currentThreadSelectionAnchor,
+      currentThreadPageIndex,
+    }),
   setCurrentNoteDraft: (currentNoteDraft) => set({ currentNoteDraft }),
+  setCurrentNoteOpen: (currentNoteOpen) => set({ currentNoteOpen }),
   setCurrentNoteSaving: (currentNoteSaving) => set({ currentNoteSaving }),
   setCurrentThreadError: (currentThreadError) => set({ currentThreadError }),
   setAgentTasks: (agentTasks) => set({ agentTasks }),
@@ -710,27 +745,36 @@ export const useReaderStore = create<ReaderState>((set) => ({
       activeInterpretationSessionId: "",
       activeChunkId: "",
       currentNoteDraft: "",
+      currentNoteOpen: false,
       currentThreadError: "",
       currentThreadLightweight: false,
       phase: "reading",
     }),
   clearSelection: () =>
-    set({
-      selectionText: "",
-      selectionRects: [],
-      selectionAnchor: null,
-      evidence: [],
-      agentTrace: [],
-      interpretation: "",
-      answerSource: "llm",
-      interpretationError: "",
-      followUps: [],
-      activeInterpretationSessionId: "",
-      activeChunkId: "",
-      currentNoteDraft: "",
-      currentThreadError: "",
-      currentThreadLightweight: false,
-      phase: "reading",
+    set((state) => {
+      const hasThreadContent =
+        state.interpretation.trim().length > 0 ||
+        state.followUps.length > 0 ||
+        state.activeInterpretationSessionId.trim().length > 0 ||
+        state.currentNoteDraft.trim().length > 0 ||
+        state.currentNoteOpen
+      return {
+        selectionText: "",
+        selectionRects: [],
+        selectionAnchor: null,
+        activeChunkId: "",
+        currentThreadError: "",
+        ...(hasThreadContent
+          ? {}
+          : {
+              currentThreadSelectionText: "",
+              currentThreadSelectionRects: [],
+              currentThreadSelectionAnchor: null,
+              currentThreadPageIndex: null,
+              currentThreadLightweight: false,
+            }),
+        phase: "reading",
+      }
     }),
 }))
 

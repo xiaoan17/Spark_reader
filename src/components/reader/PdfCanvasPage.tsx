@@ -46,6 +46,7 @@ type PdfCanvasPageProps = {
   onClearSelection: () => void
   onExplain: () => void
   onPlainExplain: () => void
+  onComment?: () => void
   onHighlight: () => void
   onRenderError: (message: string) => void
 }
@@ -88,6 +89,7 @@ export function PdfDocumentViewer({
   onClearSelection,
   onExplain,
   onPlainExplain,
+  onComment,
   onHighlight,
   onRenderError,
   onCurrentPageChange,
@@ -310,6 +312,7 @@ export function PdfDocumentViewer({
               onClearSelection={clearSelection}
               onExplain={onExplain}
               onPlainExplain={onPlainExplain}
+              onComment={onComment}
               onHighlight={onHighlight}
               onRenderError={onRenderError}
             />
@@ -333,6 +336,7 @@ export function PdfCanvasPage({
   onClearSelection,
   onExplain,
   onPlainExplain,
+  onComment,
   onHighlight,
   onRenderError,
 }: PdfCanvasPageProps) {
@@ -523,11 +527,12 @@ export function PdfCanvasPage({
       {visibleSelectionRects.length > 0 ? (
         <SelectionToolbar
           approximate={approximateSelection}
-          className="absolute z-10 max-w-[calc(100%-2rem)] animate-pop-in"
+          className="absolute z-10 max-w-[calc(100%-2rem)]"
           style={toolbarPosition ?? { left: 32, top: 32 }}
           onExplain={onExplain}
           onHighlight={onHighlight}
           onPlainExplain={onPlainExplain}
+          onComment={onComment}
         />
       ) : null}
     </div>

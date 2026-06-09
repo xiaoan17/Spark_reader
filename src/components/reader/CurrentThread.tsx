@@ -1,12 +1,14 @@
-import { Sparkles } from "lucide-react"
+import { Clock, MessageSquare, Sparkles } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { InterpretationCard } from "@/components/interpretation/InterpretationCard"
+import { summarizeInterpretationSessions } from "@/core/interpretation-history"
 import type {
   AgentTraceStep,
   AnswerSource,
   EvidencePreview,
   FollowUpTurn,
   ReaderPhase,
+  SavedInterpretation,
 } from "@/stores/reader-store"
 import type { NormalizedPageRect } from "@/core/coordinates"
 
@@ -21,10 +23,12 @@ export type CurrentThreadProps = {
   evidence: EvidencePreview[]
   agentTrace: AgentTraceStep[]
   interpretationError?: string
+  interpretationHistory?: SavedInterpretation[]
   question: string
   noteDraft: string
   noteSaving?: boolean
   noteError?: string
+  noteInitiallyOpen?: boolean
   lightweight: boolean
   runtimeHint?: string
   onNoteChange: (note: string) => void
@@ -32,10 +36,11 @@ export type CurrentThreadProps = {
   onCopyInterpretation: () => void
   onCitationClick: (chunkId: string) => void
   onQuestionChange: (question: string) => void
-  onQuestionSubmit: () => void
+  onQuestionSubmit: (question?: string) => void
   onRegenerate: () => void
   onStop: () => void
   onOpenSettings: () => void
+  onOpenHistoryItem?: (item: SavedInterpretation) => void
 }
 
 export function CurrentThread({
@@ -49,10 +54,12 @@ export function CurrentThread({
   evidence,
   agentTrace,
   interpretationError = "",
+  interpretationHistory = [],
   question,
   noteDraft,
   noteSaving = false,
   noteError = "",
+  noteInitiallyOpen = false,
   lightweight,
   runtimeHint,
   onNoteChange,
@@ -64,12 +71,20 @@ export function CurrentThread({
   onRegenerate,
   onStop,
   onOpenSettings,
+  onOpenHistoryItem = () => undefined,
 }: CurrentThreadProps) {
   const hasSelection = selectionText.trim().length > 0
   const hasInterpretation = interpretation.trim().length > 0
 
   if (!hasSelection && !hasInterpretation) {
-    return <SparkEmptyState runtimeHint={runtimeHint} onOpenSettings={onOpenSettings} />
+    return (
+      <SparkEmptyState
+        runtimeHint={runtimeHint}
+        history={interpretationHistory}
+        onOpenSettings={onOpenSettings}
+        onOpenHistoryItem={onOpenHistoryItem}
+      />
+    )
   }
 
   return (
@@ -89,6 +104,7 @@ export function CurrentThread({
       noteDraft={noteDraft}
       noteSaving={noteSaving}
       noteError={noteError}
+      noteInitiallyOpen={noteInitiallyOpen}
       onCopy={onCopyInterpretation}
       onQuestionChange={onQuestionChange}
       onQuestionSubmit={onQuestionSubmit}
@@ -105,31 +121,82 @@ export function CurrentThread({
 
 function SparkEmptyState({
   runtimeHint,
+  history,
   onOpenSettings,
+  onOpenHistoryItem,
 }: {
   runtimeHint?: string
+  history: SavedInterpretation[]
   onOpenSettings: () => void
+  onOpenHistoryItem: (item: SavedInterpretation) => void
 }) {
+  const recent = summarizeInterpretationSessions(history).slice(0, 8)
   return (
-    <div className="flex min-h-[60vh] flex-col items-center justify-center px-6 text-center">
-      <span className="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-primary">
-        <Sparkles className="h-5 w-5" />
-      </span>
-      <p className="text-sm font-medium text-foreground">框选一段原文试试</p>
-      <p className="mt-2 max-w-64 text-sm leading-6 text-muted-foreground">
-        Spark 会先在全书检索证据，再给出带可点击引用、可追问的解读。
-      </p>
-      <p className="mt-3 max-w-64 text-xs leading-5 text-muted-foreground">
-        深度 / 轻量在框选浮条上选择。
-      </p>
-      {runtimeHint ? (
-        <p className="mt-4 max-w-64 rounded-md bg-muted px-3 py-2 text-xs leading-5 text-muted-foreground">
-          {runtimeHint}
+    <div className="flex h-full min-h-0 flex-col overflow-y-auto px-1 pb-2">
+      <div className="flex min-h-[44vh] flex-col items-center justify-center px-5 text-center">
+        <span className="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-primary">
+          <Sparkles className="h-5 w-5" />
+        </span>
+        <p className="text-sm font-medium text-foreground">框选一段原文试试</p>
+        <p className="mt-2 max-w-64 text-sm leading-6 text-muted-foreground">
+          Spark 会先在全书检索证据，再给出带可点击引用、可追问的解读。
         </p>
+        <p className="mt-3 max-w-64 text-xs leading-5 text-muted-foreground">
+          深度 / 轻量在框选浮条上选择。
+        </p>
+        {runtimeHint ? (
+          <p className="mt-4 max-w-64 rounded-md bg-muted px-3 py-2 text-xs leading-5 text-muted-foreground">
+            {runtimeHint}
+          </p>
+        ) : null}
+        <Button size="sm" variant="ghost" className="mt-4" onClick={onOpenSettings}>
+          查看 AI 设置
+        </Button>
+      </div>
+      {recent.length > 0 ? (
+        <section className="space-y-2 border-t pt-3">
+          <div className="flex items-center gap-2 px-1 text-xs font-medium text-muted-foreground">
+            <Clock className="h-3.5 w-3.5" />
+            最近 Spark
+          </div>
+          <div className="space-y-2">
+            {recent.map((item) => (
+              <button
+                key={item.sessionId || item.id}
+                type="button"
+                className="w-full rounded-md border bg-background px-3 py-2 text-left text-sm transition-[background-color,box-shadow,transform] duration-interactive ease-reader hover:bg-muted hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-ring active:scale-[0.99]"
+                onClick={() => onOpenHistoryItem(item)}
+              >
+                <span className="line-clamp-2 font-reading leading-6 text-foreground">
+                  {item.selectionText}
+                </span>
+                <span className="mt-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                  <span>{formatHistoryTime(item.lastCreatedAt)}</span>
+                  {item.followUpCount > 0 ? (
+                    <span className="inline-flex items-center gap-1">
+                      <MessageSquare className="h-3 w-3" />
+                      {item.followUpCount}
+                    </span>
+                  ) : null}
+                </span>
+              </button>
+            ))}
+          </div>
+        </section>
       ) : null}
-      <Button size="sm" variant="ghost" className="mt-4" onClick={onOpenSettings}>
-        查看 AI 设置
-      </Button>
     </div>
   )
+}
+
+function formatHistoryTime(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return "已保存"
+  }
+  return date.toLocaleString("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  })
 }
