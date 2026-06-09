@@ -9,11 +9,10 @@ import {
   NotebookPen,
   RefreshCcw,
   Send,
-  Sparkles,
   Square,
   User,
 } from "lucide-react"
-import { useEffect, useRef, useState, type CSSProperties } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { MarkdownContent } from "@/components/markdown/MarkdownContent"
@@ -29,9 +28,9 @@ import type {
 import { cn } from "@/lib/utils"
 import type { NormalizedPageRect } from "@/core/coordinates"
 import {
-  citationLabelMap,
+  citationMarkerLabel,
+  citationMarkerLabelMapForChunkIds,
   chunkIdsInCitation,
-  evidenceLabel,
   internalCitationPattern,
   retrievalEvidenceLabel,
   sanitizeInternalReferenceText,
@@ -130,24 +129,19 @@ export function InterpretationCard({
 
   return (
     <div className={cn("flex h-full min-h-0 flex-col", className)}>
-      <div className="shrink-0 border-b pb-3">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
-                <Sparkles className="h-4 w-4 text-primary" />
-                Spark
-              </span>
-              <Badge variant="secondary">{lightweight ? "轻量" : "深度"}</Badge>
-            </div>
-            <blockquote className="mt-3 border-l-2 border-primary/50 pl-3 font-reading text-sm leading-7 text-muted-foreground">
-              {selectionText || "尚未选择文本"}
-            </blockquote>
+      <div className="shrink-0 pb-2">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="text-sm font-semibold text-foreground">Spark</span>
+            <Badge variant="secondary" className="h-5 px-1.5 text-[11px]">
+              {lightweight ? "轻量" : "深度"}
+            </Badge>
           </div>
           {streaming ? (
             <Button
               size="icon"
               variant="ghost"
+              className="h-7 w-7 shrink-0"
               aria-label={stopping ? "停止中" : "停止生成"}
               disabled={stopping}
               onClick={() => {
@@ -160,7 +154,7 @@ export function InterpretationCard({
           ) : null}
         </div>
       </div>
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto py-4 pr-1">
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pb-3 pr-1">
         <PhaseBody
           phase={phase}
           selectionText={selectionText}
@@ -182,10 +176,10 @@ export function InterpretationCard({
         ) : null}
       </div>
       {showActions ? (
-        <div className="-mx-3 mt-auto shrink-0 space-y-3 border-t bg-card/95 px-3 pt-3 backdrop-blur">
-          <div className="flex gap-2 rounded-md border bg-background p-2">
+        <div className="-mx-2 mt-auto shrink-0 space-y-2 border-t bg-card/95 px-2 py-2 backdrop-blur">
+          <div className="flex gap-1.5 rounded-md border bg-background p-1.5">
             <textarea
-              className="min-h-16 flex-1 resize-none bg-transparent text-sm outline-none"
+              className="max-h-24 min-h-9 flex-1 resize-none bg-transparent py-1 text-sm leading-5 outline-none"
               placeholder="围绕这段继续追问；会检索证据后回答"
               value={question}
               onChange={(event) => onQuestionChange?.(event.target.value)}
@@ -197,27 +191,65 @@ export function InterpretationCard({
               }}
             />
             <Button
-              size="sm"
-              className="self-end gap-1.5"
+              size="icon"
+              className="h-8 w-8 shrink-0 self-end"
               disabled={question.trim().length === 0}
+              aria-label="发送"
+              title="发送"
               onClick={() => submitQuestion()}
             >
               <Send className="h-4 w-4" />
-              发送
+              <span className="sr-only">发送</span>
             </Button>
           </div>
-          <SuggestedFollowUps
-            selectionText={selectionText}
-            followUps={followUps}
-            onPick={(suggestion) => {
-              onQuestionChange?.(suggestion)
-              submitQuestion(suggestion)
-            }}
-          />
+          <div className="flex min-w-0 items-center gap-1.5">
+            <SuggestedFollowUps
+              selectionText={selectionText}
+              followUps={followUps}
+              onPick={(suggestion) => {
+                onQuestionChange?.(suggestion)
+                submitQuestion(suggestion)
+              }}
+            />
+            <div className="ml-auto flex shrink-0 items-center gap-0.5">
+              <Button
+                size="icon"
+                variant={noteOpen ? "secondary" : "ghost"}
+                className="h-7 w-7"
+                aria-pressed={noteOpen}
+                aria-label="保存笔记"
+                title="保存笔记"
+                onClick={() => setNoteOpen((open) => !open)}
+              >
+                <NotebookPen className="h-4 w-4" />
+                <span className="sr-only">保存</span>
+              </Button>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-7 w-7"
+                aria-label="复制解读"
+                title="复制解读"
+                onClick={onCopy}
+              >
+                <Copy className="h-4 w-4" />
+              </Button>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-7 w-7"
+                aria-label="重新生成解读"
+                title="重新生成解读"
+                onClick={onRegenerate}
+              >
+                <RefreshCcw className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
           {noteOpen ? (
             <div className="space-y-2 rounded-md border bg-background p-2">
               <textarea
-                className="min-h-16 w-full resize-none bg-transparent text-sm leading-6 outline-none"
+                className="min-h-14 w-full resize-none bg-transparent text-sm leading-6 outline-none"
                 placeholder="写下这段文字触发的想法"
                 value={noteDraft}
                 onChange={(event) => onNoteChange?.(event.target.value)}
@@ -236,23 +268,6 @@ export function InterpretationCard({
               </div>
             </div>
           ) : null}
-          <div className="flex items-center justify-end gap-1">
-            <Button
-              size="sm"
-              variant={noteOpen ? "secondary" : "ghost"}
-              aria-pressed={noteOpen}
-              onClick={() => setNoteOpen((open) => !open)}
-            >
-              <NotebookPen className="mr-1.5 h-4 w-4" />
-              保存
-            </Button>
-            <Button size="icon" variant="ghost" aria-label="复制解读" onClick={onCopy}>
-              <Copy className="h-4 w-4" />
-            </Button>
-            <Button size="icon" variant="ghost" aria-label="重新生成解读" onClick={onRegenerate}>
-              <RefreshCcw className="h-4 w-4" />
-            </Button>
-          </div>
         </div>
       ) : null}
     </div>
@@ -342,6 +357,7 @@ function PhaseBody({
 
   if ((phase === "streaming" || phase === "reading") && interpretation) {
     const trust = interpretationTrustState(interpretation, evidence, citationChunkIds, answerSource)
+    const citationLabels = visibleCitationLabelMap(evidence, citationChunkIds, interpretation, followUps)
     return (
       <div className="animate-fade-in space-y-4 text-sm leading-7">
         {answerSource === "local_fallback" ? (
@@ -359,6 +375,7 @@ function PhaseBody({
           followUps={followUps}
           evidence={evidence}
           citationChunkIds={citationChunkIds}
+          citationLabels={citationLabels}
           onCitationClick={onCitationClick}
         />
         {selectionRects.length > 0 ? <CoordinateList selectionRects={selectionRects} /> : null}
@@ -369,6 +386,7 @@ function PhaseBody({
 
   if ((phase === "streaming" || phase === "reading") && selectionRects.length === 0) {
     if (selectionText) {
+      const citationLabels = visibleCitationLabelMap(evidence, citationChunkIds, "", followUps)
       return (
         <div className="animate-fade-in space-y-3">
           {evidence.length > 0 ? (
@@ -377,8 +395,7 @@ function PhaseBody({
                 <CitationPreviewButton
                   key={item.chunkId}
                   item={item}
-                  label={evidenceLabel(item, evidence)}
-                  style={staggerStyle(index)}
+                  label={citationLabels.get(item.chunkId) ?? citationMarkerLabel(index)}
                   onClick={() => onCitationClick?.(item.chunkId)}
                 />
               ))}
@@ -389,6 +406,7 @@ function PhaseBody({
               followUps={followUps}
               evidence={evidence}
               citationChunkIds={citationChunkIds}
+              citationLabels={citationLabels}
               onCitationClick={onCitationClick}
             />
           ) : null}
@@ -404,6 +422,7 @@ function PhaseBody({
   }
 
   if (phase === "streaming" || phase === "reading") {
+    const citationLabels = visibleCitationLabelMap(evidence, citationChunkIds, "", followUps)
     return (
       <div className="animate-fade-in space-y-3 text-sm leading-7">
         {followUps.length > 0 ? (
@@ -411,6 +430,7 @@ function PhaseBody({
             followUps={followUps}
             evidence={evidence}
             citationChunkIds={citationChunkIds}
+            citationLabels={citationLabels}
             onCitationClick={onCitationClick}
           />
         ) : null}
@@ -449,12 +469,14 @@ function ConversationTimeline({
   followUps,
   evidence,
   citationChunkIds,
+  citationLabels,
   onCitationClick,
 }: {
   interpretation: string
   followUps: FollowUpTurn[]
   evidence: EvidencePreview[]
   citationChunkIds?: string[]
+  citationLabels: ReadonlyMap<string, string>
   onCitationClick?: (chunkId: string) => void
 }) {
   return (
@@ -465,6 +487,7 @@ function ConversationTimeline({
           content={interpretation}
           evidence={evidence}
           citationChunkIds={citationChunkIds}
+          citationLabels={citationLabels}
           onCitationClick={onCitationClick}
         >
           {evidence.length > 0 ? (
@@ -473,8 +496,7 @@ function ConversationTimeline({
                 <CitationPreviewButton
                   key={item.chunkId}
                   item={item}
-                  label={evidenceLabel(item, evidence, index)}
-                  style={staggerStyle(index)}
+                  label={citationLabels.get(item.chunkId) ?? citationMarkerLabel(index)}
                   onClick={() => onCitationClick?.(item.chunkId)}
                 />
               ))}
@@ -492,6 +514,7 @@ function ConversationTimeline({
                 content={turn.answer}
                 evidence={evidence}
                 citationChunkIds={citationChunkIds}
+                citationLabels={citationLabels}
                 streaming={turn.answer.trim().length === 0}
                 onCitationClick={onCitationClick}
               />
@@ -507,13 +530,16 @@ function FollowUpList({
   followUps,
   evidence = [],
   citationChunkIds,
+  citationLabels,
   onCitationClick,
 }: {
   followUps: FollowUpTurn[]
   evidence?: EvidencePreview[]
   citationChunkIds?: string[]
+  citationLabels?: ReadonlyMap<string, string>
   onCitationClick?: (chunkId: string) => void
 }) {
+  const labels = citationLabels ?? visibleCitationLabelMap(evidence, citationChunkIds, "", followUps)
   return (
     <div className="space-y-4 border-t pt-4 text-sm leading-7">
       {followUps.map((turn, index) => (
@@ -524,6 +550,7 @@ function FollowUpList({
             content={turn.answer}
             evidence={evidence}
             citationChunkIds={citationChunkIds}
+            citationLabels={labels}
             streaming={turn.answer.trim().length === 0}
             onCitationClick={onCitationClick}
           />
@@ -538,6 +565,7 @@ function AssistantTurn({
   content,
   evidence,
   citationChunkIds,
+  citationLabels,
   streaming = false,
   children,
   onCitationClick,
@@ -546,6 +574,7 @@ function AssistantTurn({
   content: string
   evidence: EvidencePreview[]
   citationChunkIds?: string[]
+  citationLabels?: ReadonlyMap<string, string>
   streaming?: boolean
   children?: React.ReactNode
   onCitationClick?: (chunkId: string) => void
@@ -568,6 +597,7 @@ function AssistantTurn({
           content={content}
           evidence={evidence}
           citationChunkIds={citationChunkIds}
+          citationLabels={citationLabels}
           onCitationClick={onCitationClick}
           className="text-sm"
         />
@@ -608,12 +638,13 @@ function SuggestedFollowUps({
 }) {
   const suggestions = followUpSuggestions(selectionText, followUps.length)
   return (
-    <div className="flex flex-wrap gap-2">
-      {suggestions.map((suggestion) => (
+    <div className="flex min-w-0 flex-1 gap-1.5 overflow-hidden">
+      {suggestions.slice(0, 2).map((suggestion) => (
         <button
           key={suggestion}
           type="button"
-          className="rounded-md border bg-background px-2 py-1 text-xs text-muted-foreground transition-[background-color,color,box-shadow,transform] duration-interactive ease-reader hover:bg-muted hover:text-foreground hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-ring active:scale-[0.98]"
+          className="min-w-0 truncate rounded-md border bg-background px-2 py-1 text-xs text-muted-foreground transition-[background-color,color,box-shadow,transform] duration-interactive ease-reader hover:bg-muted hover:text-foreground hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-ring active:scale-[0.98]"
+          title={suggestion}
           onClick={() => onPick(suggestion)}
         >
           {suggestion}
@@ -637,34 +668,47 @@ function followUpSuggestions(selectionText: string, followUpCount: number) {
 function CitationPreviewButton({
   item,
   label,
-  style,
   onClick,
 }: {
   item: EvidencePreview
   label: string
-  style?: CSSProperties
   onClick?: () => void
 }) {
-  const preview = sanitizeInternalReferenceText(item.title)
-    .replace(/[A-Za-z0-9]{6,}-p\d+-c\d+-[A-Za-z0-9]{6,}/g, "引用")
-    .slice(0, 140)
+  const pageLabel = `第 ${item.pageIndex + 1} 页`
   return (
-    <span className="group relative inline-flex">
+    <span className="inline-flex">
       <button
         type="button"
-        className="animate-slide-in-up rounded-md border bg-background px-2 py-1 text-xs transition-[background-color,box-shadow,transform] duration-interactive ease-reader hover:bg-muted hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-ring active:scale-[0.98]"
-        style={style}
+        className="inline-flex rounded px-1 text-xs font-semibold text-primary underline-offset-2 transition-colors duration-subtle ease-reader hover:text-primary/80 hover:underline focus:outline-none focus:ring-2 focus:ring-ring"
         onClick={onClick}
-        aria-label={`${label}，点击回到原文`}
+        aria-label={`${label}，点击回到${pageLabel}原文`}
       >
         {label}
       </button>
-      <span className="pointer-events-none absolute bottom-full left-0 z-20 mb-2 hidden w-64 rounded-md border bg-popover px-3 py-2 text-left text-xs leading-5 text-popover-foreground shadow-lg group-focus-within:block group-hover:block">
-        <span className="block font-medium">第 {item.pageIndex + 1} 页</span>
-        <span className="mt-1 block text-muted-foreground">{preview || "原文证据预览"}</span>
-      </span>
     </span>
   )
+}
+
+function visibleCitationLabelMap(
+  evidence: EvidencePreview[],
+  citationChunkIds: string[] | undefined,
+  interpretation: string,
+  followUps: FollowUpTurn[],
+) {
+  return citationMarkerLabelMapForChunkIds([
+    ...(citationChunkIds ?? []),
+    ...chunkIdsInText(interpretation),
+    ...followUps.flatMap((turn) => chunkIdsInText(turn.answer)),
+    ...evidence.map((item) => item.chunkId),
+  ])
+}
+
+function chunkIdsInText(text: string) {
+  const ids: string[] = []
+  for (const match of text.matchAll(internalCitationPattern)) {
+    ids.push(...chunkIdsInCitation(match[1] ?? ""))
+  }
+  return ids
 }
 
 function retrievalTraceItems(

@@ -47,7 +47,6 @@ import {
   searchZoteroItems,
   startTranslation,
   translationStatus,
-  cancelTranslation,
   type StoredBookSummary,
   type TranslationStatus,
 } from "@/core/library-api"
@@ -97,7 +96,6 @@ vi.mock("@/core/library-api", async (importOriginal) => {
     searchZoteroItems: vi.fn(async () => []),
     startTranslation: vi.fn(),
     translationStatus: vi.fn(),
-    cancelTranslation: vi.fn(async () => false),
     searchIndexSummary: vi.fn(async (bookId: string) => ({
       bookId,
       chunkCount: 0,
@@ -309,7 +307,6 @@ beforeEach(() => {
   vi.mocked(searchZoteroItems).mockResolvedValue([])
   vi.mocked(startTranslation).mockReset()
   vi.mocked(translationStatus).mockReset()
-  vi.mocked(cancelTranslation).mockReset()
   vi.mocked(translationStatus).mockImplementation(async (bookId: string) => ({
     bookId,
     totalPages: 0,
@@ -320,7 +317,7 @@ beforeEach(() => {
     model: "",
     pages: [],
   }))
-  vi.mocked(cancelTranslation).mockResolvedValue(false)
+  vi.mocked(startTranslation).mockImplementation(async (bookId: string) => translationStatus(bookId))
   vi.mocked(searchIndexSummary).mockResolvedValue({
     bookId: "",
     chunkCount: 0,
@@ -2447,22 +2444,17 @@ describe("ReaderShell runtime affordances", () => {
     )
 
     await clickAsync(buttonByText(container, "对照翻译"))
+    await vi.waitFor(() => expect(startTranslation).toHaveBeenCalledWith("book-translated", false))
     await vi.waitFor(() => expect(translationStatus).toHaveBeenCalledWith("book-translated"))
 
-    const toolbar = container.querySelector("[data-translation-toolbar]")
     const scroller = container.querySelector("[data-translation-scroller]")
-    expect(toolbar).not.toBeNull()
+    expect(container.querySelector("[data-translation-toolbar]")).toBeNull()
     expect(scroller).not.toBeNull()
-    expect(toolbar?.className).not.toContain("sticky")
     expect(scroller?.className).toContain("overflow-y-auto")
-    expect(textContent(toolbar)).toContain("本地缓存")
-    expect(textContent(toolbar)).toContain("译文进度 1/1")
-    expect(textContent(toolbar)).toContain("重新翻译")
-    expect(textContent(toolbar)).not.toContain("继续翻译")
-    expect(textContent(toolbar)).not.toContain("重试失败")
     expect(textContent(scroller)).toContain("English source.")
     expect(textContent(scroller)).toContain("中文译文。")
     expect(textContent(scroller)).not.toContain("本地缓存")
+    expect(textContent(scroller)).not.toContain("重新翻译")
     unmount()
   })
 
@@ -4581,7 +4573,7 @@ describe("ReaderShell product interaction chain", () => {
     expect(textContent(container)).toContain("模型检索第 1 轮")
     expect(textContent(container)).not.toContain(chunkA)
 
-    click(buttonByText(container, "引用"))
+    click(buttonByText(container, "[2]"))
     expect(onCitationClick).toHaveBeenCalledWith(chunkB)
 
     const questionBox = inputByPlaceholder(

@@ -505,11 +505,7 @@ export function ReaderShell({
     totalPages > 0 && (canRead || (isTauriRuntime() && currentBookHasPdfSource))
   const {
     translation,
-    translationBusy,
-    translationMessage,
-    refreshTranslation,
     handleStartTranslation,
-    handleCancelTranslation,
   } = useReaderTranslation({
     bookId,
     libraryStatus,
@@ -766,10 +762,11 @@ export function ReaderShell({
             void handlePdfViewClick()
             return
           }
-          switchReaderView(item.view)
           if (item.view === "translation") {
-            void refreshTranslation()
+            void handleStartTranslation(false)
+            return
           }
+          switchReaderView(item.view)
         }}
         onToggleSearch={() => {
           togglePanel("searchOpen")
@@ -924,8 +921,6 @@ export function ReaderShell({
               currentPage={safePage}
               totalPages={totalPages}
               translation={translation}
-              busy={translationBusy}
-              message={translationMessage}
               selectionText={selectionText}
               selectionRects={selectionRects}
               selectionAnchor={selectionAnchor}
@@ -934,10 +929,6 @@ export function ReaderShell({
                 return kind === "interpretation" || kind === "spark" || kind === "note"
               })}
               onCurrentPageChange={onVisiblePageChange}
-              onStart={() => void handleStartTranslation(false)}
-              onRetranslate={() => void handleStartTranslation(true)}
-              onRetryFailed={() => void handleStartTranslation(false)}
-              onCancel={() => void handleCancelTranslation()}
               onExplain={runDeepInterpretation}
               onPlainExplain={runPlainInterpretation}
               onComment={startComment}

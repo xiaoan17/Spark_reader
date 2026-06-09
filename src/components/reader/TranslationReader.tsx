@@ -9,10 +9,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react"
-import { Languages, Loader2, RefreshCw } from "lucide-react"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Progress } from "@/components/ui/progress"
+import { Loader2 } from "lucide-react"
 import { MarkdownContent } from "@/components/markdown/MarkdownContent"
 import type { NormalizedPageRect } from "@/core/coordinates"
 import type { TranslationStatus } from "@/core/library-api"
@@ -60,9 +57,14 @@ import {
 import { cleanPdfLineBreaks } from "./reader-text"
 
 const STORED_BOOK_PAGE_WINDOW_PREFETCH = 16
-const TRANSLATION_RAIL_WIDTH = 360
+const TRANSLATION_RAIL_WIDTH = 326
 const TRANSLATION_SOURCE_WIDTH = 768
-const TRANSLATION_RAIL_GAP = 28
+const TRANSLATION_RAIL_GAP = 20
+const TRANSLATION_WIDE_CANVAS_WIDTH =
+  TRANSLATION_SOURCE_WIDTH + TRANSLATION_RAIL_GAP + TRANSLATION_RAIL_WIDTH
+const TRANSLATION_WIDE_LAYOUT_MIN_WIDTH = TRANSLATION_WIDE_CANVAS_WIDTH + 32
+
+type TranslationLayout = "inline" | "rail"
 
 export type TranslationReaderProps = {
   pages: ParsedPage[]
@@ -70,17 +72,11 @@ export type TranslationReaderProps = {
   currentPage: number
   totalPages: number
   translation: TranslationStatus | null
-  busy: boolean
-  message: string
   selectionText: string
   selectionRects: NormalizedPageRect[]
   selectionAnchor: TextSelectionAnchor | null
   sparkItems?: SavedInterpretation[]
   onCurrentPageChange: (page: number) => void
-  onStart: () => void
-  onRetranslate: () => void
-  onRetryFailed: () => void
-  onCancel: () => void
   onExplain: () => void
   onPlainExplain: () => void
   onComment?: () => void
@@ -101,17 +97,11 @@ export function TranslationReader({
   currentPage,
   totalPages,
   translation,
-  busy,
-  message,
   selectionText,
   selectionRects,
   selectionAnchor,
   sparkItems = [],
   onCurrentPageChange,
-  onStart,
-  onRetranslate,
-  onRetryFailed,
-  onCancel,
   onExplain,
   onPlainExplain,
   onComment,
@@ -135,6 +125,7 @@ export function TranslationReader({
   const [toolbarSize, setToolbarSize] = useState<{ width: number; height: number } | null>(null)
   const [toolbarSuppressed, setToolbarSuppressed] = useState(false)
   const [virtualScroll, setVirtualScroll] = useState({ top: 0, height: 900 })
+  const [translationLayout, setTranslationLayout] = useState<TranslationLayout>("inline")
   const [sourceBlockMeasurements, setSourceBlockMeasurements] = useState(new Map<string, SourceBlockMeasurement>())
   const {
     pageRefs,
@@ -174,16 +165,6 @@ export function TranslationReader({
     }
     return byPage
   }, [translation])
-  const progress =
-    translation && translation.totalPages > 0
-      ? Math.round((translation.completedPages / translation.totalPages) * 100)
-      : 0
-  const translationComplete = isTranslationComplete(translation)
-  const hasFailedPages = Boolean(translation && translation.failedPages > 0)
-  const hasCachedPages = Boolean(translation && translation.completedPages > 0)
-  const showStatusMessage = Boolean(message && (busy || translation?.running || !translationComplete))
-  const primaryActionLabel = hasCachedPages ? "继续翻译" : "开始翻译"
-
   useEffect(() => {
     currentPageRef.current = currentPage
   }, [currentPage])
@@ -407,8 +388,29 @@ export function TranslationReader({
   }, [])
 
   useEffect(() => {
+    const scroller = scrollerRef.current
+    if (!scroller) {
+      return
+    }
+    const syncLayout = () => {
+      const width = scroller.clientWidth || scroller.getBoundingClientRect().width || 0
+      const nextLayout: TranslationLayout =
+        width >= TRANSLATION_WIDE_LAYOUT_MIN_WIDTH ? "rail" : "inline"
+      setTranslationLayout((current) => (current === nextLayout ? current : nextLayout))
+    }
+    syncLayout()
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", syncLayout)
+      return () => window.removeEventListener("resize", syncLayout)
+    }
+    const observer = new ResizeObserver(syncLayout)
+    observer.observe(scroller)
+    return () => observer.disconnect()
+  }, [])
+
+  useEffect(() => {
     resetMeasuredPageHeights({ preserveExisting: true })
-  }, [pages, translation, resetMeasuredPageHeights])
+  }, [pages, translation, translationLayout, resetMeasuredPageHeights])
 
   useLayoutEffect(() => {
     if (sourceBlockRefs.current.size === 0) {
@@ -599,90 +601,27 @@ export function TranslationReader({
     }, 0)
   }
 
+  const useRailLayout = translationLayout === "rail"
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div
-        className="shrink-0 border-b bg-card/95 px-6 py-2.5 shadow-sm backdrop-blur"
-        data-translation-toolbar
-      >
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <div className="flex min-w-0 items-center gap-2 text-sm font-semibold">
-              <Languages className="h-4 w-4 shrink-0" />
-              <span className="shrink-0">对照翻译</span>
-              {translation?.running ? (
-                <Badge variant="secondary">后台翻译中</Badge>
-              ) : translationComplete ? (
-                <Badge variant="secondary">本地缓存</Badge>
-              ) : hasFailedPages ? (
-                <Badge variant="secondary">有失败页</Badge>
-              ) : null}
-            </div>
-            <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-              <span className="truncate">{translationStatusSummary(translation)}</span>
-              {showStatusMessage ? (
-                <>
-                  <span className="hidden text-muted-foreground/50 sm:inline">·</span>
-                  <span className="truncate">{message}</span>
-                </>
-              ) : null}
-            </div>
-          </div>
-          <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
-            {!translationComplete ? (
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={busy || translation?.running}
-                onClick={onStart}
-              >
-                {busy ? (
-                  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                ) : (
-                  <Languages className="mr-1.5 h-4 w-4" />
-                )}
-                {primaryActionLabel}
-              </Button>
-            ) : null}
-            {hasFailedPages ? (
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={busy || translation?.running}
-                onClick={onRetryFailed}
-              >
-                <RefreshCw className="mr-1.5 h-4 w-4" />
-                重试失败
-              </Button>
-            ) : null}
-            {translation && !translation.running ? (
-              <Button size="sm" variant="ghost" disabled={busy} onClick={onRetranslate}>
-                <RefreshCw className="mr-1.5 h-4 w-4" />
-                重新翻译
-              </Button>
-            ) : null}
-            {translation?.running ? (
-              <Button size="sm" variant="ghost" disabled={busy} onClick={onCancel}>
-                取消
-              </Button>
-            ) : null}
-          </div>
-        </div>
-        {translation && !translationComplete ? (
-          <div className="mx-auto mt-2 max-w-6xl">
-            <Progress value={progress} className="h-1" />
-          </div>
-        ) : null}
-      </div>
-
-      <div
         ref={scrollerRef}
-        className="min-h-0 flex-1 overflow-x-auto overflow-y-auto px-8 py-8"
+        className={`min-h-0 flex-1 overflow-y-auto py-7 ${
+          useRailLayout ? "overflow-x-auto px-4" : "overflow-x-hidden px-6 md:px-8"
+        }`}
         data-translation-scroller
+        data-translation-layout={translationLayout}
         onPointerDown={handleBackgroundPointerDown}
         onPointerUp={handleBackgroundPointerUp}
       >
-        <div className="relative mx-auto max-w-3xl" style={{ height: virtualMetrics.totalHeight }}>
+        <div
+          className={`relative mx-auto ${useRailLayout ? "" : "max-w-3xl bg-card"}`}
+          style={{
+            height: virtualMetrics.totalHeight,
+            width: useRailLayout ? TRANSLATION_WIDE_CANVAS_WIDTH : undefined,
+          }}
+        >
           {renderedPages.map((virtualPage) => {
             const page = pagesByIndex.get(virtualPage.index)
             if (!page || page.loaded === false) {
@@ -749,31 +688,44 @@ export function TranslationReader({
                     items={sparkItems}
                     onOpen={onOpenSparkItem}
                   />
-                  <TranslationSourceContent
-                    page={page}
-                    rows={alignedRows}
-                    highlights={sourceHighlights}
-                    headingAnchor={headingAnchor}
-                    getSourceBlockRef={getSourceBlockRef}
-                  />
+                  {useRailLayout ? (
+                    <TranslationSourceContent
+                      page={page}
+                      rows={alignedRows}
+                      highlights={sourceHighlights}
+                      headingAnchor={headingAnchor}
+                      getSourceBlockRef={getSourceBlockRef}
+                    />
+                  ) : (
+                    <TranslationInlineContent
+                      page={page}
+                      rows={alignedRows}
+                      translatedPage={translatedPage}
+                      highlights={sourceHighlights}
+                      headingAnchor={headingAnchor}
+                      getSourceBlockRef={getSourceBlockRef}
+                    />
+                  )}
                 </section>
-                <section
-                  ref={getTranslationPaneRef(page.pageIndex, "translation")}
-                  data-translation-pane="translation"
-                  data-page-index={page.pageIndex}
-                  className="absolute top-0"
-                  style={{
-                    left: TRANSLATION_SOURCE_WIDTH + TRANSLATION_RAIL_GAP,
-                    width: TRANSLATION_RAIL_WIDTH,
-                  }}
-                >
-                  <TranslationRail
-                    pageIndex={page.pageIndex}
-                    rows={alignedRows}
-                    translatedPage={translatedPage}
-                    sourceBlockMeasurements={sourceBlockMeasurements}
-                  />
-                </section>
+                {useRailLayout ? (
+                  <section
+                    ref={getTranslationPaneRef(page.pageIndex, "translation")}
+                    data-translation-pane="translation"
+                    data-page-index={page.pageIndex}
+                    className="absolute top-0"
+                    style={{
+                      left: TRANSLATION_SOURCE_WIDTH + TRANSLATION_RAIL_GAP,
+                      width: TRANSLATION_RAIL_WIDTH,
+                    }}
+                  >
+                    <TranslationRail
+                      pageIndex={page.pageIndex}
+                      rows={alignedRows}
+                      translatedPage={translatedPage}
+                      sourceBlockMeasurements={sourceBlockMeasurements}
+                    />
+                  </section>
+                ) : null}
                 <SelectionToolbarHost
                   present={shouldShowToolbarForPage}
                   className="absolute z-20 max-w-[calc(100%-2rem)]"
@@ -818,15 +770,6 @@ const TranslationPagePlaceholder = forwardRef<
           <div className="h-4 w-9/12 rounded bg-muted reader-shimmer" />
           <div className="h-4 w-10/12 rounded bg-muted reader-shimmer" />
         </div>
-      </section>
-      <section
-        className="absolute top-0"
-        style={{
-          left: TRANSLATION_SOURCE_WIDTH + TRANSLATION_RAIL_GAP,
-          width: TRANSLATION_RAIL_WIDTH,
-        }}
-      >
-        <TranslationSkeleton label="等待整本翻译任务生成译文" />
       </section>
     </article>
   )
@@ -890,6 +833,115 @@ function TranslationSourceContent({
   )
 }
 
+function TranslationInlineContent({
+  page,
+  rows,
+  translatedPage,
+  highlights,
+  headingAnchor,
+  getSourceBlockRef,
+}: {
+  page: ParsedPage
+  rows: AlignedTranslationRow[]
+  translatedPage?: TranslationStatus["pages"][number]
+  highlights: SavedHighlight[]
+  headingAnchor: { id: string; text: string } | null
+  getSourceBlockRef: (pageIndex: number, blockId: string) => (element: HTMLElement | null) => void
+}) {
+  const blocks = rows.filter((row) => row.sourceMarkdown.trim() || row.translatedMarkdown.trim())
+  if (blocks.length === 0) {
+    return (
+      <div className="font-ui text-[15px] leading-8 text-muted-foreground">
+        这里没有抽取到可用文字。
+      </div>
+    )
+  }
+
+  const notice = inlineTranslationNotice(translatedPage)
+
+  return (
+    <div className="relative font-ui text-[15px] leading-8 text-foreground">
+      {notice ? <div className="mb-5">{notice}</div> : null}
+      {blocks.map((row) => {
+        const hasSource = row.sourceMarkdown.trim().length > 0
+        const hasTranslation = row.translatedMarkdown.trim().length > 0
+        return (
+          <div key={row.id} className="translation-inline-row">
+            {hasSource ? (
+              <div
+                ref={getSourceBlockRef(page.pageIndex, row.id)}
+                data-translation-block-pane="source"
+                data-translation-block-id={row.id}
+                data-translation-block-row={row.index}
+              >
+                <MarkdownContent
+                  content={row.sourceMarkdown}
+                  allowRawHtml
+                  highlightSourceText={page.text}
+                  highlights={highlights}
+                  headingAnchor={headingAnchor}
+                  className="max-w-none text-[15px] leading-8"
+                />
+              </div>
+            ) : null}
+            {hasTranslation ? (
+              <div
+                data-translation-pane="translation"
+                data-page-index={page.pageIndex}
+                data-translation-block-pane="translation"
+                data-translation-block-id={row.id}
+                data-translation-block-row={row.index}
+                className="mb-5 mt-2 border-l-2 border-primary/35 bg-muted/45 px-4 py-2 text-foreground/90"
+              >
+                <MarkdownContent
+                  content={row.translatedMarkdown}
+                  allowRawHtml
+                  className="max-w-none text-[14px] leading-7"
+                />
+              </div>
+            ) : (
+              <div
+                aria-hidden="true"
+                data-translation-pane="translation"
+                data-page-index={page.pageIndex}
+                data-translation-block-pane="translation"
+                data-translation-block-id={row.id}
+                data-translation-block-row={row.index}
+                className="hidden"
+              />
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function inlineTranslationNotice(translatedPage?: TranslationStatus["pages"][number]) {
+  if (translatedPage?.status === "failed") {
+    return (
+      <div className="border-l-2 border-danger/50 bg-danger/10 px-4 py-2 text-sm leading-6 text-danger-foreground">
+        {translatedPage.error || "这段内容翻译失败"}
+      </div>
+    )
+  }
+  if (translatedPage?.status === "translating") {
+    return (
+      <div className="border-l-2 border-primary/35 bg-muted/45 px-4 py-2">
+        <TranslationSkeleton label="正在翻译当前片段" />
+      </div>
+    )
+  }
+  if (!translatedPage?.status) {
+    return (
+      <div className="border-l-2 border-border bg-muted/35 px-4 py-2">
+        <TranslationSkeleton label="等待整本翻译任务生成译文" />
+      </div>
+    )
+  }
+  return null
+}
+
 function TranslationRail({
   pageIndex,
   rows,
@@ -941,8 +993,8 @@ function TranslationRail({
               data-translation-block-pane="translation"
               data-translation-block-id={row.id}
               data-translation-block-row={row.index}
-              className={`absolute left-0 right-0 rounded-md px-3 py-2 ${
-                hasTranslation ? "border bg-card/95 shadow-sm" : "pointer-events-none"
+              className={`absolute left-0 right-0 px-3 py-2 ${
+                hasTranslation ? "border-l-2 border-primary/35 bg-card/90" : "pointer-events-none"
               }`}
               style={{ top, maxHeight, overflowY: "auto" }}
             >
@@ -1128,33 +1180,6 @@ function markdownToSelectionText(markdown: string) {
     .trim()
 }
 
-function isTranslationComplete(translation: TranslationStatus | null) {
-  return Boolean(
-    translation &&
-      translation.totalPages > 0 &&
-      translation.completedPages >= translation.totalPages &&
-      translation.failedPages === 0 &&
-      !translation.running,
-  )
-}
-
-function translationStatusSummary(translation: TranslationStatus | null) {
-  if (!translation) {
-    return "尚未生成整本中文译文"
-  }
-  const providerModel = [translation.provider || "provider 未配置", translation.model]
-    .filter(Boolean)
-    .join(" ")
-  const failed = translation.failedPages > 0 ? ` · ${translation.failedPages} 个片段失败` : ""
-  const cacheState =
-    isTranslationComplete(translation)
-      ? " · 本地缓存"
-      : translation.completedPages > 0
-        ? " · 已缓存部分译文"
-        : ""
-  return `译文进度 ${translation.completedPages}/${translation.totalPages}${failed} · ${providerModel}${cacheState}`
-}
-
 function TranslationSkeleton({ label }: { label: string }) {
   return (
     <div className="space-y-3">
@@ -1185,7 +1210,6 @@ function shouldIgnoreSelectionClearTarget(target: EventTarget | null) {
     target.closest(
       [
         "[data-testid='selection-toolbar']",
-        "[data-translation-toolbar]",
         "button",
         "a",
         "input",

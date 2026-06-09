@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react"
 import {
-  cancelTranslation,
   isTauriRuntime,
   startTranslation,
   translationStatus,
@@ -24,7 +23,7 @@ type UseReaderTranslationDeps = {
 }
 
 /**
- * Whole-book translation: status polling, start/cancel. Owns translation state so
+ * Whole-book translation: status polling and automatic start. Owns translation state so
  * ReaderShell stays an orchestration shell rather than a state mega-component
  * (coding-style 小文件原则).
  */
@@ -37,13 +36,10 @@ export function useReaderTranslation({
   pushNotice,
 }: UseReaderTranslationDeps) {
   const [translation, setTranslation] = useState<TranslationStatus | null>(null)
-  const [translationBusy, setTranslationBusy] = useState(false)
-  const [translationMessage, setTranslationMessage] = useState("")
 
   // Reset + fetch translation status whenever the active indexed book changes.
   useEffect(() => {
     setTranslation(null)
-    setTranslationMessage("")
     if (!bookId || libraryStatus !== "indexed" || !isTauriRuntime()) {
       return
     }
@@ -54,11 +50,7 @@ export function useReaderTranslation({
           setTranslation(status)
         }
       })
-      .catch((error) => {
-        if (!cancelled) {
-          setTranslationMessage(error instanceof Error ? error.message : "无法读取翻译状态")
-        }
-      })
+      .catch(() => undefined)
     return () => {
       cancelled = true
     }
@@ -77,11 +69,7 @@ export function useReaderTranslation({
             setTranslation(status)
           }
         })
-        .catch((error) => {
-          if (!cancelled) {
-            setTranslationMessage(error instanceof Error ? error.message : "无法读取翻译状态")
-          }
-        })
+        .catch(() => undefined)
     }
     poll()
     const timer = window.setInterval(poll, 2500)
@@ -90,21 +78,6 @@ export function useReaderTranslation({
       window.clearInterval(timer)
     }
   }, [bookId, readerView])
-
-  async function refreshTranslation(targetBookId = bookId) {
-    if (!targetBookId || !isTauriRuntime()) {
-      setTranslation(null)
-      return null
-    }
-    try {
-      const status = await translationStatus(targetBookId)
-      setTranslation(status)
-      return status
-    } catch (error) {
-      setTranslationMessage(error instanceof Error ? error.message : "无法读取翻译状态")
-      return null
-    }
-  }
 
   async function handleStartTranslation(force = false) {
     if (!bookId || !canShowConvertedText) {
@@ -116,53 +89,18 @@ export function useReaderTranslation({
       return
     }
     switchReaderView("translation", { restorePage: !force })
-    setTranslationBusy(true)
-    setTranslationMessage(force ? "正在重新提交整本翻译任务" : "正在提交整本翻译任务")
     try {
       const status = await startTranslation(bookId, force)
       setTranslation(status)
-      setTranslationMessage(
-        status.running
-          ? "翻译任务已在后台运行"
-          : status.completedPages >= status.totalPages
-            ? "整本翻译已完成"
-            : "翻译状态已更新",
-      )
       pushNotice(status.running ? "已开始后台翻译整本书" : "翻译缓存已就绪")
     } catch (error) {
       const message = error instanceof Error ? error.message : "无法启动翻译任务"
-      setTranslationMessage(message)
       pushNotice(message)
-    } finally {
-      setTranslationBusy(false)
-    }
-  }
-
-  async function handleCancelTranslation() {
-    if (!bookId || !isTauriRuntime()) {
-      return
-    }
-    setTranslationBusy(true)
-    try {
-      const cancelled = await cancelTranslation(bookId)
-      const status = await refreshTranslation(bookId)
-      setTranslationMessage(cancelled ? "已请求取消翻译任务" : "当前没有运行中的翻译任务")
-      if (status?.running) {
-        pushNotice("翻译任务会在当前片段结束后停止")
-      }
-    } catch (error) {
-      setTranslationMessage(error instanceof Error ? error.message : "取消翻译失败")
-    } finally {
-      setTranslationBusy(false)
     }
   }
 
   return {
     translation,
-    translationBusy,
-    translationMessage,
-    refreshTranslation,
     handleStartTranslation,
-    handleCancelTranslation,
   }
 }

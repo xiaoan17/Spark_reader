@@ -124,17 +124,11 @@ describe("TranslationReader", () => {
         currentPage={1}
         totalPages={1}
         translation={translation}
-        busy={false}
-        message=""
         selectionText={item.selectionText}
         selectionRects={[]}
         selectionAnchor={{ pageIndex: 0, positionStart: 6, positionEnd: 21 }}
         sparkItems={[item]}
         onCurrentPageChange={vi.fn()}
-        onStart={vi.fn()}
-        onRetranslate={vi.fn()}
-        onRetryFailed={vi.fn()}
-        onCancel={vi.fn()}
         onExplain={vi.fn()}
         onPlainExplain={vi.fn()}
         onHighlight={vi.fn()}
@@ -203,6 +197,79 @@ describe("TranslationReader", () => {
   })
 
   it("renders translated blocks in an anchored rail instead of source-flow grid rows", async () => {
+    const clientWidthDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth")
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+      configurable: true,
+      get() {
+        return this.hasAttribute("data-translation-scroller") ? 1400 : 0
+      },
+    })
+    try {
+      const page: ParsedPage = {
+        pageIndex: 0,
+        text: "Alpha paragraph. Beta paragraph.",
+        markdown: "Alpha paragraph.\n\nBeta paragraph.",
+      }
+      const translation: TranslationStatus = {
+        bookId: "book-1",
+        totalPages: 1,
+        completedPages: 1,
+        failedPages: 0,
+        running: false,
+        provider: "deep_seek",
+        model: "deepseek-v4-flash",
+        pages: [
+          {
+            pageIndex: 0,
+            status: "done",
+            sourceMarkdown: page.markdown,
+            translatedMarkdown: "[[B001]]\n阿尔法段落。\n\n[[B002]]\n贝塔段落。",
+            error: "",
+            provider: "deep_seek",
+            model: "deepseek-v4-flash",
+            updatedAt: "2026-06-01T00:00:00Z",
+          },
+        ],
+      }
+
+      const client = await renderClient(
+        <TranslationReader
+          pages={[page]}
+          currentPage={1}
+          totalPages={1}
+          translation={translation}
+          selectionText=""
+          selectionRects={[]}
+          selectionAnchor={null}
+          sparkItems={[]}
+          onCurrentPageChange={vi.fn()}
+          onExplain={vi.fn()}
+          onPlainExplain={vi.fn()}
+          onHighlight={vi.fn()}
+          onTextSelection={vi.fn()}
+          onClearSelection={vi.fn()}
+        />,
+      )
+
+      const translatedBlock = client.container.querySelector<HTMLElement>(
+        "[data-translation-block-pane='translation'][data-translation-block-id='B002']",
+      )!
+      const scroller = client.container.querySelector<HTMLElement>("[data-translation-scroller]")!
+      expect(scroller.dataset.translationLayout).toBe("rail")
+      expect(translatedBlock).toBeTruthy()
+      expect(translatedBlock.style.gridRow).toBe("")
+      expect(translatedBlock.className).toContain("absolute")
+      client.unmount()
+    } finally {
+      if (clientWidthDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, "clientWidth", clientWidthDescriptor)
+      } else {
+        Reflect.deleteProperty(HTMLElement.prototype, "clientWidth")
+      }
+    }
+  })
+
+  it("keeps translated blocks inline when the reader column is constrained", async () => {
     const page: ParsedPage = {
       pageIndex: 0,
       text: "Alpha paragraph. Beta paragraph.",
@@ -236,17 +303,11 @@ describe("TranslationReader", () => {
         currentPage={1}
         totalPages={1}
         translation={translation}
-        busy={false}
-        message=""
         selectionText=""
         selectionRects={[]}
         selectionAnchor={null}
         sparkItems={[]}
         onCurrentPageChange={vi.fn()}
-        onStart={vi.fn()}
-        onRetranslate={vi.fn()}
-        onRetryFailed={vi.fn()}
-        onCancel={vi.fn()}
         onExplain={vi.fn()}
         onPlainExplain={vi.fn()}
         onHighlight={vi.fn()}
@@ -255,12 +316,13 @@ describe("TranslationReader", () => {
       />,
     )
 
+    const scroller = client.container.querySelector<HTMLElement>("[data-translation-scroller]")!
     const translatedBlock = client.container.querySelector<HTMLElement>(
       "[data-translation-block-pane='translation'][data-translation-block-id='B002']",
     )!
-    expect(translatedBlock).toBeTruthy()
-    expect(translatedBlock.style.gridRow).toBe("")
-    expect(translatedBlock.className).toContain("absolute")
+    expect(scroller.dataset.translationLayout).toBe("inline")
+    expect(translatedBlock.className).not.toContain("absolute")
+    expect(translatedBlock.closest("[data-translation-pane='source']")).toBeTruthy()
     client.unmount()
   })
 })

@@ -54,7 +54,7 @@ describe("MarkdownContent images", () => {
     expect(html).not.toContain('alt="bad"')
   })
 
-  it("shows a hover preview for inline citation buttons without leaking chunk ids", () => {
+  it("renders inline citations as compact numbered markers without hover previews", () => {
     const chunkId = "b12345678-p2-c3-abcdef12"
     const html = renderToStaticMarkup(
       <MarkdownContent
@@ -69,9 +69,10 @@ describe("MarkdownContent images", () => {
       />,
     )
 
-    expect(html).toContain("相关段落")
-    expect(html).toContain("第 2 页")
-    expect(html).toContain("风险控制让长期计划")
+    expect(html).toContain("[1]")
+    expect(html).not.toContain("相关段落")
+    expect(html).not.toContain("第 2 页")
+    expect(html).not.toContain("风险控制让长期计划")
     expect(html).not.toContain(chunkId)
   })
 })

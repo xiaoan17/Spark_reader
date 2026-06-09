@@ -12,6 +12,20 @@ export function citationLabelMap(evidence: EvidencePreview[]) {
   return new Map(evidence.map((item, index) => [item.chunkId, evidenceLabel(item, evidence, index)]))
 }
 
+export function citationMarkerLabelMap(evidence: EvidencePreview[]) {
+  return citationMarkerLabelMapForChunkIds(evidence.map((item) => item.chunkId))
+}
+
+export function citationMarkerLabelMapForChunkIds(chunkIds: string[]) {
+  const labels = new Map<string, string>()
+  for (const chunkId of chunkIds) {
+    if (!labels.has(chunkId)) {
+      labels.set(chunkId, citationMarkerLabel(labels.size))
+    }
+  }
+  return labels
+}
+
 export function citationLabelForChunkId(chunkId: string, labels?: ReadonlyMap<string, string>) {
   const knownLabel = labels?.get(chunkId)
   if (knownLabel) {
@@ -27,6 +41,10 @@ export function citationLabelForChunkId(chunkId: string, labels?: ReadonlyMap<st
 export function evidenceLabel(item: EvidencePreview, allEvidence: EvidencePreview[], index?: number) {
   const suffix = allEvidence.length > 1 && typeof index === "number" ? ` · 引用 ${index + 1}` : ""
   return `相关段落${suffix}`
+}
+
+export function citationMarkerLabel(index?: number) {
+  return typeof index === "number" ? `[${index + 1}]` : "[?]"
 }
 
 /**

@@ -58,7 +58,19 @@ pub struct TranslationStatus {
 }
 
 static ACTIVE_TRANSLATIONS: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
-const TRANSLATION_PROTOCOL_VERSION: &str = "block-v2";
+const TRANSLATION_PROTOCOL_VERSION: &str = "block-v3-baoyu-normal";
+const TRANSLATION_SYSTEM_PROMPT: &str = r#"你是专业学术译者。采用 baoyu-translate normal 模式的工作方式：先理解文章领域、论证结构、关键术语和目标读者，再输出译文。
+
+目标：把英文论文页翻译成自然、准确、可连续阅读的简体中文 Markdown。译文应该像中文学术作者直接写成，而不是逐词硬译。
+
+质量标准：
+- 准确第一：事实、数据、引用、逻辑关系、限定条件和不确定性必须与原文一致。
+- 自然中文：长句可以按中文习惯拆分或重组，但不能增删论点。
+- 学术风格：保持严谨、克制、清晰；不要口语化、营销化或过度文学化。
+- 术语一致：同一术语在全书中保持同一译法；关键英文术语首次出现时可在括号中保留英文。
+- 格式保真：保留 Markdown 标题层级、列表、表格、图片链接、公式占位、脚注/引用符号和段落边界。
+- 对齐优先：输出必须保留输入块编号，不能合并、拆分、重排或跳过块。
+- 不要输出译者说明、总结、前言、完成提示或独立注释。"#;
 
 pub async fn start_translation(
     db_path: &std::path::Path,
@@ -269,11 +281,9 @@ fn build_translation_messages(
 ) -> Vec<llm::ChatMessage> {
     let marked_source = marked_translation_source(source_markdown);
     vec![
-        llm::ChatMessage::system(
-            "你是专业学术翻译。把用户提供的英文论文页翻译成自然、准确的中文 Markdown。保留标题层级、列表、表格、图片链接、公式占位和关键术语；不要添加解释、不要省略内容。",
-        ),
+        llm::ChatMessage::system(TRANSLATION_SYSTEM_PROMPT),
         llm::ChatMessage::user(format!(
-            "请翻译第 {} 页。\n\n要求：\n- 原文已经按块编号为 [[B001]]、[[B002]] ...。\n- 输出必须逐块保留同一个编号，按输入顺序排列；每个输入块都必须有一个对应输出块。\n- 不要合并、拆分、重排或跳过块。标题、人名、机构、邮箱、公式、孤立短语也要输出对应编号；无需翻译时可保留原文。\n- 只输出中文译文 Markdown 本身和块编号。\n- 不要输出“中文译文”“已完成”“以下是...”等前言。\n- 不要输出翻译说明、项目符号说明或总结。\n- 不要重复英文原文；人名、术语、引用和公式可按需保留。\n\n输出格式示例：\n[[B001]]\n第一块中文译文。\n\n[[B002]]\n第二块中文译文。\n\n带编号 Markdown 原文块：\n{}\n\n纯文本参考：\n{}",
+            "请翻译第 {} 页。\n\n工作方式：\n1. 先在内部判断本页所属领域、论证功能、语气和关键术语；不要把分析过程输出。\n2. 按块翻译，保持本页与全书译名一致；遇到标题、摘要、作者、机构、参考文献、图表说明、公式和孤立短语，也必须输出对应块。\n3. 为了让阅读器中英块对齐，块编号是协议，不是正文；编号必须原样保留。\n\n硬性要求：\n- 原文已经按块编号为 [[B001]]、[[B002]] ...。\n- 输出必须逐块保留同一个编号，按输入顺序排列；每个输入块都必须有一个对应输出块。\n- 不要合并、拆分、重排或跳过块。无需翻译的块可保留原文。\n- 只输出中文译文 Markdown 本身和块编号。\n- 不要输出“中文译文”“已完成”“以下是...”等前言。\n- 不要输出翻译说明、项目符号说明或总结。\n- 不要重复英文原文；人名、术语、引用和公式可按需保留。\n\n输出格式示例：\n[[B001]]\n第一块中文译文。\n\n[[B002]]\n第二块中文译文。\n\n带编号 Markdown 原文块：\n{}\n\n纯文本参考：\n{}",
             page_index + 1,
             marked_source,
             source_text
@@ -725,7 +735,11 @@ mod tests {
             "Title\n\nAuthors\n\nABSTRACT\n\nFirst paragraph.",
             "Title\n\nAuthors\n\nABSTRACT\n\nFirst paragraph.",
         );
+        let system = &messages[0].content;
         let user = &messages[1].content;
+        assert!(system.contains("baoyu-translate normal"));
+        assert!(system.contains("术语一致"));
+        assert!(user.contains("先在内部判断本页所属领域"));
         assert!(user.contains("[[B001]]\nTitle"));
         assert!(user.contains("[[B002]]\nAuthors"));
         assert!(user.contains("[[B003]]\nABSTRACT"));
@@ -744,7 +758,7 @@ mod tests {
         assert!(
             translation_source_fingerprint(&db_path, &manifest)
                 .expect("fingerprint should build")
-                .starts_with("block-v2:pdf-fingerprint"),
+                .starts_with("block-v3-baoyu-normal:pdf-fingerprint"),
             "translation cache key must invalidate pre-block-alignment cache entries"
         );
         let _ = std::fs::remove_file(&db_path);

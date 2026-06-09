@@ -23,5 +23,11 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
+    setupFiles: ["src/test/setup.ts"],
+    environmentOptions: {
+      jsdom: {
+        url: "http://127.0.0.1:1420/",
+      },
+    },
   },
 })

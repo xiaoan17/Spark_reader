@@ -1,5 +1,4 @@
-import { Loader2, Settings, Sparkles, WandSparkles } from "lucide-react"
-import { Badge } from "@/components/ui/badge"
+import { Sparkles, WandSparkles } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import type {
   AgentTraceStep,
@@ -91,37 +90,9 @@ export function AiWorkbench({
   onOpenSparkItem = () => undefined,
 }: AiWorkbenchProps) {
   return (
-    <aside className="flex h-full min-h-0 animate-fade-in flex-col overflow-hidden border-l bg-card/65 p-3 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none">
-      <div className="-mx-3 -mt-3 mb-3 shrink-0 border-b bg-card/95 px-3 py-3 backdrop-blur">
-        <div className="mb-3 flex items-start justify-between gap-2">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 text-sm font-semibold">
-              <Sparkles className="h-4 w-4 text-primary" />
-              Spark
-            </div>
-            <p className="mt-1 truncate text-[11px] text-muted-foreground">
-              框选原文，Spark 检索全书后点亮理解
-            </p>
-          </div>
-          <div className="flex items-center gap-1">
-            {runningTaskCount > 0 ? (
-              <Badge>
-                <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                {runningTaskCount}
-              </Badge>
-            ) : null}
-            <Button
-              size="icon"
-              variant="ghost"
-              aria-label="AI 设置"
-              title="AI 设置"
-              onClick={onOpenSettings}
-            >
-              <Settings className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
-        <div className="grid grid-cols-2 rounded-md border bg-background p-1">
+    <aside className="flex h-full min-h-0 animate-fade-in flex-col overflow-hidden border-l bg-card/65 p-2 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none">
+      <div className="-mx-2 -mt-2 mb-2 shrink-0 border-b bg-card/95 px-2 py-2 backdrop-blur">
+        <div className="grid grid-cols-2 rounded-md border bg-background p-0.5">
           <WorkbenchTabButton
             active={tab === "spark"}
             icon={<Sparkles className="h-4 w-4" />}

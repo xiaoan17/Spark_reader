@@ -27,8 +27,8 @@ pnpm install
 # 2. 配置密钥:复制模板并填入你自己的 key
 cp .env.example .env
 
-# 3. 启动桌面应用
-pnpm tauri dev
+# 3. 启动桌面开发版
+pnpm dev:desktop
 ```
 
 ### 最少需要哪些 Key
@@ -64,19 +64,69 @@ pnpm tauri dev
 
 切换 provider 时,每个 provider 的自定义 `Base URL` / `Model` / 已保存 key 状态会分别保留。点「测试并记录」会用界面里尚未保存的 key、URL 和模型做连通测试,成功后写入本机设置和 `.env`;点「保存 LLM」可不测试直接保存。
 
+## 快速调试路径
+
+### 1. 日常使用和桌面功能验证
+
+```bash
+pnpm dev:desktop
+```
+
+这是最常用入口。它会启动 Tauri 桌面窗口,前端走 Vite HMR,改 React/Tailwind 后通常会直接热更新到窗口里,不需要重新构建 `.app`。本地书库、`.env` 密钥、MinerU、Zotero、LLM/Tauri 后端能力都用这条路径验证。
+
+只有改了 Rust/Tauri 后端代码时,才需要等 Tauri 重新编译或重启这个 dev 进程。
+
+### 2. 只看前端布局
+
+```bash
+pnpm dev:web
+```
+
+浏览器打开 Vite 地址即可快速看界面和示例书。这个模式没有 Tauri 后端能力,不适合验证本地文件、真实翻译状态、MinerU、Zotero 或 LLM 设置。
+
+### 3. 边改边跑测试
+
+```bash
+pnpm test:watch
+```
+
+改阅读器相关代码时,可以用更小的回归集:
+
+```bash
+pnpm check:reader
+```
+
+提交前跑快速全量前端检查:
+
+```bash
+pnpm check:quick
+```
+
+### 4. 什么时候才需要 build
+
+```bash
+pnpm build
+pnpm health
+pnpm health:bundle
+```
+
+`pnpm build` 用于确认生产前端能打出来;`pnpm health` 是提交/发布前检查;`pnpm health:bundle` 才会真的构建 debug `.app`。日常 UI 调试不要反复 build app。
+
 ## 常用命令
 
 ```bash
-pnpm tauri dev    # 桌面端开发(完整功能:密钥、MinerU 解析、Zotero 导入、本地文件)
-pnpm dev          # 仅浏览器预览前端(界面走查、示例书;无密钥/云端能力)
+pnpm dev:desktop  # 桌面端开发(完整功能 + Vite HMR)
+pnpm dev:web      # 仅浏览器预览前端(无 Tauri 后端能力)
 pnpm storybook    # 组件走查
-pnpm test         # 运行测试
+pnpm test:watch   # watch 模式测试
+pnpm check:reader # 阅读器/对照翻译相关快速回归
+pnpm check:quick  # tsc + 前端测试
 pnpm secret-scan  # 推送前密钥扫描
 ```
 
 ## 从 Zotero 导入论文
 
-桌面端顶部「从 Zotero 导入」可直接拉取本地 Zotero 文献库里的 PDF。需先打开 Zotero 桌面端、条目下有本地 PDF 附件,并用 `pnpm tauri dev` 启动。详见 [`docs/zotero-integration.md`](docs/zotero-integration.md)。
+桌面端顶部「从 Zotero 导入」可直接拉取本地 Zotero 文献库里的 PDF。需先打开 Zotero 桌面端、条目下有本地 PDF 附件,并用 `pnpm dev:desktop` 启动。详见 [`docs/zotero-integration.md`](docs/zotero-integration.md)。
 
 ## 文档
 

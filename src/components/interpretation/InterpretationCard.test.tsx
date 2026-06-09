@@ -15,7 +15,8 @@ describe("InterpretationCard citations", () => {
     )
 
     expect(html).toContain("<button")
-    expect(html).toContain("引用")
+    expect(html).toContain("[1]")
+    expect(html).toContain("[2]")
     expect(html).not.toContain(`[${chunkA}]`)
     expect(html).not.toContain(`[${chunkB}]`)
   })
@@ -33,7 +34,9 @@ describe("InterpretationCard citations", () => {
     )
 
     expect(html.match(/<button/g)).toHaveLength(3)
-    expect(html).toContain("引用")
+    expect(html).toContain("[1]")
+    expect(html).toContain("[2]")
+    expect(html).toContain("[3]")
     expect(html).not.toContain(`[${chunkA}]`)
     expect(html).not.toContain(`[${chunkB}]`)
     expect(html).not.toContain(`【${chunkC}】`)
@@ -49,10 +52,9 @@ describe("InterpretationCard citations", () => {
     )
 
     expect(html.match(/<button/g)).toHaveLength(1)
-    expect(html).toContain("引用")
+    expect(html).toContain("[1]")
     expect(html).not.toContain(`[${chunkA}]`)
     expect(html).not.toContain(`[${chunkB}]`)
-    expect(html).toContain("引用")
   })
 
   it("uses evidence ids as clickable citation targets in the card", () => {
@@ -68,10 +70,11 @@ describe("InterpretationCard citations", () => {
     )
 
     expect(html.match(/<button/g)?.length ?? 0).toBeGreaterThanOrEqual(1)
-    expect(html).toContain("相关段落")
+    expect(html).toContain("[1]")
+    expect(html).not.toContain("相关段落")
     expect(html).not.toContain(`[${chunkA}]`)
     expect(html).not.toContain(`[${chunkB}]`)
-    expect(html).toContain("未核验引用")
+    expect(html).toContain("部分引用未核验")
   })
 
   it("renders markdown structure in interpretation answers", () => {
@@ -148,7 +151,8 @@ describe("InterpretationCard citations", () => {
 
     expect(html).toContain("为什么强调长期")
     expect(html).toContain("<button")
-    expect(html).toContain("相关段落")
+    expect(html).toContain("[1]")
+    expect(html).not.toContain("相关段落")
     expect(html).not.toContain(`[${chunkA}]`)
   })
 
@@ -237,7 +241,7 @@ describe("InterpretationCard citations", () => {
 
     expect(html).toContain("这和前文有什么关系")
     expect(html).toContain("它承接了前文")
-    expect(html).toContain("引用")
+    expect(html).toContain("[1]")
     expect(html).not.toContain(`[${chunkB}]`)
   })
 
@@ -323,7 +327,7 @@ describe("InterpretationCard citations", () => {
     expect(html).toContain("检索轨迹 · 2 步")
     expect(html).toContain("模型检索第 1 轮")
     expect(html).toContain("本地补检索")
-    expect(html).toContain("相关段落")
+    expect(html).toContain("[1]")
     expect(html).not.toContain(chunkA)
   })
 

@@ -46,6 +46,11 @@
 1. **文档先行**:开新界面/新模块前,先在 `docs/` 写实现方案 spec,对齐后再写代码。
 2. **逐阶段**:按 `ROADMAP.md` 阶段推进,前一阶段跑通自测再开下一阶段。
 3. **改坏兜底**:Storybook 是防止 AI 改坏已有组件的安全网,每次改组件后过一遍相关 story。
+4. **用户指定快速验证路径**:用户说"测试/验证/帮我跑一下"且没有额外指定时,默认按以下顺序执行并汇报结果:
+   - `pnpm check:reader` — 阅读器/对照翻译快速回归。当前基线:3 files,60 tests passed。
+   - `pnpm check:quick` — `tsc --noEmit` + 全量前端测试。当前基线:57 files,307 tests passed。
+   - `pnpm build` — 生产前端构建。
+   - `pnpm dev:desktop` — 日常使用/桌面功能验证入口;确认 Vite ready、Tauri dev 编译并启动成功后即可,不要为了日常 UI 调试反复构建 `.app`。
 
 ---
 

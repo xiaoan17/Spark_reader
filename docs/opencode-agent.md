@@ -7,6 +7,41 @@
 
 This project embeds OpenCode as a constrained agent host for selected-passage PDF interpretation.
 
+## Translation Skill Boundary
+
+The shipped `对照翻译` workflow does not run through OpenCode today. It is owned by the
+Rust translation pipeline in `src-tauri/src/translation.rs`: the frontend calls
+`start_translation`, Rust translates converted pages, and the result is cached in
+SQLite `page_translations` so the reader can align Chinese blocks back to original
+page blocks.
+
+`baoyu-translate` can be integrated in two stages:
+
+1. Current product path: borrow its normal-mode translation principles directly in
+   the Rust prompt while preserving the reader contract: `[[B001]]` block markers,
+   one output block per input block, Markdown preservation, and local page cache.
+2. Real OpenCode skill path: add a dedicated translation adapter after the OpenCode
+   host and book-tool server are production-wired. That adapter must materialize the
+   book into a temporary Markdown workspace, run the `baoyu-translate` skill in an
+   isolated app-owned OpenCode workspace, parse the generated `translation.md` or
+   chunk outputs back into page/block units, and write them into `page_translations`.
+
+Do not wire the reader button directly to the current `OpencodeAgentTaskRunner`.
+That runner is still a frontend task skeleton/mock, does not own the translation
+cache, and cannot produce aligned page translations for the reader surface.
+
+Any real skill-backed translation adapter must keep these invariants:
+
+- The final reader evidence and Spark anchors still use original book chunks, never
+  translated text as source truth.
+- The output must keep `[[B###]]` markers or an equivalent deterministic block map
+  before saving to `page_translations`.
+- Cache keys must include the translation engine/mode/skill version so prompt or
+  workflow upgrades invalidate stale translations.
+- Provider keys and OpenCode state stay inside the app-owned backend/sidecar
+  boundary; never write credentials or reader book content into the user's global
+  OpenCode workspace.
+
 ## Isolation
 
 The app must not use the user's global OpenCode workspace, sessions, or running server.

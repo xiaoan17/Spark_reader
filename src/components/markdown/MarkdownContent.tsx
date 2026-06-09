@@ -17,7 +17,7 @@ import remarkMath from "remark-math"
 import { cn } from "@/lib/utils"
 import type { EvidencePreview } from "@/stores/reader-store"
 import {
-  citationLabelMap,
+  citationMarkerLabelMapForChunkIds,
 } from "@/core/citation-display"
 import { markdownImageSrc } from "@/core/markdown-assets"
 import { normalizeWhitespace, resolveTextQuoteSelector } from "@/core/text-quote-selector"
@@ -27,6 +27,7 @@ type MarkdownContentProps = {
   content: string
   evidence?: EvidencePreview[]
   citationChunkIds?: string[]
+  citationLabels?: ReadonlyMap<string, string>
   onCitationClick?: (chunkId: string) => void
   className?: string
   emptyText?: string
@@ -66,6 +67,7 @@ function MarkdownContentBase({
   content,
   evidence = [],
   citationChunkIds,
+  citationLabels: providedCitationLabels,
   onCitationClick,
   className,
   emptyText = "",
@@ -79,7 +81,12 @@ function MarkdownContentBase({
     : evidence.length > 0
       ? new Set(evidence.map((item) => item.chunkId))
       : undefined
-  const citationLabels = citationLabelMap(evidence)
+  const citationLabels =
+    providedCitationLabels ??
+    citationMarkerLabelMapForChunkIds([
+      ...(citationChunkIds ?? []),
+      ...evidence.map((item) => item.chunkId),
+    ])
   const citationEvidence = citationEvidenceMap(evidence)
   const source = allowRawHtml
     ? content.trim() || emptyText
@@ -129,8 +136,21 @@ function areMarkdownContentPropsEqual(left: MarkdownContentProps, right: Markdow
     left.onCitationClick === right.onCitationClick &&
     shallowEvidenceEqual(left.evidence, right.evidence) &&
     shallowStringArrayEqual(left.citationChunkIds, right.citationChunkIds) &&
+    shallowMapEqual(left.citationLabels, right.citationLabels) &&
     shallowHighlightsEqual(left.highlights, right.highlights)
   )
+}
+
+function shallowMapEqual(
+  left: ReadonlyMap<string, string> | undefined,
+  right: ReadonlyMap<string, string> | undefined,
+) {
+  if (left === right) return true
+  if (!left || !right || left.size !== right.size) return false
+  for (const [key, value] of left) {
+    if (right.get(key) !== value) return false
+  }
+  return true
 }
 
 function shallowEvidenceEqual(left: EvidencePreview[] = [], right: EvidencePreview[] = []) {
