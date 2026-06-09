@@ -3267,7 +3267,7 @@ describe("ReaderShell runtime affordances", () => {
         {
           pageIndex: 0,
           sourceMarkdown: "## Page 1\n\nEnglish source.",
-          translatedMarkdown: "中文译文包含 ALFWorld。",
+          translatedMarkdown: "[[B001]]\n中文译文包含 ALFWorld。",
           status: "done",
           error: "",
           provider: "deep_seek",
@@ -3355,7 +3355,12 @@ describe("ReaderShell runtime affordances", () => {
       translatedPane?.dispatchEvent(new MouseEvent("pointerup", { bubbles: true }))
     })
     await vi.waitFor(() => expect(onSelection).toHaveBeenCalled())
-    expect(onSelection.mock.calls.at(-1)?.[0]).toContain("ALFWorld")
+    expect(onSelection.mock.calls.at(-1)?.[0]).toContain("English source.")
+    expect(onSelection.mock.calls.at(-1)?.[2]).toMatchObject({
+      pageIndex: 0,
+      positionStart: 0,
+      positionEnd: 15,
+    })
 
     unmount()
 
@@ -3368,7 +3373,7 @@ describe("ReaderShell runtime affordances", () => {
         bookTitle="已翻译论文"
         currentPage={1}
         totalPages={1}
-        selectionText="中文译文包含 ALFWorld。"
+        selectionText="English source."
         selectionRects={[]}
         selectionAnchor={{ pageIndex: 0, positionStart: 0, positionEnd: 18 }}
         evidence={[]}

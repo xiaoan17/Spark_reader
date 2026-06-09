@@ -4,7 +4,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { ParsedPage, SavedInterpretation } from "@/stores/reader-store"
 import type { TranslationStatus } from "@/core/library-api"
 import { TranslationReader } from "./TranslationReader"
-import { translationPageClassName } from "./translation-page-class"
+import {
+  translationPageClassName,
+  translationSourceSurfaceClassName,
+} from "./translation-page-class"
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true
@@ -41,20 +44,21 @@ beforeEach(() => {
 
 describe("TranslationReader", () => {
   it("only applies document edge padding to true first and last pages", () => {
-    const firstPage = translationPageClassName(0, 4)
-    const middlePage = translationPageClassName(1, 4)
-    const lastPage = translationPageClassName(3, 4)
+    const firstPage = translationSourceSurfaceClassName(0, 4)
+    const middlePage = translationSourceSurfaceClassName(1, 4)
+    const lastPage = translationSourceSurfaceClassName(3, 4)
 
-    expect(firstPage).toContain("pt-4")
-    expect(firstPage).not.toContain("pb-4")
+    expect(translationPageClassName(0, 4)).toContain("absolute")
+    expect(firstPage).toContain("pt-10")
+    expect(firstPage).not.toContain("pb-12")
     expect(middlePage).not.toContain("pt-4")
-    expect(middlePage).not.toContain("pb-4")
-    expect(lastPage).not.toContain("pt-4")
-    expect(lastPage).toContain("pb-4")
+    expect(middlePage).not.toContain("pb-12")
+    expect(lastPage).not.toContain("pt-10")
+    expect(lastPage).toContain("pb-12")
   })
 
   it("does not treat the first rendered virtual item as the document first page", () => {
-    expect(translationPageClassName(8, 40)).not.toContain("pt-4")
+    expect(translationSourceSurfaceClassName(8, 40)).not.toContain("pt-10")
   })
 
   it("positions Spark margin dots from the rendered source text mark", async () => {
@@ -196,5 +200,67 @@ describe("TranslationReader", () => {
     expect(dot.style.top).toBe("50%")
     client.unmount()
     vi.unstubAllGlobals()
+  })
+
+  it("renders translated blocks in an anchored rail instead of source-flow grid rows", async () => {
+    const page: ParsedPage = {
+      pageIndex: 0,
+      text: "Alpha paragraph. Beta paragraph.",
+      markdown: "Alpha paragraph.\n\nBeta paragraph.",
+    }
+    const translation: TranslationStatus = {
+      bookId: "book-1",
+      totalPages: 1,
+      completedPages: 1,
+      failedPages: 0,
+      running: false,
+      provider: "deep_seek",
+      model: "deepseek-v4-flash",
+      pages: [
+        {
+          pageIndex: 0,
+          status: "done",
+          sourceMarkdown: page.markdown,
+          translatedMarkdown: "[[B001]]\n阿尔法段落。\n\n[[B002]]\n贝塔段落。",
+          error: "",
+          provider: "deep_seek",
+          model: "deepseek-v4-flash",
+          updatedAt: "2026-06-01T00:00:00Z",
+        },
+      ],
+    }
+
+    const client = await renderClient(
+      <TranslationReader
+        pages={[page]}
+        currentPage={1}
+        totalPages={1}
+        translation={translation}
+        busy={false}
+        message=""
+        selectionText=""
+        selectionRects={[]}
+        selectionAnchor={null}
+        sparkItems={[]}
+        onCurrentPageChange={vi.fn()}
+        onStart={vi.fn()}
+        onRetranslate={vi.fn()}
+        onRetryFailed={vi.fn()}
+        onCancel={vi.fn()}
+        onExplain={vi.fn()}
+        onPlainExplain={vi.fn()}
+        onHighlight={vi.fn()}
+        onTextSelection={vi.fn()}
+        onClearSelection={vi.fn()}
+      />,
+    )
+
+    const translatedBlock = client.container.querySelector<HTMLElement>(
+      "[data-translation-block-pane='translation'][data-translation-block-id='B002']",
+    )!
+    expect(translatedBlock).toBeTruthy()
+    expect(translatedBlock.style.gridRow).toBe("")
+    expect(translatedBlock.className).toContain("absolute")
+    client.unmount()
   })
 })

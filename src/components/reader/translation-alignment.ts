@@ -1,5 +1,6 @@
 export type AlignedTranslationRow = {
   index: number
+  id: string
   sourceMarkdown: string
   translatedMarkdown: string
 }
@@ -23,6 +24,7 @@ export function alignedTranslationRows(
     )
     const rows = sourceBlocks.map((sourceBlock, index) => ({
       index,
+      id: sourceBlock.id,
       sourceMarkdown: sourceBlock.markdown,
       translatedMarkdown: translatedById.get(sourceBlock.id) ?? "",
     }))
@@ -32,6 +34,7 @@ export function alignedTranslationRows(
       }
       rows.push({
         index: rows.length,
+        id: block.id,
         sourceMarkdown: "",
         translatedMarkdown: block.markdown,
       })
@@ -47,9 +50,38 @@ export function alignedTranslationRows(
 
   return Array.from({ length: rowCount }, (_, index) => ({
     index,
+    id: sourceBlocks[index]?.id ?? translationBlockId(index),
     sourceMarkdown: sourceMarkdownBlocks[index] ?? "",
     translatedMarkdown: translatedBlocks[index] ?? "",
   }))
+}
+
+export function sourceBlockForTranslatedSelection(
+  sourceMarkdown: string,
+  translatedMarkdown: string,
+  selectedText: string,
+) {
+  const normalizedSelectedText = normalizedBlockText(selectedText)
+  if (!normalizedSelectedText) {
+    return null
+  }
+  const rows = alignedTranslationRows(sourceMarkdown, translatedMarkdown)
+  const exactRow =
+    rows.find((row) => {
+      const translatedText = normalizedBlockText(row.translatedMarkdown)
+      return Boolean(
+        row.sourceMarkdown.trim() &&
+          translatedText &&
+          (translatedText === normalizedSelectedText ||
+            translatedText.includes(normalizedSelectedText)),
+      )
+    }) ?? null
+  if (exactRow) {
+    return exactRow
+  }
+
+  const sourceRows = rows.filter((row) => row.sourceMarkdown.trim())
+  return sourceRows.length === 1 ? sourceRows[0] : null
 }
 
 export function sanitizeDisplayedTranslationMarkdown(markdown: string, sourceMarkdown: string) {

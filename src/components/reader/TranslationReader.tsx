@@ -2,10 +2,12 @@ import {
   forwardRef,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
 } from "react"
 import { Languages, Loader2, RefreshCw } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
@@ -14,6 +16,7 @@ import { Progress } from "@/components/ui/progress"
 import { MarkdownContent } from "@/components/markdown/MarkdownContent"
 import type { NormalizedPageRect } from "@/core/coordinates"
 import type { TranslationStatus } from "@/core/library-api"
+import { makeTextQuoteSelector, normalizeWhitespace } from "@/core/text-quote-selector"
 import type { ParsedPage, SavedHighlight, SavedInterpretation, TextSelectionAnchor } from "@/stores/reader-store"
 import { shouldRenderCurrentTextSelection } from "./current-selection"
 import type { ConvertedTextOutlineTarget } from "./ConvertedTextReader"
@@ -28,13 +31,18 @@ import { textSelectionAnchorFromDom as textSelectionAnchorFromDomSelection } fro
 import {
   alignedTranslationRows,
   sanitizeDisplayedTranslationMarkdown,
+  sourceBlockForTranslatedSelection,
+  type AlignedTranslationRow,
 } from "./translation-alignment"
 import {
   buildVirtualPageMetrics,
   virtualPageIndexAtOffset,
   virtualPageItems,
 } from "./virtual-pages"
-import { translationPageClassName } from "./translation-page-class"
+import {
+  translationPageClassName,
+  translationSourceSurfaceClassName,
+} from "./translation-page-class"
 import { useVirtualPageMeasurements } from "./use-virtual-page-measurements"
 import {
   cancelReaderAnimationFrame,
@@ -52,6 +60,9 @@ import {
 import { cleanPdfLineBreaks } from "./reader-text"
 
 const STORED_BOOK_PAGE_WINDOW_PREFETCH = 16
+const TRANSLATION_RAIL_WIDTH = 360
+const TRANSLATION_SOURCE_WIDTH = 768
+const TRANSLATION_RAIL_GAP = 28
 
 export type TranslationReaderProps = {
   pages: ParsedPage[]
@@ -110,7 +121,8 @@ export function TranslationReader({
 }: TranslationReaderProps) {
   const scrollerRef = useRef<HTMLDivElement | null>(null)
   const paneRefs = useRef(new Map<string, HTMLElement>())
-  const paneRefCallbacksRef = useRef(new Map<string, (element: HTMLElement | null) => void>())
+  const sourceBlockRefs = useRef(new Map<string, HTMLElement>())
+  const sourceBlockRefCallbacksRef = useRef(new Map<string, (element: HTMLElement | null) => void>())
   const pageRefCallbacksRef = useRef(new Map<number, (element: HTMLElement | null) => void>())
   const toolbarSelectionRef = useRef<{ ranges: Range[]; articleElement: HTMLElement | null } | null>(null)
   const currentPageRef = useRef(currentPage)
@@ -121,6 +133,7 @@ export function TranslationReader({
   const [toolbarSize, setToolbarSize] = useState<{ width: number; height: number } | null>(null)
   const [toolbarSuppressed, setToolbarSuppressed] = useState(false)
   const [virtualScroll, setVirtualScroll] = useState({ top: 0, height: 900 })
+  const [sourceBlockMeasurements, setSourceBlockMeasurements] = useState(new Map<string, SourceBlockMeasurement>())
   const {
     pageRefs,
     measuredPageHeights,
@@ -395,10 +408,68 @@ export function TranslationReader({
     resetMeasuredPageHeights({ preserveExisting: true })
   }, [pages, translation, resetMeasuredPageHeights])
 
+  useLayoutEffect(() => {
+    if (sourceBlockRefs.current.size === 0) {
+      setSourceBlockMeasurements(new Map())
+      return
+    }
+
+    let frame = 0
+    const measure = () => {
+      frame = 0
+      const next = new Map<string, SourceBlockMeasurement>()
+      for (const [key, element] of sourceBlockRefs.current) {
+        const page = element.closest<HTMLElement>("[data-translation-page]")
+        if (!page) {
+          continue
+        }
+        const elementRect = element.getBoundingClientRect()
+        const pageRect = page.getBoundingClientRect()
+        const top = elementRect.top - pageRect.top
+        const height = Math.max(40, elementRect.height)
+        if (Number.isFinite(top) && Number.isFinite(height)) {
+          next.set(key, { top, height })
+        }
+      }
+      setSourceBlockMeasurements((current) =>
+        sourceBlockMeasurementMapsEqual(current, next) ? current : next,
+      )
+    }
+    const scheduleMeasure = () => {
+      if (frame !== 0) {
+        return
+      }
+      frame = requestReaderAnimationFrame(measure)
+    }
+
+    scheduleMeasure()
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", scheduleMeasure)
+      return () => {
+        window.removeEventListener("resize", scheduleMeasure)
+        cancelReaderAnimationFrame(frame)
+      }
+    }
+
+    const observer = new ResizeObserver(scheduleMeasure)
+    for (const element of sourceBlockRefs.current.values()) {
+      observer.observe(element)
+    }
+    return () => {
+      observer.disconnect()
+      cancelReaderAnimationFrame(frame)
+    }
+  }, [renderedPages, translation])
+
   function clearTranslationPageRefs(pageIndex: number, element: HTMLElement | null) {
     if (!element) {
       paneRefs.current.delete(translationPaneKey(pageIndex, "source"))
       paneRefs.current.delete(translationPaneKey(pageIndex, "translation"))
+      for (const key of sourceBlockRefs.current.keys()) {
+        if (key.startsWith(`${pageIndex}:`)) {
+          sourceBlockRefs.current.delete(key)
+        }
+      }
     }
   }
 
@@ -418,10 +489,6 @@ export function TranslationReader({
 
   function getTranslationPaneRef(pageIndex: number, kind: "source" | "translation") {
     const key = translationPaneKey(pageIndex, kind)
-    const existing = paneRefCallbacksRef.current.get(key)
-    if (existing) {
-      return existing
-    }
     const callback = (element: HTMLElement | null) => {
       if (element) {
         paneRefs.current.set(key, element)
@@ -429,7 +496,23 @@ export function TranslationReader({
         paneRefs.current.delete(key)
       }
     }
-    paneRefCallbacksRef.current.set(key, callback)
+    return callback
+  }
+
+  function getSourceBlockRef(pageIndex: number, blockId: string) {
+    const key = translationBlockKey(pageIndex, blockId)
+    const existing = sourceBlockRefCallbacksRef.current.get(key)
+    if (existing) {
+      return existing
+    }
+    const callback = (element: HTMLElement | null) => {
+      if (element) {
+        sourceBlockRefs.current.set(key, element)
+      } else {
+        sourceBlockRefs.current.delete(key)
+      }
+    }
+    sourceBlockRefCallbacksRef.current.set(key, callback)
     return callback
   }
 
@@ -476,11 +559,17 @@ export function TranslationReader({
       const ranges = selectionRangesWithin(selection, pane)
       const text = selectedTextFromRanges(ranges)
       if (selection && text) {
-        onTextSelection(
-          text,
-          page.pageIndex + 1,
-          pane ? textSelectionAnchorFromDomSelection(selection, pane.textContent ?? "", page.pageIndex, pane) : null,
-        )
+        const sourceMarkdown = translationSourceMarkdown(page)
+        const translatedMarkdown = translatedMarkdownForPage(translationPages, page.pageIndex, sourceMarkdown)
+        const selectionTarget = translationSelectionTarget({
+          selectedText: text,
+          selection,
+          pane,
+          page,
+          sourceMarkdown,
+          translatedMarkdown,
+        })
+        onTextSelection(selectionTarget.text, page.pageIndex + 1, selectionTarget.anchor)
         toolbarSelectionRef.current = { ranges, articleElement: article }
         setToolbarPosition(selectionToolbarPositionFromRanges(ranges, article, toolbarSize))
         setToolbarSuppressed(false)
@@ -586,12 +675,12 @@ export function TranslationReader({
 
       <div
         ref={scrollerRef}
-        className="min-h-0 flex-1 overflow-y-auto px-6 py-6"
+        className="min-h-0 flex-1 overflow-x-auto overflow-y-auto px-8 py-8"
         data-translation-scroller
         onPointerDown={handleBackgroundPointerDown}
         onPointerUp={handleBackgroundPointerUp}
       >
-        <div className="relative mx-auto max-w-6xl" style={{ height: virtualMetrics.totalHeight }}>
+        <div className="relative mx-auto max-w-3xl" style={{ height: virtualMetrics.totalHeight }}>
           {renderedPages.map((virtualPage) => {
             const page = pagesByIndex.get(virtualPage.index)
             if (!page || page.loaded === false) {
@@ -612,13 +701,11 @@ export function TranslationReader({
               outlineTarget?.pageIndex === page.pageIndex && outlineTarget.anchorText
                 ? { id: outlineTarget.entryId, text: outlineTarget.anchorText }
                 : null
-            const translatedMarkdown =
-              translatedPage?.status === "done"
-                ? sanitizeDisplayedTranslationMarkdown(
-                    translatedPage.translatedMarkdown,
-                    sourceMarkdown,
-                  )
-                : ""
+            const translatedMarkdown = translatedMarkdownForPage(
+              translationPages,
+              page.pageIndex,
+              sourceMarkdown,
+            )
             const alignedRows = alignedTranslationRows(sourceMarkdown, translatedMarkdown)
             const shouldShowToolbarForPage = shouldRenderCurrentTextSelection(
               page.pageIndex,
@@ -645,72 +732,45 @@ export function TranslationReader({
                 onPointerUp={(event) => handlePointerUp(event, page)}
                 style={{ top: virtualPage.offsetTop }}
               >
-                <SparkMarginDots
-                  pageIndex={page.pageIndex}
-                  pageText={page.text}
-                  pageSelector="[data-translation-page]"
-                  items={sparkItems}
-                  onOpen={onOpenSparkItem}
-                />
                 <section
                   ref={getTranslationPaneRef(page.pageIndex, "source")}
                   data-translation-pane="source"
+                  data-spark-text-root
                   data-page-index={page.pageIndex}
-                  className="contents"
+                  data-source-text={page.text}
+                  className={translationSourceSurfaceClassName(page.pageIndex, virtualPageCount)}
                 >
-                  {alignedRows.map((row) => (
-                    <div
-                      key={`source-${row.index}`}
-                      data-translation-block-pane="source"
-                      data-translation-block-row={row.index}
-                      className={translationCellClass("source", row.index)}
-                      style={{ gridColumn: 1, gridRow: row.index + 1 }}
-                    >
-                      {row.sourceMarkdown ? (
-                        <MarkdownContent
-                          content={row.sourceMarkdown}
-                          allowRawHtml
-                          highlightSourceText={page.text}
-                          highlights={sourceHighlights}
-                          headingAnchor={headingAnchor}
-                          className="max-w-none text-[14px] leading-7"
-                        />
-                      ) : null}
-                    </div>
-                  ))}
+                  <SparkMarginDots
+                    pageIndex={page.pageIndex}
+                    pageText={page.text}
+                    pageSelector="[data-translation-page]"
+                    items={sparkItems}
+                    onOpen={onOpenSparkItem}
+                  />
+                  <TranslationSourceContent
+                    page={page}
+                    rows={alignedRows}
+                    highlights={sourceHighlights}
+                    headingAnchor={headingAnchor}
+                    getSourceBlockRef={getSourceBlockRef}
+                  />
                 </section>
                 <section
                   ref={getTranslationPaneRef(page.pageIndex, "translation")}
                   data-translation-pane="translation"
                   data-page-index={page.pageIndex}
-                  className="contents"
+                  className="absolute top-0"
+                  style={{
+                    left: TRANSLATION_SOURCE_WIDTH + TRANSLATION_RAIL_GAP,
+                    width: TRANSLATION_RAIL_WIDTH,
+                  }}
                 >
-                  {alignedRows.map((row) => (
-                    <div
-                      key={`translation-${row.index}`}
-                      data-translation-block-pane="translation"
-                      data-translation-block-row={row.index}
-                      className={translationCellClass("translation", row.index)}
-                      style={{ gridColumn: 2, gridRow: row.index + 1 }}
-                    >
-                      {translatedPage?.status === "done" && row.translatedMarkdown ? (
-                        <MarkdownContent
-                          content={row.translatedMarkdown}
-                          allowRawHtml
-                          headingAnchor={headingAnchor}
-                          className="max-w-none text-[14px] leading-7"
-                        />
-                      ) : translatedPage?.status === "failed" && row.index === 0 ? (
-                        <div className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm leading-6 text-danger-foreground">
-                          {translatedPage.error || "这段内容翻译失败"}
-                        </div>
-                      ) : translatedPage?.status === "translating" && row.index === 0 ? (
-                        <TranslationSkeleton label="正在翻译当前片段" />
-                      ) : !translatedPage?.status && row.index === 0 ? (
-                        <TranslationSkeleton label="等待整本翻译任务生成译文" />
-                      ) : null}
-                    </div>
-                  ))}
+                  <TranslationRail
+                    pageIndex={page.pageIndex}
+                    rows={alignedRows}
+                    translatedPage={translatedPage}
+                    sourceBlockMeasurements={sourceBlockMeasurements}
+                  />
                 </section>
                 <SelectionToolbarHost
                   present={shouldShowToolbarForPage}
@@ -749,19 +809,21 @@ const TranslationPagePlaceholder = forwardRef<
       className={translationPageClassName(pageIndex, totalPages)}
       style={{ top, minHeight }}
     >
-      <section className="contents">
-        <div className="min-w-0 border-r px-7 py-4" style={{ gridColumn: 1, gridRow: 1 }}>
-          <div className="space-y-3">
-            <div className="h-4 w-11/12 rounded bg-muted reader-shimmer" />
-            <div className="h-4 w-9/12 rounded bg-muted reader-shimmer" />
-            <div className="h-4 w-10/12 rounded bg-muted reader-shimmer" />
-          </div>
+      <section className={translationSourceSurfaceClassName(pageIndex, totalPages)}>
+        <div className="space-y-3">
+          <div className="h-4 w-11/12 rounded bg-muted reader-shimmer" />
+          <div className="h-4 w-9/12 rounded bg-muted reader-shimmer" />
+          <div className="h-4 w-10/12 rounded bg-muted reader-shimmer" />
         </div>
       </section>
-      <section className="contents">
-        <div className="min-w-0 px-7 py-4" style={{ gridColumn: 2, gridRow: 1 }}>
-          <TranslationSkeleton label="等待整本翻译任务生成译文" />
-        </div>
+      <section
+        className="absolute top-0"
+        style={{
+          left: TRANSLATION_SOURCE_WIDTH + TRANSLATION_RAIL_GAP,
+          width: TRANSLATION_RAIL_WIDTH,
+        }}
+      >
+        <TranslationSkeleton label="等待整本翻译任务生成译文" />
       </section>
     </article>
   )
@@ -769,6 +831,144 @@ const TranslationPagePlaceholder = forwardRef<
 
 function translationPaneKey(pageIndex: number, kind: "source" | "translation") {
   return `${pageIndex}:${kind}`
+}
+
+function translationBlockKey(pageIndex: number, blockId: string) {
+  return `${pageIndex}:${blockId}`
+}
+
+type SourceBlockMeasurement = {
+  top: number
+  height: number
+}
+
+function TranslationSourceContent({
+  page,
+  rows,
+  highlights,
+  headingAnchor,
+  getSourceBlockRef,
+}: {
+  page: ParsedPage
+  rows: AlignedTranslationRow[]
+  highlights: SavedHighlight[]
+  headingAnchor: { id: string; text: string } | null
+  getSourceBlockRef: (pageIndex: number, blockId: string) => (element: HTMLElement | null) => void
+}) {
+  const blocks = rows.filter((row) => row.sourceMarkdown.trim())
+  if (blocks.length === 0) {
+    return (
+      <div className="font-ui text-[15px] leading-8 text-muted-foreground">
+        这里没有抽取到可用文字。
+      </div>
+    )
+  }
+  return (
+    <div className="relative font-ui text-[15px] leading-8 text-foreground">
+      {blocks.map((row) => (
+        <div
+          key={row.id}
+          ref={getSourceBlockRef(page.pageIndex, row.id)}
+          data-translation-block-pane="source"
+          data-translation-block-id={row.id}
+          data-translation-block-row={row.index}
+        >
+          <MarkdownContent
+            content={row.sourceMarkdown}
+            allowRawHtml
+            highlightSourceText={page.text}
+            highlights={highlights}
+            headingAnchor={headingAnchor}
+            className="max-w-none text-[15px] leading-8"
+          />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function TranslationRail({
+  pageIndex,
+  rows,
+  translatedPage,
+  sourceBlockMeasurements,
+}: {
+  pageIndex: number
+  rows: AlignedTranslationRow[]
+  translatedPage?: TranslationStatus["pages"][number]
+  sourceBlockMeasurements: Map<string, SourceBlockMeasurement>
+}) {
+  if (translatedPage?.status === "failed") {
+    return (
+      <TranslationRailNotice top={40}>
+        <div className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm leading-6 text-danger-foreground">
+          {translatedPage.error || "这段内容翻译失败"}
+        </div>
+      </TranslationRailNotice>
+    )
+  }
+  if (translatedPage?.status === "translating") {
+    return (
+      <TranslationRailNotice top={40}>
+        <TranslationSkeleton label="正在翻译当前片段" />
+      </TranslationRailNotice>
+    )
+  }
+  if (!translatedPage?.status) {
+    return (
+      <TranslationRailNotice top={40}>
+        <TranslationSkeleton label="等待整本翻译任务生成译文" />
+      </TranslationRailNotice>
+    )
+  }
+
+  return (
+    <>
+      {rows
+        .filter((row) => row.sourceMarkdown.trim() || row.translatedMarkdown.trim())
+        .map((row) => {
+          const measurement = sourceBlockMeasurements.get(translationBlockKey(pageIndex, row.id))
+          const top = measurement?.top ?? 40 + row.index * 140
+          const sourceHeight = measurement?.height ?? 96
+          const maxHeight = Math.max(96, Math.min(260, sourceHeight + 96))
+          const hasTranslation = row.translatedMarkdown.trim().length > 0
+          return (
+            <div
+              key={row.id}
+              data-translation-block-pane="translation"
+              data-translation-block-id={row.id}
+              data-translation-block-row={row.index}
+              className={`absolute left-0 right-0 rounded-md px-3 py-2 ${
+                hasTranslation ? "border bg-card/95 shadow-sm" : "pointer-events-none"
+              }`}
+              style={{ top, maxHeight, overflowY: "auto" }}
+            >
+              {hasTranslation ? (
+                <MarkdownContent
+                  content={row.translatedMarkdown}
+                  allowRawHtml
+                  className="max-w-none text-[14px] leading-7"
+                />
+              ) : null}
+            </div>
+          )
+        })}
+    </>
+  )
+}
+
+function TranslationRailNotice({
+  top,
+  children,
+}: {
+  top: number
+  children: ReactNode
+}) {
+  return (
+    <div className="absolute left-0 right-0 rounded-md border bg-card/95 px-3 py-2 shadow-sm" style={{ top }}>
+      {children}
+    </div>
+  )
 }
 
 function translationSourceHighlights({
@@ -832,6 +1032,99 @@ function selectionPaneForPageSelection(
   )
 }
 
+function translatedMarkdownForPage(
+  translationPages: Map<number, TranslationStatus["pages"][number]>,
+  pageIndex: number,
+  sourceMarkdown: string,
+) {
+  const translatedPage = translationPages.get(pageIndex)
+  return translatedPage?.status === "done"
+    ? sanitizeDisplayedTranslationMarkdown(translatedPage.translatedMarkdown, sourceMarkdown)
+    : ""
+}
+
+function translationSelectionTarget({
+  selectedText,
+  selection,
+  pane,
+  page,
+  sourceMarkdown,
+  translatedMarkdown,
+}: {
+  selectedText: string
+  selection: Selection
+  pane: HTMLElement | null
+  page: ParsedPage
+  sourceMarkdown: string
+  translatedMarkdown: string
+}): { text: string; anchor: TextSelectionAnchor | null } {
+  if (pane?.dataset.translationPane === "translation") {
+    const selectedBlockId = translationBlockIdForSelection(selection)
+    const rows = alignedTranslationRows(sourceMarkdown, translatedMarkdown)
+    const sourceRow =
+      (selectedBlockId
+        ? rows.find((row) => row.id === selectedBlockId && row.sourceMarkdown.trim())
+        : null) ??
+      sourceBlockForTranslatedSelection(sourceMarkdown, translatedMarkdown, selectedText)
+    if (sourceRow?.sourceMarkdown.trim()) {
+      const text = normalizeWhitespace(markdownToSelectionText(sourceRow.sourceMarkdown))
+      return {
+        text,
+        anchor: sourceBlockAnchor(page, text),
+      }
+    }
+  }
+
+  return {
+    text: selectedText,
+    anchor: pane
+      ? textSelectionAnchorFromDomSelection(selection, pane.textContent ?? "", page.pageIndex, pane)
+      : null,
+  }
+}
+
+function translationBlockIdForSelection(selection: Selection) {
+  const anchorElement =
+    selection.anchorNode instanceof HTMLElement
+      ? selection.anchorNode
+      : selection.anchorNode?.parentElement
+  const focusElement =
+    selection.focusNode instanceof HTMLElement
+      ? selection.focusNode
+      : selection.focusNode?.parentElement
+  const anchorBlock = anchorElement?.closest<HTMLElement>("[data-translation-block-id]")
+  const focusBlock = focusElement?.closest<HTMLElement>("[data-translation-block-id]")
+  if (
+    anchorBlock?.dataset.translationBlockId &&
+    anchorBlock.dataset.translationBlockId === focusBlock?.dataset.translationBlockId
+  ) {
+    return anchorBlock.dataset.translationBlockId
+  }
+  return anchorBlock?.dataset.translationBlockId ?? null
+}
+
+function sourceBlockAnchor(page: ParsedPage, sourceBlockText: string): TextSelectionAnchor | null {
+  const selector = makeTextQuoteSelector(page.text, sourceBlockText)
+  if (selector.positionStart === null || selector.positionEnd === null) {
+    return null
+  }
+  return {
+    pageIndex: page.pageIndex,
+    positionStart: selector.positionStart,
+    positionEnd: selector.positionEnd,
+  }
+}
+
+function markdownToSelectionText(markdown: string) {
+  return markdown
+    .replace(/!\[[^\]]*]\([^)]*\)/g, " ")
+    .replace(/\[([^\]]+)]\([^)]*\)/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/[#>*_~|[\]()`-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
 function isTranslationComplete(translation: TranslationStatus | null) {
   return Boolean(
     translation &&
@@ -881,12 +1174,6 @@ function translationSourceMarkdown(page: ParsedPage) {
     .trim()
 }
 
-function translationCellClass(kind: "source" | "translation", rowIndex: number) {
-  const borderTop = rowIndex === 0 ? "" : " border-t"
-  const sideBorder = kind === "source" ? " border-r" : ""
-  return `min-w-0 px-7 py-4${borderTop}${sideBorder}`
-}
-
 function shouldIgnoreSelectionClearTarget(target: EventTarget | null) {
   if (!(target instanceof Element)) {
     return false
@@ -918,4 +1205,20 @@ function findOutlineAnchor(root: ParentNode, entryId: string) {
   return Array.from(root.querySelectorAll<HTMLElement>("[data-outline-anchor-id]")).find(
     (element) => element.dataset.outlineAnchorId === entryId,
   )
+}
+
+function sourceBlockMeasurementMapsEqual(
+  left: Map<string, SourceBlockMeasurement>,
+  right: Map<string, SourceBlockMeasurement>,
+) {
+  if (left.size !== right.size) {
+    return false
+  }
+  for (const [key, value] of left) {
+    const other = right.get(key)
+    if (!other || other.top !== value.top || other.height !== value.height) {
+      return false
+    }
+  }
+  return true
 }
