@@ -673,6 +673,24 @@ export async function cancelTranslation(bookId: string) {
   return invokeCommand<boolean>("cancel_translation", { bookId })
 }
 
+export type AgentHostStatus = {
+  hostUrl: string | null
+  bookToolPort: number
+  ready: boolean
+}
+
+/** Resolve the OpenCode sidecar status (host URL + readiness) from the backend. */
+export async function getAgentHostUrl(): Promise<AgentHostStatus | null> {
+  if (!isTauriRuntime()) {
+    return null
+  }
+  try {
+    return await invokeCommand<AgentHostStatus>("get_agent_host_url")
+  } catch {
+    return null
+  }
+}
+
 export async function listenInterpretationStream(
   handler: (event: InterpretationStreamEvent) => void,
 ): Promise<UnlistenFn | null> {

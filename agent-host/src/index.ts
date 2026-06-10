@@ -10,6 +10,7 @@ const packageDir = resolve(hostDir, "..");
 const opencodeWorktree = resolve(packageDir, "opencode");
 const stateDir = resolve(packageDir, ".state");
 const promptPath = resolve(opencodeWorktree, "prompts", "deep-reader.md");
+const translatorPromptPath = resolve(opencodeWorktree, "prompts", "translator.md");
 
 type HostConfig = {
   bookToolBaseUrl: string;
@@ -87,7 +88,11 @@ function readProviderValue(provider: ProviderKind, suffix: "API_KEY" | "BASE_URL
   );
 }
 
-function buildOpencodeConfig(config: HostConfig, prompt: string): Config {
+function buildOpencodeConfig(
+  config: HostConfig,
+  prompt: string,
+  translatorPrompt: string,
+): Config {
   const providerConfig = buildProviderConfig(config);
   return {
     model: `${config.provider}/${config.model}`,
@@ -134,6 +139,40 @@ function buildOpencodeConfig(config: HostConfig, prompt: string): Config {
           glob: false,
           task: false,
           todowrite: false,
+          book_search: true,
+          book_get_chunk: true,
+          book_get_neighbors: true,
+          book_structure: true,
+        },
+      },
+      translator: {
+        description:
+          "App-owned block-aligned translator agent. Runs a baoyu-aligned translation flow inside a sandbox workspace, preserving [[B###]] block markers.",
+        mode: "primary",
+        // Translation is multi-step: analyze terminology, translate each page block-by-block, optionally review.
+        maxSteps: 24,
+        model: `${config.provider}/${config.model}`,
+        prompt: translatorPrompt,
+        permission: {
+          // File + shell allowed so the agent can read page sources and write
+          // translation outputs, but locked to the sandbox cwd; never web.
+          edit: "allow",
+          bash: "allow",
+          webfetch: "deny",
+          external_directory: "deny",
+        },
+        tools: {
+          bash: true,
+          edit: true,
+          write: true,
+          read: true,
+          grep: true,
+          glob: true,
+          task: true,
+          todowrite: true,
+          webfetch: false,
+          websearch: false,
+          // Book tools available for cross-page terminology alignment if needed.
           book_search: true,
           book_get_chunk: true,
           book_get_neighbors: true,
@@ -242,6 +281,7 @@ async function main() {
 
   await mkdir(stateDir, { recursive: true });
   const prompt = await readFile(promptPath, "utf8");
+  const translatorPrompt = await readFile(translatorPromptPath, "utf8");
   const configServer = startConfigServer(config);
 
   // OpenCode discovers .opencode/tools relative to the server process cwd.
@@ -251,7 +291,7 @@ async function main() {
     hostname: config.hostname,
     port: config.port,
     timeout: 10_000,
-    config: buildOpencodeConfig(config, prompt),
+    config: buildOpencodeConfig(config, prompt, translatorPrompt),
   });
 
   console.log(

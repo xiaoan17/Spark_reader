@@ -1,9 +1,13 @@
 # OpenCode Reader Agent
 
-> Status: experimental and not wired into the shipped product. The current
-> product RAG loop runs inside the Rust process through `src-tauri/src/interpretation.rs`;
-> this OpenCode host is not started by Tauri, is not bundled in release builds,
-> and has no Rust book-tool HTTP server connected today.
+> Status update (2026-06-10): the real wiring described as TODO below is now
+> IMPLEMENTED behind a flag. See `docs/opencode-real-wiring.md` for the shipped
+> design + implementation. The book-tool HTTP server (TODO 2 below) now exists at
+> `src-tauri/src/book_tool_server.rs`; Tauri spawns the sidecar (`src-tauri/src/
+> agent_host.rs`); Spark routes through `deep_reader` and translation through a
+> new `translator` agent. Enable with `FOCUSED_READING_OPENCODE_ENABLED=1`. When
+> disabled (default), everything runs in-process in Rust as before. The
+> historical TODO checklist below is retained for context.
 
 This project embeds OpenCode as a constrained agent host for selected-passage PDF interpretation.
 

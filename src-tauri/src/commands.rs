@@ -1086,6 +1086,13 @@ pub fn cancel_translation(book_id: String) -> bool {
     translation::cancel_translation(&book_id)
 }
 
+/// Expose the resolved OpenCode sidecar URL (and readiness) to the frontend so
+/// it can route agent tasks through the real runner when available.
+#[command]
+pub fn get_agent_host_url() -> crate::agent_host::AgentHostStatus {
+    crate::agent_host::status()
+}
+
 fn library_db_path(app: &AppHandle) -> CommandResult<std::path::PathBuf> {
     let app_data_dir = app.path().app_data_dir().ok();
     storage::default_db_path(app_data_dir).map_err(command_error)

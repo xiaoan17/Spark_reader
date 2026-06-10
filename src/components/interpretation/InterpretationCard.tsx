@@ -15,6 +15,7 @@ import {
 import { useEffect, useRef, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { AnimatedValue } from "@/components/ui/animated-value"
 import { MarkdownContent } from "@/components/markdown/MarkdownContent"
 import { renderMarkdownTextWithCitations } from "@/components/markdown/markdown-citations"
 import { shouldSubmitTextarea } from "@/components/reader/textarea-submit"
@@ -806,8 +807,14 @@ function InterpretationTrustBadge({ trust }: { trust: InterpretationTrustState }
   return (
     <div className={`inline-flex flex-wrap items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs ${className}`}>
       <span className="font-medium">{trust.label}</span>
-      <span>接地 {trust.groundedCitationCount}</span>
-      {trust.droppedCitationCount > 0 ? <span>丢弃 {trust.droppedCitationCount}</span> : null}
+      <span>
+        接地 <AnimatedValue value={trust.groundedCitationCount} variant="number" animation="snappy" />
+      </span>
+      {trust.droppedCitationCount > 0 ? (
+        <span>
+          丢弃 <AnimatedValue value={trust.droppedCitationCount} variant="number" animation="snappy" />
+        </span>
+      ) : null}
       <span>{trust.answerSource === "llm" ? "LLM" : "local"}</span>
     </div>
   )

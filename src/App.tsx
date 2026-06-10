@@ -4,7 +4,9 @@ import { useReaderStore } from "@/stores/reader-store"
 import {
   MockAgentTaskRunner,
   agentTaskToKnowledgeCardRequests,
+  createAgentTaskRunner,
   type AgentTaskKind,
+  type AgentTaskRunner,
 } from "@/core/agent-task"
 import {
   buildKnowledgeGraph,
@@ -14,6 +16,7 @@ import {
   deleteHighlight,
   deleteInterpretation,
   deleteKnowledgeCard,
+  getAgentHostUrl,
   getDocumentTldr,
   getBookKnowledgeMap,
   getChunk,
@@ -109,7 +112,8 @@ function localFallbackNotice(error?: unknown, action: "解读" | "追问" = "解
 
 export function App() {
   const timers = useRef<number[]>([])
-  const agentTaskRunner = useRef(new MockAgentTaskRunner())
+  const agentTaskRunner = useRef<AgentTaskRunner>(new MockAgentTaskRunner())
+  const agentRunnerResolved = useRef(false)
   const agentTaskUnsubscribers = useRef(new Map<string, () => void>())
   const persistedAgentTaskIds = useRef(new Set<string>())
   const requestGuard = useRef(createRequestGuard())
@@ -339,7 +343,13 @@ export function App() {
       }
       if (event.stage === "synthesizing") {
         setPhase("streaming")
-        if (!question) {
+        // Reset the current turn's streaming draft. This also discards any
+        // partial deltas already streamed by an OpenCode attempt that failed
+        // and fell back to the Rust pipeline (which re-emits synthesizing),
+        // so the user never sees two answers concatenated.
+        if (question) {
+          resetStreamingFollowUp(followUpId ?? requestId, question)
+        } else {
           setInterpretation("")
         }
       }
@@ -427,6 +437,13 @@ export function App() {
     })
   }
 
+  // Clear a follow-up turn's streamed answer back to empty so a (re)stream
+  // starts clean — used when synthesis (re)starts, e.g. after an OpenCode
+  // attempt fell back to the Rust pipeline.
+  function resetStreamingFollowUp(id: string, question: string) {
+    replaceStreamingFollowUp(id, question, "")
+  }
+
   function handleQuestionSubmit(question: string) {
     if (!currentThreadFocus().text) {
       return
@@ -486,10 +503,28 @@ export function App() {
     }
   }
 
+  async function ensureAgentTaskRunner() {
+    // Lazily swap the Mock runner for the real OpenCode runner once, the first
+    // time an agent task is started, if the sidecar is up. Keeps the no-useEffect
+    // bootstrap architecture intact.
+    if (agentRunnerResolved.current) {
+      return
+    }
+    agentRunnerResolved.current = true
+    const status = await getAgentHostUrl()
+    if (status?.ready && status.hostUrl) {
+      agentTaskRunner.current = createAgentTaskRunner({
+        hostUrl: status.hostUrl,
+        ready: status.ready,
+      })
+    }
+  }
+
   async function handleRunAgentTask(kind: AgentTaskKind, prompt?: string) {
     if (!bookId) {
       return
     }
+    await ensureAgentTaskRunner()
     const taskId = await agentTaskRunner.current.run(kind, { bookId, prompt })
     const unsubscribe = agentTaskRunner.current.subscribe(taskId, (task) => {
       upsertAgentTask(task)

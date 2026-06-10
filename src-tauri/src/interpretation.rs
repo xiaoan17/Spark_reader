@@ -331,6 +331,64 @@ pub async fn interpret_with_progress(
 ) -> Result<InterpretResponse> {
     let cancellation = register_active_interpretation(&request_id);
     let _guard = ActiveInterpretationGuard::new(request_id.clone());
+
+    // When the OpenCode sidecar is enabled and ready, run the deep_reader agent
+    // for retrieval + synthesis. On any failure we fall through to the in-process
+    // Rust pipeline below — the user never sees the OpenCode failure.
+    if crate::agent_host::ready() {
+        if let Some(host_url) = crate::agent_host::host_url() {
+            match opencode_session::interpret_via_opencode(
+                &app,
+                &request_id,
+                db_path,
+                &request,
+                &host_url,
+                cancellation.clone(),
+            )
+            .await
+            {
+                Ok(response) => {
+                    emit_stream_event(
+                        &app,
+                        InterpretationStreamEvent {
+                            request_id: request_id.clone(),
+                            stage: InterpretationStreamStage::Done,
+                            message: "解读生成完成".to_string(),
+                            delta: None,
+                            answer: Some(response.answer.clone()),
+                            answer_source: Some(response.answer_source),
+                            evidence: response.evidence.clone(),
+                            trace: response.trace.clone(),
+                        },
+                    );
+                    return Ok(response);
+                }
+                Err(opencode_session::OpencodeInterpretError::Cancelled) => {
+                    emit_stream_event(
+                        &app,
+                        InterpretationStreamEvent {
+                            request_id: request_id.clone(),
+                            stage: InterpretationStreamStage::Cancelled,
+                            message: "已停止生成".to_string(),
+                            delta: None,
+                            answer: None,
+                            answer_source: None,
+                            evidence: Vec::new(),
+                            trace: Vec::new(),
+                        },
+                    );
+                    return Err(llm::LlmError::Cancelled.into());
+                }
+                Err(err) => {
+                    eprintln!(
+                        "OpenCode deep_reader path failed, falling back to Rust pipeline: {err}"
+                    );
+                    // fall through to the Rust pipeline below.
+                }
+            }
+        }
+    }
+
     emit_stream_event(
         &app,
         InterpretationStreamEvent {
@@ -2152,6 +2210,569 @@ fn is_sentence_boundary(ch: char) -> bool {
 fn trim_for_query(text: &str, max_chars: usize) -> String {
     let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
     compact.chars().take(max_chars).collect()
+}
+
+/// OpenCode `deep_reader` execution path for Spark. Runs retrieval + synthesis
+/// inside the out-of-process OpenCode sidecar, then re-grounds citations in
+/// Rust. Any failure returns an error so the caller falls back to the Rust
+/// in-process pipeline.
+mod opencode_session {
+    use super::*;
+    use futures_util::StreamExt;
+
+    /// Cap on how long we wait on the SSE stream before giving up (and falling
+    /// back to Rust). Generous because agentic retrieval + synthesis is multi-step.
+    const SESSION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+    #[derive(Debug)]
+    pub enum OpencodeInterpretError {
+        Cancelled,
+        Http(String),
+        Empty,
+    }
+
+    impl std::fmt::Display for OpencodeInterpretError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                OpencodeInterpretError::Cancelled => write!(f, "cancelled"),
+                OpencodeInterpretError::Http(msg) => write!(f, "http: {msg}"),
+                OpencodeInterpretError::Empty => write!(f, "empty answer from opencode"),
+            }
+        }
+    }
+
+    pub async fn interpret_via_opencode(
+        app: &AppHandle,
+        request_id: &str,
+        db_path: &Path,
+        request: &InterpretRequest,
+        host_url: &str,
+        cancellation: CancellationToken,
+    ) -> Result<InterpretResponse, OpencodeInterpretError> {
+        emit_stream_event(
+            app,
+            InterpretationStreamEvent {
+                request_id: request_id.to_string(),
+                stage: InterpretationStreamStage::Planning,
+                message: "正在通过 OpenCode 规划检索".to_string(),
+                delta: None,
+                answer: None,
+                answer_source: None,
+                evidence: Vec::new(),
+                trace: Vec::new(),
+            },
+        );
+
+        let client = reqwest::Client::new();
+
+        // 1) Create a session.
+        let session_id = create_session(&client, host_url).await?;
+
+        // 2) Send the grounded prompt to the deep_reader agent.
+        let prompt = build_opencode_prompt(request);
+        send_prompt(&client, host_url, &session_id, &prompt).await?;
+
+        // 3) Subscribe to events and consume until the session goes idle.
+        let mut answer = String::new();
+        let mut emitted_retrieving = false;
+        let mut tool_chunk_ids: Vec<String> = Vec::new();
+
+        let event_url = format!("{}/event", host_url.trim_end_matches('/'));
+        let response = client
+            .get(&event_url)
+            .header("accept", "text/event-stream")
+            .send()
+            .await
+            .map_err(|err| OpencodeInterpretError::Http(err.to_string()))?;
+        if !response.status().is_success() {
+            return Err(OpencodeInterpretError::Http(format!(
+                "event subscribe status {}",
+                response.status()
+            )));
+        }
+
+        let mut stream = response.bytes_stream();
+        let mut pending = String::new();
+        let started = std::time::Instant::now();
+
+        'outer: loop {
+            if llm::is_cancelled(&cancellation) {
+                let _ = abort_session(&client, host_url, &session_id).await;
+                return Err(OpencodeInterpretError::Cancelled);
+            }
+            if started.elapsed() > SESSION_TIMEOUT {
+                let _ = abort_session(&client, host_url, &session_id).await;
+                return Err(OpencodeInterpretError::Http("session timeout".to_string()));
+            }
+
+            let next = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                stream.next(),
+            )
+            .await;
+            let chunk = match next {
+                Ok(Some(Ok(chunk))) => chunk,
+                Ok(Some(Err(err))) => {
+                    return Err(OpencodeInterpretError::Http(err.to_string()))
+                }
+                Ok(None) => break, // stream ended
+                Err(_) => continue, // 5s poll tick; re-check cancel/timeout
+            };
+            pending.push_str(&String::from_utf8_lossy(&chunk));
+
+            // Parse complete SSE events (terminated by a blank line).
+            while let Some(idx) = pending.find("\n\n") {
+                let raw = pending[..idx].to_string();
+                pending.drain(..idx + 2);
+                for data in sse_data_payloads(&raw) {
+                    let trimmed = data.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+                        continue;
+                    };
+                    if value.get("sessionID").and_then(|v| v.as_str()) == Some(session_id.as_str())
+                        || session_in_properties(&value, &session_id)
+                    {
+                        // belongs to our session (or session-agnostic event)
+                    }
+                    match classify_event(&value, &session_id) {
+                        OpencodeEventKind::TextDelta(delta) => {
+                            if !delta.is_empty() {
+                                if llm::is_cancelled(&cancellation) {
+                                    let _ = abort_session(&client, host_url, &session_id).await;
+                                    return Err(OpencodeInterpretError::Cancelled);
+                                }
+                                answer.push_str(&delta);
+                                emit_stream_event(
+                                    app,
+                                    InterpretationStreamEvent {
+                                        request_id: request_id.to_string(),
+                                        stage: InterpretationStreamStage::Delta,
+                                        message: "正在接收模型输出".to_string(),
+                                        delta: Some(delta),
+                                        answer: None,
+                                        answer_source: None,
+                                        evidence: Vec::new(),
+                                        trace: Vec::new(),
+                                    },
+                                );
+                            }
+                        }
+                        OpencodeEventKind::ToolResult(output) => {
+                            for chunk_id in extract_chunk_ids(&output) {
+                                if !tool_chunk_ids.contains(&chunk_id) {
+                                    tool_chunk_ids.push(chunk_id);
+                                }
+                            }
+                            if !emitted_retrieving {
+                                emitted_retrieving = true;
+                                emit_stream_event(
+                                    app,
+                                    InterpretationStreamEvent {
+                                        request_id: request_id.to_string(),
+                                        stage: InterpretationStreamStage::Retrieving,
+                                        message: "OpenCode 正在检索书内证据".to_string(),
+                                        delta: None,
+                                        answer: None,
+                                        answer_source: None,
+                                        evidence: Vec::new(),
+                                        trace: Vec::new(),
+                                    },
+                                );
+                            }
+                        }
+                        OpencodeEventKind::Idle => break 'outer,
+                        OpencodeEventKind::Error(msg) => {
+                            return Err(OpencodeInterpretError::Http(msg))
+                        }
+                        OpencodeEventKind::Other => {}
+                    }
+                }
+            }
+        }
+
+        let answer = answer.trim().to_string();
+        if answer.is_empty() {
+            return Err(OpencodeInterpretError::Empty);
+        }
+
+        // 4) Build authoritative evidence in Rust from the chunk_ids the agent
+        //    actually retrieved (coordinate truth always comes from our SQLite).
+        let mut by_id: BTreeMap<String, EvidenceItem> = BTreeMap::new();
+        for chunk_id in &tool_chunk_ids {
+            if let Ok(Some(hit)) = storage::get_chunk(db_path, &request.book_id, chunk_id) {
+                insert_hit(&mut by_id, hit);
+            }
+        }
+        // If the agent cited chunk_ids in its answer that we didn't capture as
+        // tool results, try to resolve those too so citations stay clickable.
+        for chunk_id in chunk_ids_mentioned_in_answer(&answer) {
+            if by_id.contains_key(&chunk_id) {
+                continue;
+            }
+            if let Ok(Some(hit)) = storage::get_chunk(db_path, &request.book_id, &chunk_id) {
+                insert_hit(&mut by_id, hit);
+            }
+        }
+
+        let evidence = rank_evidence(by_id.into_values().collect(), request);
+        let evidence: Vec<EvidenceItem> =
+            evidence.into_iter().take(MAX_SYNTHESIS_EVIDENCE_CHUNKS).collect();
+
+        // 5) Re-ground citations in Rust: OpenCode's citations are not trusted.
+        let answer = enforce_grounded_citations(&answer, request, &evidence);
+
+        let trace = vec![AgentTraceStep {
+            phase: AgentTracePhase::Synthesize,
+            query: None,
+            chunk_ids: evidence.iter().map(|item| item.chunk_id.clone()).collect(),
+            note: "由 OpenCode deep_reader 检索与合成，引用已在后端重新校验。".to_string(),
+        }];
+
+        Ok(InterpretResponse {
+            answer,
+            answer_source: AnswerSource::Llm,
+            evidence,
+            trace,
+        })
+    }
+
+    fn build_opencode_prompt(request: &InterpretRequest) -> String {
+        let mut parts = Vec::new();
+        parts.push(format!(
+            "用户框选的原文（不可漂移焦点）：\n{}",
+            trim_for_prompt(&request.selection_text, 1500)
+        ));
+        if !request.page_indexes.is_empty() {
+            let pages = request
+                .page_indexes
+                .iter()
+                .map(|p| (p + 1).to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            parts.push(format!("选区所在页：{pages}"));
+        }
+        if let Some(question) = request.question.as_deref().filter(|q| !q.trim().is_empty()) {
+            parts.push(format!("用户追问：{question}"));
+        }
+        if let Some(prior) = request.prior_answer.as_deref().filter(|a| !a.trim().is_empty()) {
+            parts.push(format!(
+                "上一轮回答（供延续，不要重复）：\n{}",
+                trim_for_prompt(prior, 800)
+            ));
+        }
+        parts.push(format!(
+            "请用 book_search 等工具检索本书（bookId = \"{}\"）的证据，围绕框选原文作答；\
+             每个关键判断后用 [chunk_id] 标注依据，证据不足要明确说明。",
+            request.book_id
+        ));
+        parts.join("\n\n")
+    }
+
+    async fn create_session(
+        client: &reqwest::Client,
+        host_url: &str,
+    ) -> Result<String, OpencodeInterpretError> {
+        let url = format!("{}/session", host_url.trim_end_matches('/'));
+        let response = client
+            .post(&url)
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .map_err(|err| OpencodeInterpretError::Http(err.to_string()))?;
+        if !response.status().is_success() {
+            return Err(OpencodeInterpretError::Http(format!(
+                "session create status {}",
+                response.status()
+            )));
+        }
+        let value: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|err| OpencodeInterpretError::Http(err.to_string()))?;
+        extract_session_id(&value)
+            .ok_or_else(|| OpencodeInterpretError::Http("missing session id".to_string()))
+    }
+
+    fn extract_session_id(value: &serde_json::Value) -> Option<String> {
+        for key in ["id", "sessionID", "sessionId", "session_id"] {
+            if let Some(id) = value.get(key).and_then(|v| v.as_str()) {
+                return Some(id.to_string());
+            }
+        }
+        value
+            .get("session")
+            .and_then(|s| s.get("id"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    }
+
+    async fn send_prompt(
+        client: &reqwest::Client,
+        host_url: &str,
+        session_id: &str,
+        prompt: &str,
+    ) -> Result<(), OpencodeInterpretError> {
+        // Real SDK route is POST /session/{id}/message with a parts array.
+        let url = format!(
+            "{}/session/{}/message",
+            host_url.trim_end_matches('/'),
+            session_id
+        );
+        let body = serde_json::json!({
+            "agent": "deep_reader",
+            "parts": [{ "type": "text", "text": prompt }],
+        });
+        let response = client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|err| OpencodeInterpretError::Http(err.to_string()))?;
+        if !response.status().is_success() {
+            return Err(OpencodeInterpretError::Http(format!(
+                "prompt status {}",
+                response.status()
+            )));
+        }
+        Ok(())
+    }
+
+    async fn abort_session(client: &reqwest::Client, host_url: &str, session_id: &str) {
+        let url = format!(
+            "{}/session/{}/abort",
+            host_url.trim_end_matches('/'),
+            session_id
+        );
+        let _ = client.post(&url).json(&serde_json::json!({})).send().await;
+    }
+
+    enum OpencodeEventKind {
+        TextDelta(String),
+        ToolResult(String),
+        Idle,
+        Error(String),
+        Other,
+    }
+
+    fn session_in_properties(value: &serde_json::Value, session_id: &str) -> bool {
+        value
+            .get("properties")
+            .and_then(|p| p.get("sessionID"))
+            .and_then(|v| v.as_str())
+            == Some(session_id)
+    }
+
+    /// Classify a parsed OpenCode SSE event. Real schema (opencode-ai@1.15.13):
+    /// `{ type, properties: { part?, delta?, sessionID? } }` discriminated union.
+    fn classify_event(value: &serde_json::Value, _session_id: &str) -> OpencodeEventKind {
+        let event_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        let properties = value.get("properties");
+
+        match event_type {
+            "session.idle" => return OpencodeEventKind::Idle,
+            "session.error" => {
+                let msg = properties
+                    .and_then(|p| p.get("error"))
+                    .map(|e| e.to_string())
+                    .unwrap_or_else(|| "session error".to_string());
+                return OpencodeEventKind::Error(msg);
+            }
+            "message.part.updated" => {
+                let Some(part) = properties.and_then(|p| p.get("part")) else {
+                    return OpencodeEventKind::Other;
+                };
+                let part_type = part.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                match part_type {
+                    "text" => {
+                        // Prefer the incremental delta; fall back to nothing (full
+                        // text is re-sent each update — using delta avoids dup).
+                        if let Some(delta) = properties
+                            .and_then(|p| p.get("delta"))
+                            .and_then(|v| v.as_str())
+                        {
+                            return OpencodeEventKind::TextDelta(delta.to_string());
+                        }
+                        return OpencodeEventKind::Other;
+                    }
+                    "tool" => {
+                        let state = part.get("state");
+                        let status = state
+                            .and_then(|s| s.get("status"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        if status == "completed" {
+                            let output = state
+                                .and_then(|s| s.get("output"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            return OpencodeEventKind::ToolResult(output);
+                        }
+                        return OpencodeEventKind::Other;
+                    }
+                    _ => return OpencodeEventKind::Other,
+                }
+            }
+            _ => {}
+        }
+        OpencodeEventKind::Other
+    }
+
+    /// Pull `data:` payload lines out of one raw SSE event block.
+    fn sse_data_payloads(raw_event: &str) -> Vec<String> {
+        raw_event
+            .lines()
+            .filter_map(|line| line.strip_prefix("data:").map(|rest| rest.trim().to_string()))
+            .collect()
+    }
+
+    /// Extract chunkId values from a tool output JSON string (a SearchHit[],
+    /// a single SearchHit, or null).
+    fn extract_chunk_ids(output: &str) -> Vec<String> {
+        let trimmed = output.trim();
+        if trimmed.is_empty() {
+            return Vec::new();
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            return Vec::new();
+        };
+        let mut ids = Vec::new();
+        collect_chunk_ids(&value, &mut ids);
+        ids
+    }
+
+    fn collect_chunk_ids(value: &serde_json::Value, out: &mut Vec<String>) {
+        match value {
+            serde_json::Value::Object(map) => {
+                if let Some(id) = map.get("chunkId").and_then(|v| v.as_str()) {
+                    out.push(id.to_string());
+                }
+                for (_, v) in map {
+                    collect_chunk_ids(v, out);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    collect_chunk_ids(item, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Find namespaced chunk_ids the agent wrote into its answer as `[id]`.
+    fn chunk_ids_mentioned_in_answer(answer: &str) -> Vec<String> {
+        let mut ids = Vec::new();
+        let bytes = answer.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'[' {
+                if let Some(close) = answer[i + 1..].find(']') {
+                    let inner = &answer[i + 1..i + 1 + close];
+                    for candidate in inner.split([',', ';', '|', ' ']) {
+                        let candidate = candidate.trim();
+                        if crate::chunk_id::is_namespaced_chunk_id(candidate) {
+                            ids.push(candidate.to_string());
+                        }
+                    }
+                    i = i + 1 + close + 1;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+        ids
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn extract_chunk_ids_from_search_hit_array() {
+            let output = r#"[{"chunkId":"book::p1::c2","text":"x"},{"chunkId":"book::p1::c3"}]"#;
+            let ids = extract_chunk_ids(output);
+            assert_eq!(ids, vec!["book::p1::c2", "book::p1::c3"]);
+        }
+
+        #[test]
+        fn extract_chunk_ids_from_single_hit() {
+            let output = r#"{"chunkId":"book::p2::c1","pageIndex":1}"#;
+            assert_eq!(extract_chunk_ids(output), vec!["book::p2::c1"]);
+        }
+
+        #[test]
+        fn extract_chunk_ids_handles_null_and_garbage() {
+            assert!(extract_chunk_ids("null").is_empty());
+            assert!(extract_chunk_ids("not json").is_empty());
+            assert!(extract_chunk_ids("").is_empty());
+        }
+
+        #[test]
+        fn classify_text_delta_event() {
+            let value = serde_json::json!({
+                "type": "message.part.updated",
+                "properties": { "part": { "type": "text" }, "delta": "hello" }
+            });
+            match classify_event(&value, "s1") {
+                OpencodeEventKind::TextDelta(d) => assert_eq!(d, "hello"),
+                _ => panic!("expected text delta"),
+            }
+        }
+
+        #[test]
+        fn classify_completed_tool_event() {
+            let value = serde_json::json!({
+                "type": "message.part.updated",
+                "properties": { "part": {
+                    "type": "tool",
+                    "state": { "status": "completed", "output": "[{\"chunkId\":\"b::p::c\"}]" }
+                }}
+            });
+            match classify_event(&value, "s1") {
+                OpencodeEventKind::ToolResult(out) => {
+                    assert_eq!(extract_chunk_ids(&out), vec!["b::p::c"]);
+                }
+                _ => panic!("expected tool result"),
+            }
+        }
+
+        #[test]
+        fn classify_idle_and_error() {
+            assert!(matches!(
+                classify_event(&serde_json::json!({"type":"session.idle"}), "s1"),
+                OpencodeEventKind::Idle
+            ));
+            assert!(matches!(
+                classify_event(&serde_json::json!({"type":"session.error"}), "s1"),
+                OpencodeEventKind::Error(_)
+            ));
+        }
+
+        #[test]
+        fn sse_data_payloads_extracts_data_lines() {
+            let raw = "event: message\ndata: {\"a\":1}\ndata: {\"b\":2}";
+            assert_eq!(
+                sse_data_payloads(raw),
+                vec!["{\"a\":1}".to_string(), "{\"b\":2}".to_string()]
+            );
+        }
+
+        #[test]
+        fn extract_session_id_variants() {
+            assert_eq!(
+                extract_session_id(&serde_json::json!({"id":"abc"})).as_deref(),
+                Some("abc")
+            );
+            assert_eq!(
+                extract_session_id(&serde_json::json!({"session":{"id":"xyz"}})).as_deref(),
+                Some("xyz")
+            );
+        }
+    }
 }
 
 #[cfg(test)]

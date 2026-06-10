@@ -170,6 +170,35 @@ export const Tasks: Story = {
   },
 }
 
+export const TasksAnimatedCounts: Story = {
+  args: {
+    tab: "tasks",
+    runningTaskCount: 2,
+    tasks: [
+      ...tasks,
+      {
+        id: "task-evidence",
+        kind: "contradiction-check",
+        title: "核验观点的前文限制",
+        status: "running",
+        startedAt: "2026-06-07T12:08:00Z",
+        steps: [
+          {
+            id: "step-evidence-1",
+            label: "回查前文限定条件",
+            status: "running",
+            evidence: [
+              { chunkId: "b12345678-p2-c1-abcdef12", title: "第二页 · 风险", pageIndex: 1 },
+              { chunkId: "b12345678-p3-c1-abcdef12", title: "第三页 · 波动", pageIndex: 2 },
+            ],
+          },
+          { id: "step-evidence-2", label: "整理反例", status: "planning" },
+        ],
+      },
+    ],
+  },
+}
+
 export const TasksEmpty: Story = {
   args: {
     tab: "tasks",

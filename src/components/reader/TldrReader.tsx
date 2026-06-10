@@ -62,7 +62,7 @@ export function TldrReader({
           ) : hasText ? (
             <MarkdownContent
               content={text}
-              className="font-reading text-[17px] text-foreground [&_p]:my-3 [&_p]:leading-9 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0 [&_li]:leading-9"
+              className="font-ui text-[16px] text-foreground [&_p]:my-3 [&_p]:leading-8 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0 [&_li]:leading-8"
             />
           ) : error ? (
             <div className="flex items-start gap-2 rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm leading-6 text-danger-foreground">

@@ -67,6 +67,59 @@ describe("translateOpencodeEventToAgentTask", () => {
       status: "error",
     })
   })
+
+  it("handles the real message.part.updated text delta shape", () => {
+    const next = translateOpencodeEventToAgentTask(task(), {
+      type: "message.part.updated",
+      properties: {
+        sessionID: "session-1",
+        part: { type: "text", text: "正在合成回答" },
+        delta: "正在",
+      },
+    })
+
+    expect(next.status).toBe("running")
+    expect(next.steps.at(-1)?.status).toBe("running")
+  })
+
+  it("handles the real message.part.updated completed tool shape", () => {
+    const next = translateOpencodeEventToAgentTask(task(), {
+      type: "message.part.updated",
+      properties: {
+        sessionID: "session-1",
+        part: {
+          type: "tool",
+          tool: "book_search",
+          state: { status: "completed", output: "[]" },
+        },
+      },
+    })
+
+    expect(next.steps.at(-1)).toMatchObject({
+      label: "调用工具：book_search",
+      status: "done",
+    })
+  })
+
+  it("treats session.idle as terminal done", () => {
+    const next = translateOpencodeEventToAgentTask(task(), {
+      type: "session.idle",
+      properties: { sessionID: "session-1" },
+    })
+
+    expect(next.status).toBe("done")
+    expect(next.artifacts).toEqual([{ kind: "report" }])
+  })
+
+  it("ignores real-shape events for other sessions", () => {
+    const original = task()
+    const next = translateOpencodeEventToAgentTask(original, {
+      type: "message.part.updated",
+      properties: { sessionID: "other", part: { type: "text", text: "x" } },
+    })
+
+    expect(next).toBe(original)
+  })
 })
 
 function task(): AgentTask {

@@ -16,6 +16,7 @@ import {
 import { useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { AnimatedValue } from "@/components/ui/animated-value"
 import type { AgentTask, AgentTaskArtifactKind, AgentTaskKind, AgentTaskStep } from "@/core/agent-task"
 import { cn } from "@/lib/utils"
 
@@ -94,8 +95,15 @@ export function TasksPanel({ tasks, runningCount, disabled = false, onRunTask, o
               用来处理跨段、整章、整书的长任务；当前选文的即时追问留在「当前」区。
             </p>
           </div>
-          <Badge variant={runningCount > 0 ? "default" : "secondary"}>
-            {runningCount > 0 ? `运行中 ${runningCount}` : "空闲"}
+          <Badge variant={runningCount > 0 ? "default" : "secondary"} className="gap-1">
+            {runningCount > 0 ? (
+              <>
+                运行中
+                <AnimatedValue value={runningCount} variant="number" animation="snappy" />
+              </>
+            ) : (
+              "空闲"
+            )}
           </Badge>
         </div>
         <div className="grid gap-2">
@@ -141,7 +149,9 @@ export function TasksPanel({ tasks, runningCount, disabled = false, onRunTask, o
           <>
             <div className="flex items-center justify-between px-1 text-xs text-muted-foreground">
               <span>执行队列</span>
-              <span>{tasks.length} 个任务</span>
+              <span>
+                <AnimatedValue value={tasks.length} variant="number" animation="snappy" /> 个任务
+              </span>
             </div>
             {tasks.map((task) => (
               <TaskCard key={task.id} task={task} onStopTask={onStopTask} />
@@ -215,7 +225,7 @@ function TaskCard({ task, onStopTask }: { task: AgentTask; onStopTask: (taskId: 
             <span>{taskStatusLabel(task.status)}</span>
             {task.steps.length ? (
               <span>
-                {completedSteps}/{task.steps.length} 步
+                <AnimatedValue value={completedSteps} variant="number" animation="snappy" />/{task.steps.length} 步
               </span>
             ) : null}
           </div>
@@ -249,7 +259,12 @@ function TaskCard({ task, onStopTask }: { task: AgentTask; onStopTask: (taskId: 
             >
               <PresetIcon artifact={artifact.kind} />
               {artifactLabel(artifact.kind)}
-              {artifact.cardIds?.length ? ` · ${artifact.cardIds.length} 条线索` : ""}
+              {artifact.cardIds?.length ? (
+                <>
+                  {" · "}
+                  <AnimatedValue value={artifact.cardIds.length} variant="number" animation="snappy" /> 条线索
+                </>
+              ) : null}
             </span>
           ))}
         </div>
@@ -268,7 +283,7 @@ function TaskStepRow({ step }: { step: AgentTaskStep }) {
         </span>
         {step.evidence?.length ? (
           <span className="mt-1 block text-xs text-muted-foreground">
-            命中 {step.evidence.length} 条证据
+            命中 <AnimatedValue value={step.evidence.length} variant="number" animation="snappy" /> 条证据
           </span>
         ) : null}
       </span>

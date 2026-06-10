@@ -1,5 +1,6 @@
 import { Sparkles, WandSparkles } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { AnimatedValue } from "@/components/ui/animated-value"
 import type {
   AgentTraceStep,
   AnswerSource,
@@ -182,7 +183,7 @@ function WorkbenchTabButton({
       {label}
       {badge && badge > 0 ? (
         <span className="ml-0.5 inline-flex min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] leading-4 text-primary-foreground">
-          {badge}
+          <AnimatedValue value={badge} variant="number" animation="snappy" />
         </span>
       ) : null}
     </Button>

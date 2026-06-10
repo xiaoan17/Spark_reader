@@ -13,6 +13,9 @@ mod storage;
 mod translation;
 mod zotero;
 
+mod agent_host;
+mod book_tool_server;
+
 pub mod coordinates;
 
 #[cfg(test)]
@@ -21,6 +24,18 @@ pub(crate) static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(()
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            // Resolve the library db path once and hand it to the agent-host
+            // supervisor, which starts the book-tool server and (if enabled) the
+            // OpenCode sidecar.
+            use tauri::Manager as _;
+            let app_data_dir = app.handle().path().app_data_dir().ok();
+            match storage::default_db_path(app_data_dir) {
+                Ok(db_path) => agent_host::init(db_path),
+                Err(err) => eprintln!("failed to resolve db path for agent host: {err:#}"),
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::app_health,
             commands::build_knowledge_graph,
@@ -35,6 +50,7 @@ pub fn run() {
             commands::export_book_knowledge_json,
             commands::export_book_knowledge_markdown,
             commands::find_book_by_source_pdf,
+            commands::get_agent_host_url,
             commands::get_book_knowledge_map,
             commands::get_converted_book,
             commands::get_converted_book_manifest,
@@ -85,8 +101,13 @@ pub fn run() {
             commands::translation_status,
             commands::upsert_knowledge_card,
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to run tauri app");
+        .build(tauri::generate_context!())
+        .expect("failed to build tauri app")
+        .run(|_app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                agent_host::shutdown();
+            }
+        });
 }
 
 pub fn run_cli_if_requested() -> Option<i32> {
