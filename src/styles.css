@@ -4,18 +4,18 @@
 
 @layer base {
   :root {
-    --background: 42 32% 96%;
+    --background: 220 18% 96%;
     --foreground: 220 18% 12%;
-    --card: 40 33% 98%;
+    --card: 0 0% 100%;
     --card-foreground: 220 18% 12%;
-    --muted: 36 18% 89%;
+    --muted: 220 14% 91%;
     --muted-foreground: 218 9% 42%;
     --accent: 170 18% 88%;
     --accent-foreground: 178 26% 16%;
     --primary: 178 42% 28%;
     --primary-foreground: 0 0% 100%;
-    --border: 36 16% 82%;
-    --input: 36 16% 82%;
+    --border: 220 13% 84%;
+    --input: 220 13% 84%;
     --ring: 178 42% 28%;
     --radius: 0.5rem;
     /* 语义状态色（token 化，保证暗色模式生效，参见 BRAND §9） */
@@ -66,6 +66,273 @@
 }
 
 @layer components {
+  .reader-display-theme {
+    --reader-shell-bg: hsl(38 22% 91%);
+    --reader-surface-bg: hsl(42 38% 98%);
+    --reader-text: hsl(34 18% 13%);
+    --reader-muted: hsl(34 10% 42%);
+    --reader-border: hsl(34 16% 78%);
+    --reader-link: hsl(178 42% 28%);
+    --reader-quote-border: hsl(178 34% 38%);
+    --reader-code-bg: hsl(38 24% 92%);
+    --reader-body-font: "Songti SC", "STSong", "Noto Serif CJK SC", serif;
+    --reader-heading-font: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --reader-font-size: 16px;
+    --reader-line-height: 2;
+    --reader-page-width: 760px;
+    --reader-paragraph-margin: 1em 0;
+    --reader-text-align: start;
+    --reader-h1-size: 1.55em;
+    --reader-h2-size: 1.32em;
+    --reader-h3-size: 1.12em;
+    --reader-workspace-bg: hsl(38 22% 91%);
+    --reader-chrome-bg: hsl(42 34% 97%);
+    --reader-chrome-text: hsl(220 18% 13%);
+    --reader-chrome-muted: hsl(220 9% 42%);
+    --reader-panel-bg: hsl(42 30% 96%);
+    --reader-panel-text: hsl(220 18% 14%);
+    --reader-panel-muted: hsl(220 9% 48%);
+    --reader-panel-border: hsl(36 16% 82%);
+    --reader-panel-hover-bg: hsl(38 18% 88%);
+    --reader-panel-active-bg: hsl(170 18% 88%);
+    --reader-panel-active-text: hsl(178 42% 28%);
+    --reader-floating-bg: hsl(42 34% 98%);
+    --reader-floating-text: hsl(220 18% 13%);
+    --reader-floating-border: hsl(36 16% 80%);
+    background: var(--reader-shell-bg);
+    color: var(--reader-text);
+  }
+
+  .reader-workspace-theme {
+    background: var(--reader-workspace-bg);
+    color: var(--reader-panel-text);
+  }
+
+  .reader-chrome-bar {
+    background: var(--reader-chrome-bg);
+    color: var(--reader-chrome-text);
+    border-color: var(--reader-panel-border);
+  }
+
+  .reader-chrome-muted {
+    color: var(--reader-chrome-muted);
+  }
+
+  .reader-chrome-divider {
+    background: var(--reader-panel-border);
+  }
+
+  .reader-chrome-icon-button {
+    color: var(--reader-chrome-muted);
+  }
+
+  .reader-chrome-icon-button:hover {
+    background: var(--reader-panel-hover-bg);
+    color: var(--reader-chrome-text);
+  }
+
+  .reader-chrome-view-button {
+    color: var(--reader-chrome-muted);
+  }
+
+  .reader-chrome-view-button:hover {
+    background: var(--reader-panel-hover-bg);
+    color: var(--reader-chrome-text);
+  }
+
+  .reader-chrome-view-active {
+    background: var(--reader-panel-active-bg);
+    color: var(--reader-panel-active-text);
+  }
+
+  .reader-provider-dot {
+    background: color-mix(in srgb, var(--reader-chrome-muted) 48%, transparent);
+  }
+
+  .reader-provider-dot-active {
+    background: var(--reader-panel-active-text);
+  }
+
+  .reader-panel {
+    background: var(--reader-panel-bg);
+    color: var(--reader-panel-text);
+    border-color: var(--reader-panel-border);
+  }
+
+  .reader-panel-border {
+    border-color: var(--reader-panel-border);
+  }
+
+  .reader-panel-text {
+    color: var(--reader-panel-text);
+  }
+
+  .reader-panel-muted {
+    color: var(--reader-panel-muted);
+  }
+
+  .reader-panel-accent {
+    color: var(--reader-panel-active-text);
+  }
+
+  .reader-panel-accent-bg {
+    background: var(--reader-panel-active-bg);
+    color: var(--reader-panel-active-text);
+  }
+
+  .reader-panel-accent-border {
+    border-color: color-mix(in srgb, var(--reader-panel-active-text) 42%, transparent);
+  }
+
+  .reader-panel-card {
+    background: color-mix(in srgb, var(--reader-panel-bg) 92%, var(--reader-workspace-bg));
+    color: var(--reader-panel-text);
+    border-color: var(--reader-panel-border);
+  }
+
+  .reader-panel-subtle {
+    background: var(--reader-panel-hover-bg);
+    color: var(--reader-panel-muted);
+  }
+
+  .reader-panel-row:hover {
+    background: var(--reader-panel-hover-bg);
+    color: var(--reader-panel-text);
+  }
+
+  .reader-panel-row-active {
+    background: var(--reader-panel-active-bg);
+    color: var(--reader-panel-active-text);
+  }
+
+  .reader-panel-input {
+    background: color-mix(in srgb, var(--reader-panel-bg) 90%, var(--reader-workspace-bg));
+    border-color: var(--reader-panel-border);
+    color: var(--reader-panel-text);
+  }
+
+  .reader-panel-input::placeholder {
+    color: var(--reader-panel-muted);
+    opacity: 0.72;
+  }
+
+  .reader-panel-drop-active {
+    background: color-mix(in srgb, var(--reader-panel-active-bg) 56%, var(--reader-panel-bg));
+    border-color: var(--reader-panel-active-text);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--reader-panel-active-text) 18%, transparent);
+  }
+
+  .reader-floating-surface {
+    background: var(--reader-floating-bg);
+    color: var(--reader-floating-text);
+    border-color: var(--reader-floating-border);
+  }
+
+  .reader-floating-item {
+    color: var(--reader-floating-text);
+  }
+
+  .reader-floating-item:hover {
+    background: var(--reader-panel-hover-bg);
+  }
+
+  .reader-floating-item-active {
+    background: var(--reader-panel-active-bg);
+  }
+
+  .reader-floating-muted {
+    color: var(--reader-panel-muted);
+  }
+
+  .reader-workbench-tab {
+    border-color: transparent;
+    color: var(--reader-panel-muted);
+  }
+
+  .reader-workbench-tab:hover {
+    color: var(--reader-panel-text);
+  }
+
+  .reader-workbench-tab-active {
+    border-color: var(--reader-panel-active-text);
+    color: var(--reader-panel-text);
+  }
+
+  .reader-workbench-badge {
+    background: var(--reader-panel-active-bg);
+    color: var(--reader-panel-active-text);
+  }
+
+  .reader-markdown {
+    color: var(--reader-text);
+    font-family: var(--reader-body-font);
+    font-size: var(--reader-font-size);
+    line-height: var(--reader-line-height);
+    text-align: var(--reader-text-align);
+  }
+
+  .reader-body-text {
+    color: var(--reader-text);
+    font-family: var(--reader-body-font);
+    font-size: var(--reader-font-size);
+    line-height: var(--reader-line-height);
+  }
+
+  .reader-body-muted {
+    color: var(--reader-muted);
+    font-family: var(--reader-body-font);
+    font-size: var(--reader-font-size);
+    line-height: var(--reader-line-height);
+  }
+
+  .reader-page-label {
+    color: var(--reader-muted);
+    opacity: 0.72;
+  }
+
+  .reader-markdown p,
+  .reader-markdown blockquote,
+  .reader-markdown ul,
+  .reader-markdown ol {
+    margin: var(--reader-paragraph-margin);
+    line-height: var(--reader-line-height);
+  }
+
+  .reader-markdown :is(h1, h2, h3, h4) {
+    color: var(--reader-text);
+    font-family: var(--reader-heading-font);
+    line-height: 1.35;
+  }
+
+  .reader-markdown h1 {
+    font-size: var(--reader-h1-size);
+  }
+
+  .reader-markdown h2 {
+    font-size: var(--reader-h2-size);
+  }
+
+  .reader-markdown h3 {
+    font-size: var(--reader-h3-size);
+  }
+
+  .reader-markdown a {
+    color: var(--reader-link);
+  }
+
+  .reader-markdown blockquote {
+    border-color: var(--reader-quote-border);
+    color: var(--reader-muted);
+  }
+
+  .reader-markdown :is(code, pre) {
+    background: var(--reader-code-bg);
+  }
+
+  .reader-markdown :is(table, th, td) {
+    border-color: var(--reader-border);
+  }
+
   .markdown-content .katex {
     font-size: 1.02em;
   }
@@ -128,6 +395,18 @@
     z-index: 0;
     cursor: default;
     user-select: none;
+  }
+
+  @media (min-width: 768px) {
+    .translation-source-cell {
+      grid-column: 1;
+      grid-row: var(--translation-grid-row);
+    }
+
+    .translation-target-cell {
+      grid-column: 2;
+      grid-row: var(--translation-grid-row);
+    }
   }
 }
 

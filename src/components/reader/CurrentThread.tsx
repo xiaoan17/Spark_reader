@@ -132,20 +132,20 @@ function SparkEmptyState({
 }) {
   const recent = summarizeInterpretationSessions(history).slice(0, 8)
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-y-auto px-1 pb-2">
+    <div className="flex h-full min-h-0 flex-col overflow-y-auto pb-2">
       <div className="flex min-h-[44vh] flex-col items-center justify-center px-5 text-center">
-        <span className="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-primary">
+        <span className="reader-panel-accent-bg mb-4 inline-flex h-10 w-10 items-center justify-center rounded-full">
           <Sparkles className="h-5 w-5" />
         </span>
-        <p className="text-sm font-medium text-foreground">框选一段原文试试</p>
-        <p className="mt-2 max-w-64 text-sm leading-6 text-muted-foreground">
+        <p className="reader-panel-text text-sm font-medium">框选一段原文试试</p>
+        <p className="reader-panel-muted mt-2 max-w-64 text-sm leading-6">
           Spark 会先在全书检索证据，再给出带可点击引用、可追问的解读。
         </p>
-        <p className="mt-3 max-w-64 text-xs leading-5 text-muted-foreground">
+        <p className="reader-panel-muted mt-3 max-w-64 text-xs leading-5">
           深度 / 轻量在框选浮条上选择。
         </p>
         {runtimeHint ? (
-          <p className="mt-4 max-w-64 rounded-md bg-muted px-3 py-2 text-xs leading-5 text-muted-foreground">
+          <p className="reader-panel-accent-border reader-panel-muted mt-4 max-w-64 border-l-2 pl-3 text-left text-xs leading-5">
             {runtimeHint}
           </p>
         ) : null}
@@ -154,23 +154,23 @@ function SparkEmptyState({
         </Button>
       </div>
       {recent.length > 0 ? (
-        <section className="space-y-2 border-t pt-3">
-          <div className="flex items-center gap-2 px-1 text-xs font-medium text-muted-foreground">
+        <section className="reader-panel-border space-y-0 border-t">
+          <div className="reader-panel-muted flex items-center gap-2 px-3 py-3 text-xs font-medium">
             <Clock className="h-3.5 w-3.5" />
             最近 Spark
           </div>
-          <div className="space-y-2">
+          <div>
             {recent.map((item) => (
               <button
                 key={item.sessionId || item.id}
                 type="button"
-                className="w-full rounded-md border bg-background px-3 py-2 text-left text-sm transition-[background-color,box-shadow,transform] duration-interactive ease-reader hover:bg-muted hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-ring active:scale-[0.99]"
+                className="reader-panel-border reader-panel-row w-full border-t px-3 py-2.5 text-left text-sm transition-[background-color,transform] duration-interactive ease-reader focus:outline-none focus:ring-2 focus:ring-ring active:scale-[0.99]"
                 onClick={() => onOpenHistoryItem(item)}
               >
-                <span className="line-clamp-2 font-reading leading-6 text-foreground">
+                <span className="reader-panel-text line-clamp-2 font-reading leading-6">
                   {item.selectionText}
                 </span>
-                <span className="mt-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                <span className="reader-panel-muted mt-2 flex items-center justify-between gap-2 text-xs">
                   <span>{formatHistoryTime(item.lastCreatedAt)}</span>
                   {item.followUpCount > 0 ? (
                     <span className="inline-flex items-center gap-1">

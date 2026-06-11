@@ -1,4 +1,3 @@
-import { BookOpen } from "lucide-react"
 import { useEffect, useRef } from "react"
 import { cn } from "@/lib/utils"
 import type { ReaderOutlineEntry } from "./reader-outline"
@@ -40,16 +39,13 @@ export function ReaderOutlinePanel({
 
   return (
     <div
-      className={cn("flex min-h-0 flex-col rounded-md border bg-background p-2 text-xs", className)}
+      className={cn("flex min-h-0 flex-col text-xs", className)}
       data-reader-outline-panel
     >
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5 font-medium text-muted-foreground">
-          <BookOpen className="h-3.5 w-3.5" />
-          目录
-        </div>
+      <div className="reader-panel reader-panel-border reader-panel-muted sticky top-0 z-10 border-b px-3.5 py-3 text-[11px] font-semibold">
+        目录
       </div>
-      <div className="min-h-0 flex-1 space-y-0.5 overflow-auto pr-1">
+      <div className="min-h-0 flex-1 overflow-auto py-1">
         {entries.map((entry) => {
           const isActivePage = entry.id === activeEntry?.id
           return (
@@ -63,17 +59,29 @@ export function ReaderOutlinePanel({
                 }
               }}
               className={cn(
-                "block w-full rounded py-1.5 pr-2 text-left",
-                isActivePage ? "bg-primary/10" : "hover:bg-muted",
+                "reader-panel-row flex w-full items-start gap-2 py-[7px] pr-3.5 text-left text-[13px] leading-snug transition-colors duration-100",
+                isActivePage
+                  ? "reader-panel-row-active font-medium"
+                  : "reader-panel-muted",
               )}
-              style={{ paddingLeft: `${8 + (Math.min(entry.level, 5) - 1) * 12}px` }}
+              style={{ paddingLeft: `${14 + (Math.min(entry.level, 5) - 1) * 12}px` }}
               onClick={() => onSelect(entry)}
             >
-              <span className="block min-w-0 truncate font-medium">
+              <span className="min-w-0 flex-1 truncate">
                 {entry.sectionNumber ? (
-                  <span className="mr-1.5 text-muted-foreground">{entry.sectionNumber}</span>
+                  <span className={cn("mr-1.5", isActivePage ? "opacity-75" : "reader-panel-muted")}>
+                    {entry.sectionNumber}
+                  </span>
                 ) : null}
                 {entry.title}
+              </span>
+              <span
+                className={cn(
+                  "shrink-0 tabular-nums",
+                  isActivePage ? "opacity-75" : "reader-panel-muted opacity-75",
+                )}
+              >
+                {entry.pageIndex + 1}
               </span>
             </button>
           )

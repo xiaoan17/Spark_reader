@@ -74,12 +74,15 @@ describe("ConvertedTextReader", () => {
     const middlePage = readablePageClassName(1, 4)
     const lastPage = readablePageClassName(3, 4)
 
-    expect(firstPage).toContain("pt-10")
-    expect(firstPage).not.toContain("pb-12")
+    expect(firstPage).toContain("py-8")
+    expect(firstPage).not.toContain("bg-card")
+    expect(firstPage).not.toContain("shadow")
+    expect(firstPage).not.toContain("pt-10")
+    expect(firstPage).not.toContain("pb-16")
     expect(middlePage).not.toContain("pt-10")
-    expect(middlePage).not.toContain("pb-12")
+    expect(middlePage).not.toContain("pb-16")
     expect(lastPage).not.toContain("pt-10")
-    expect(lastPage).toContain("pb-12")
+    expect(lastPage).toContain("pb-16")
   })
 
   it("does not treat the first rendered virtual item as the document first page", () => {

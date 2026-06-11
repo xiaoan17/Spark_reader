@@ -52,9 +52,11 @@ export function readerLayoutColumns(readerView: ReaderView, sidebarOpen: boolean
   }
   const showAside = baseReaderViewConfig(readerView).showsInterpretationAside
   if (sidebarOpen) {
-    return showAside ? "240px minmax(640px,1fr) 360px" : "240px minmax(760px,1fr) 0px"
+    return showAside
+      ? "clamp(160px,20vw,200px) minmax(0,1fr) clamp(240px,28vw,300px)"
+      : "clamp(160px,20vw,200px) minmax(0,1fr) 0px"
   }
-  return showAside ? "0px minmax(640px,1fr) 360px" : "0px minmax(760px,1fr) 0px"
+  return showAside ? "0px minmax(0,1fr) clamp(240px,28vw,300px)" : "0px minmax(0,1fr) 0px"
 }
 
 function disabledForReaderView(
@@ -84,7 +86,7 @@ function baseReaderViewConfig(view: ReaderView): Omit<ReaderViewConfig, "disable
         title: "打开转换稿主视图",
         showsOutline: true,
         showsInterpretationAside: true,
-        contentClassName: "min-h-0 overflow-hidden bg-[hsl(38_22%_91%)] animate-fade-in",
+        contentClassName: "min-h-0 overflow-hidden bg-[var(--reader-shell-bg,hsl(38_22%_91%))] animate-fade-in",
       }
     case "tldr":
       return {
@@ -94,7 +96,7 @@ function baseReaderViewConfig(view: ReaderView): Omit<ReaderViewConfig, "disable
         title: "打开 TLDR 总览",
         showsOutline: false,
         showsInterpretationAside: true,
-        contentClassName: "min-h-0 overflow-hidden bg-[hsl(38_22%_91%)] animate-fade-in",
+        contentClassName: "min-h-0 overflow-hidden bg-[var(--reader-shell-bg,hsl(38_22%_91%))] animate-fade-in",
       }
     case "translation":
       return {
@@ -104,7 +106,7 @@ function baseReaderViewConfig(view: ReaderView): Omit<ReaderViewConfig, "disable
         title: "打开左英右中对照翻译视图",
         showsOutline: true,
         showsInterpretationAside: true,
-        contentClassName: "min-h-0 overflow-hidden bg-[hsl(38_22%_91%)] animate-fade-in",
+        contentClassName: "min-h-0 overflow-hidden bg-[var(--reader-shell-bg,hsl(38_22%_91%))] animate-fade-in",
       }
     case "knowledge":
       return {
@@ -114,7 +116,7 @@ function baseReaderViewConfig(view: ReaderView): Omit<ReaderViewConfig, "disable
         title: "打开完整知识体系视图",
         showsOutline: false,
         showsInterpretationAside: false,
-        contentClassName: "min-h-0 overflow-hidden bg-[hsl(38_22%_91%)] animate-fade-in",
+        contentClassName: "min-h-0 overflow-hidden bg-[var(--reader-shell-bg,hsl(38_22%_91%))] animate-fade-in",
       }
     case "pdf":
       return {

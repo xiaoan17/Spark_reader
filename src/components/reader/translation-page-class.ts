@@ -10,7 +10,7 @@ export function translationPageClassName(pageIndex: number, totalPages: number) 
 
 export function translationSourceSurfaceClassName(pageIndex: number, totalPages: number) {
   return cn(
-    "relative w-full max-w-3xl bg-card px-10 py-3",
+    "relative grid w-full grid-cols-1 bg-[var(--reader-surface-bg)] md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]",
     pageIndex === 0 && "pt-10",
     pageIndex === Math.max(0, totalPages - 1) && "pb-12",
   )

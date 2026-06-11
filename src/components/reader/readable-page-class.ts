@@ -1,10 +1,9 @@
 import { cn } from "@/lib/utils"
 
-export function readablePageClassName(pageIndex: number, totalPages: number, verticalPadding = "py-3") {
+export function readablePageClassName(pageIndex: number, totalPages: number, verticalPadding = "py-8") {
   return cn(
-    "absolute left-0 right-0 px-10",
+    "absolute left-0 right-0 px-4 sm:px-6 md:px-8",
     verticalPadding,
-    pageIndex === 0 && "pt-10",
-    pageIndex === Math.max(0, totalPages - 1) && "pb-12",
+    pageIndex === Math.max(0, totalPages - 1) && "pb-16",
   )
 }

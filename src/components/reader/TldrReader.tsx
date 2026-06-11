@@ -2,6 +2,7 @@ import { AlertCircle, Loader2, RefreshCw, Sparkles } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { MarkdownContent } from "@/components/markdown/MarkdownContent"
+import type { ReaderDisplayThemeStyle } from "./reader-display-theme"
 
 export type TldrReaderProps = {
   text?: string
@@ -11,6 +12,7 @@ export type TldrReaderProps = {
   error?: string
   desktopAvailable?: boolean
   llmReady?: boolean
+  displayThemeStyle?: ReaderDisplayThemeStyle
   onGenerate?: () => void
   onRegenerate?: () => void
 }
@@ -23,6 +25,7 @@ export function TldrReader({
   error = "",
   desktopAvailable = true,
   llmReady = true,
+  displayThemeStyle,
   onGenerate,
   onRegenerate,
 }: TldrReaderProps) {
@@ -32,8 +35,11 @@ export function TldrReader({
   const action = hasText ? onRegenerate : onGenerate
 
   return (
-    <div className="h-full overflow-auto bg-[hsl(38_22%_91%)] px-8 py-8">
-      <section className="mx-auto max-w-3xl rounded-md bg-card px-8 py-7 shadow-sm">
+    <div
+      className="reader-display-theme h-full overflow-auto px-8 py-8"
+      style={displayThemeStyle}
+    >
+      <section className="mx-auto max-w-[var(--reader-page-width)] rounded-md border border-[var(--reader-border)] bg-[var(--reader-surface-bg)] px-8 py-7 shadow-sm">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
@@ -62,7 +68,7 @@ export function TldrReader({
           ) : hasText ? (
             <MarkdownContent
               content={text}
-              className="font-ui text-[16px] text-foreground [&_p]:my-3 [&_p]:leading-8 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0 [&_li]:leading-8"
+              className="reader-markdown [&_p:first-child]:mt-0 [&_p:last-child]:mb-0"
             />
           ) : error ? (
             <div className="flex items-start gap-2 rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm leading-6 text-danger-foreground">

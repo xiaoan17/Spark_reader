@@ -95,6 +95,14 @@ import {
   readerLayoutColumns,
   readerViewConfigs,
 } from "./reader-view-config"
+import {
+  READER_DISPLAY_THEME_STORAGE_KEY,
+  normalizeReaderDisplayThemeId,
+  readerDisplayThemeById,
+  readerDisplayThemeOptions,
+  readerDisplayThemeStyle,
+  type ReaderDisplayThemeId,
+} from "./reader-display-theme"
 
 const STORED_BOOK_INITIAL_PAGE_WINDOW = 48
 const ONBOARDING_SEEN_STORAGE_KEY = "focused-reading.onboarding.seen.v1"
@@ -103,6 +111,16 @@ const llmProviderLabels: Record<LlmProviderKind, string> = {
   deep_seek: "DeepSeek",
   open_ai: "OpenAI",
   anthropic: "Anthropic",
+}
+
+function readInitialReaderDisplayThemeId(): ReaderDisplayThemeId {
+  try {
+    return normalizeReaderDisplayThemeId(
+      window.localStorage.getItem(READER_DISPLAY_THEME_STORAGE_KEY),
+    )
+  } catch {
+    return "spark-paper"
+  }
 }
 
 type ReaderShellProps = {
@@ -328,6 +346,8 @@ export function ReaderShell({
     zoteroOpen,
   } = panels
   const [readerView, setReaderView] = useState<ReaderView>("text")
+  const [readerDisplayThemeId, setReaderDisplayThemeId] =
+    useState<ReaderDisplayThemeId>(readInitialReaderDisplayThemeId)
   const [outlineTarget, setOutlineTarget] = useState<ConvertedTextOutlineTarget | null>(null)
   const [llmSettings, setLlmSettings] = useState<LlmSettings | null>(null)
   const [llmSettingsError, setLlmSettingsError] = useState("")
@@ -337,6 +357,10 @@ export function ReaderShell({
   const sparkSelectionRects = hasCurrentThreadSelection
     ? (currentThreadSelectionRects ?? [])
     : selectionRects
+  const readerDisplayStyle = useMemo(
+    () => readerDisplayThemeStyle(readerDisplayThemeId),
+    [readerDisplayThemeId],
+  )
 
   useEffect(() => {
     if (phase !== "empty" || totalPages > 0 || parsedPages.length > 0) {
@@ -458,6 +482,7 @@ export function ReaderShell({
     zoteroQuery,
     zoteroResults,
     zoteroStatus,
+    zoteroImportingItemKey,
     zoteroMessage,
     setZoteroQuery,
     handleFile,
@@ -729,13 +754,22 @@ export function ReaderShell({
     return () => window.removeEventListener("keydown", handleKeyDown)
   }, [selectionText, onClearSelection, onDeepInterpret, onPlainExplain, onWorkbenchTabChange, onCurrentThreadLightweightChange])
 
-  function toggleTheme() {
-    document.documentElement.classList.toggle("dark")
-    pushNotice("已切换主题")
+  function handleReaderDisplayThemeChange(themeId: ReaderDisplayThemeId) {
+    const normalizedThemeId = normalizeReaderDisplayThemeId(themeId)
+    setReaderDisplayThemeId(normalizedThemeId)
+    try {
+      window.localStorage.setItem(READER_DISPLAY_THEME_STORAGE_KEY, normalizedThemeId)
+    } catch {
+      // Display preference persistence is best-effort; the in-memory switch already applied.
+    }
+    pushNotice(`阅读外观：${readerDisplayThemeById(normalizedThemeId).label}`)
   }
 
   return (
-    <div className="flex h-screen min-h-0 flex-col overflow-hidden bg-background text-foreground">
+    <div
+      className="reader-display-theme reader-workspace-theme flex h-screen min-h-0 flex-col overflow-hidden"
+      style={readerDisplayStyle}
+    >
       <ReaderTopBar
         bookTitle={bookTitle}
         totalPages={totalPages}
@@ -749,6 +783,8 @@ export function ReaderShell({
         libraryOpen={libraryOpen}
         pdfLoadStatus={pdfLoadStatus}
         readerViewItems={readerViewItems}
+        readerDisplayThemeId={readerDisplayThemeId}
+        readerDisplayThemeItems={readerDisplayThemeOptions}
         fileInputRef={inputRef}
         onToggleSidebar={() => togglePanel("sidebarOpen")}
         onFileSelected={(file) => void handleFile(file)}
@@ -773,7 +809,7 @@ export function ReaderShell({
           pushNotice(parsedPages.length > 0 ? "搜索面板已切换" : "导入书籍并生成转换稿后才能搜索")
         }}
         onOpenGuide={() => setPanelOpen("onboardingOpen", true)}
-        onToggleTheme={toggleTheme}
+        onReaderDisplayThemeChange={handleReaderDisplayThemeChange}
         onToggleSettings={() => togglePanel("settingsOpen")}
       />
       <LlmSettingsPanel
@@ -829,6 +865,7 @@ export function ReaderShell({
         query={zoteroQuery}
         results={zoteroResults}
         status={zoteroStatus}
+        importingItemKey={zoteroImportingItemKey}
         message={zoteroMessage}
         onQueryChange={setZoteroQuery}
         onSearch={() => void handleZoteroSearch()}
@@ -837,7 +874,7 @@ export function ReaderShell({
       />
 
       {notice ? (
-        <div className="pointer-events-none fixed left-1/2 top-16 z-50 max-w-md -translate-x-1/2 rounded-md border bg-popover px-3 py-2 text-sm text-popover-foreground shadow-lg">
+        <div className="reader-floating-surface pointer-events-none fixed left-1/2 top-16 z-50 max-w-md -translate-x-1/2 rounded-md border px-3 py-2 text-sm shadow-lg">
           {notice}
         </div>
       ) : null}
@@ -892,6 +929,7 @@ export function ReaderShell({
               selectionRects={selectionRects}
               selectionAnchor={selectionAnchor}
               quality={textQuality}
+              displayThemeStyle={readerDisplayStyle}
               onExplain={runDeepInterpretation}
               onPlainExplain={runPlainInterpretation}
               onComment={startComment}
@@ -911,6 +949,7 @@ export function ReaderShell({
               error={tldrError}
               desktopAvailable={isTauriRuntime()}
               llmReady={tldrLlmReady}
+              displayThemeStyle={readerDisplayStyle}
               onGenerate={onGenerateTldr}
               onRegenerate={onRegenerateTldr}
             />
@@ -928,6 +967,7 @@ export function ReaderShell({
                 const kind = item.kind ?? "interpretation"
                 return kind === "interpretation" || kind === "spark" || kind === "note"
               })}
+              displayThemeStyle={readerDisplayStyle}
               onCurrentPageChange={onVisiblePageChange}
               onExplain={runDeepInterpretation}
               onPlainExplain={runPlainInterpretation}
@@ -1015,16 +1055,16 @@ export function ReaderShell({
           ) : (
             <div
               data-testid="empty-import-dropzone"
-              className={`mx-auto flex min-h-[70vh] max-w-2xl flex-col items-center justify-center rounded-lg border border-dashed p-10 text-center transition-colors duration-200 ${
-                isImportDragOver ? "border-primary bg-card/90 ring-2 ring-primary/20" : "bg-card/70"
+              className={`mx-auto flex min-h-[70vh] max-w-xl flex-col items-center justify-center px-8 py-10 text-center transition-colors duration-200 ${
+                isImportDragOver ? "reader-panel-drop-active rounded-md border border-dashed" : ""
               }`}
               onDragOver={handleImportDragOver}
               onDragLeave={handleImportDragLeave}
               onDrop={handleImportDrop}
             >
-              <Upload className="mb-4 h-10 w-10 text-muted-foreground" />
-              <h1 className="text-xl font-semibold">先体验框选精读，或导入自己的 PDF</h1>
-              <p className="mt-3 max-w-md text-sm leading-6 text-muted-foreground">
+              <Upload className="reader-panel-muted mb-4 h-10 w-10" />
+              <h1 className="reader-panel-text text-xl font-semibold">先体验框选精读，或导入自己的 PDF</h1>
+              <p className="reader-panel-muted mt-3 max-w-md text-sm leading-6">
                 示例书无需配置 key，会直接打开一段已转换文本；也可以选择 PDF，或将 PDF 拖到此处。
               </p>
               <div className="mt-5 flex flex-wrap justify-center gap-2">
@@ -1097,10 +1137,11 @@ export function ReaderShell({
       </main>
 
       {readerView === "pdf" ? (
-        <footer className="flex h-12 shrink-0 items-center justify-end gap-2 border-t bg-card px-4 text-sm text-muted-foreground">
+        <footer className="reader-chrome-bar reader-panel-muted flex h-12 shrink-0 items-center justify-end gap-2 border-t px-4 text-sm">
           <Button
             size="icon"
             variant="ghost"
+            className="reader-chrome-icon-button h-8 w-8"
             aria-label="缩小"
             disabled={!canRead}
             onClick={() => onZoomChange(Math.max(0.6, Number((zoom - 0.1).toFixed(2))))}
@@ -1111,6 +1152,7 @@ export function ReaderShell({
           <Button
             size="icon"
             variant="ghost"
+            className="reader-chrome-icon-button h-8 w-8"
             aria-label="放大"
             disabled={!canRead}
             onClick={() => onZoomChange(Math.min(2.2, Number((zoom + 0.1).toFixed(2))))}
@@ -1164,16 +1206,16 @@ function PdfUnavailablePanel({
   onBackToText,
 }: PdfUnavailablePanelProps) {
   return (
-    <div className="mx-auto flex min-h-[70vh] max-w-xl flex-col items-center justify-center rounded-lg border bg-card/80 p-8 text-center shadow-sm">
-      <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-muted text-muted-foreground">
+    <div className="reader-panel-card mx-auto flex min-h-[70vh] max-w-xl flex-col items-center justify-center rounded-lg border p-8 text-center shadow-sm">
+      <div className="reader-panel-subtle mb-4 flex h-12 w-12 items-center justify-center rounded-full">
         {status === "loading" ? (
           <Loader2 className="h-5 w-5 animate-spin" />
         ) : (
           <BookOpen className="h-5 w-5" />
         )}
       </div>
-      <h2 className="text-lg font-semibold">{title}</h2>
-      <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">{message}</p>
+      <h2 className="reader-panel-text text-lg font-semibold">{title}</h2>
+      <p className="reader-panel-muted mt-2 max-w-md text-sm leading-6">{message}</p>
       <div className="mt-5 flex flex-wrap justify-center gap-2">
         {canRetry ? (
           <Button size="sm" onClick={onRetry}>

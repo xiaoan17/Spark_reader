@@ -270,6 +270,7 @@ function deferred<T>() {
 
 beforeEach(() => {
   document.body.replaceChildren()
+  document.documentElement.classList.remove("dark")
   window.localStorage.clear()
   Element.prototype.scrollIntoView = vi.fn()
   HTMLElement.prototype.scrollTo = vi.fn(function scrollToMock(this: HTMLElement, options?: ScrollToOptions | number) {
@@ -947,6 +948,76 @@ describe("ReaderShell current text selection rendering", () => {
 })
 
 describe("ReaderShell view navigation", () => {
+  it("offers Typora-inspired reader display themes and persists the choice", async () => {
+    const { ReaderShell } = await import("./ReaderShell")
+    const { READER_DISPLAY_THEME_STORAGE_KEY } = await import("./reader-display-theme")
+
+    const { container, unmount } = await renderClient(
+      <ReaderShell
+        phase="reading"
+        bookId="book-theme"
+        libraryStatus="indexed"
+        libraryMessage="已打开转换稿"
+        bookTitle="阅读外观测试"
+        currentPage={1}
+        totalPages={1}
+        selectionText=""
+        selectionRects={[]}
+        selectionAnchor={null}
+        evidence={[]}
+        agentTrace={[]}
+        interpretation=""
+        followUps={[]}
+        highlights={[]}
+        interpretationHistory={[]}
+        parsedPages={[
+          {
+            pageIndex: 0,
+            text: "Typora themes should only affect reader prose.",
+            markdown: "## Heading\n\nTypora themes should only affect reader prose.",
+          },
+        ]}
+        parsedChunks={[]}
+        parserEngine="mineru-layout"
+        coordinateMode="normalized-page-rects"
+        activeChunkId=""
+        zoom={1}
+        onBookLoaded={vi.fn()}
+        onLibraryStatus={vi.fn()}
+        onParsedDocument={vi.fn()}
+        onPageChange={vi.fn()}
+        onVisiblePageChange={vi.fn()}
+        onZoomChange={vi.fn()}
+        onSelection={vi.fn()}
+        onActiveChunk={vi.fn()}
+        onChunkFocus={vi.fn()}
+        onPhaseChange={vi.fn()}
+        onDeepInterpret={vi.fn()}
+        onPlainExplain={vi.fn()}
+        onQuestionSubmit={vi.fn()}
+        onSaveHighlight={vi.fn(async () => false)}
+        onOpenHighlight={vi.fn()}
+        onDeleteHighlight={vi.fn()}
+        onOpenInterpretation={vi.fn()}
+        onDeleteInterpretation={vi.fn()}
+        onRegenerate={vi.fn()}
+        onStop={vi.fn()}
+      />,
+    )
+
+    await clickAsync(container.querySelector("[data-testid='reader-display-theme-button']")!)
+    expect(textContent(container.querySelector("[data-testid='reader-display-theme-menu']"))).toContain("Newsprint")
+    await clickAsync(elementsByText(container, "button", "Pixyll")[0])
+
+    const reader = container.querySelector<HTMLElement>(".reader-workspace-theme")!
+    expect(window.localStorage.getItem(READER_DISPLAY_THEME_STORAGE_KEY)).toBe("typora-pixyll")
+    expect(reader.style.getPropertyValue("--reader-body-font")).toContain("Merriweather")
+    expect(reader.style.getPropertyValue("--reader-panel-bg")).toBe("#ffffff")
+    expect(container.querySelector(".reader-chrome-bar")).toBeTruthy()
+    expect(container.querySelector(".reader-panel")).toBeTruthy()
+    unmount()
+  })
+
   it("orders reader view tabs as converted text, TLDR, translation, then PDF", async () => {
     const { ReaderShell } = await import("./ReaderShell")
     vi.mocked(isTauriRuntime).mockReturnValue(true)
@@ -1351,6 +1422,25 @@ describe("ReaderShell view navigation", () => {
 })
 
 describe("ReaderShell MinerU progress labels", () => {
+  it("uses product copy for MinerU polling instead of exposing poll counts", async () => {
+    const { mineruProgressMessage } = await import("./mineru-progress")
+
+    const message = mineruProgressMessage({
+      stage: "polling",
+      message: "MinerU 解析状态：running（第 18 次轮询）",
+      batchId: "batch-1",
+      pollCount: 18,
+      state: "running",
+      batchIndex: 2,
+      batchTotal: 4,
+      pageRange: "201-400",
+    })
+
+    expect(message).toBe("解析中：MinerU 正在解析中 · 第 2/4 批 · 页码 201-400")
+    expect(message).not.toContain("轮询")
+    expect(message).not.toContain("running")
+  })
+
   it("formats long PDF batch metadata when MinerU emits structured progress", async () => {
     const { mineruProgressBatchLabel } = await import("./mineru-progress")
 
@@ -2001,6 +2091,60 @@ describe("ReaderShell runtime affordances", () => {
     expect(textContent(container)).toContain("保存全部")
     await clickAsync(settingsButton)
     expect(container.querySelector('[data-testid="settings-panel"]')).toBeNull()
+    unmount()
+  })
+
+  it("uses reader display themes instead of a separate night-mode toggle", async () => {
+    const { ReaderShell } = await import("./ReaderShell")
+    const { container, unmount } = await renderClient(
+      <ReaderShell
+        phase="empty"
+        bookId=""
+        libraryStatus="idle"
+        libraryMessage=""
+        bookTitle="未导入 PDF"
+        currentPage={1}
+        totalPages={0}
+        selectionText=""
+        selectionRects={[]}
+        selectionAnchor={null}
+        evidence={[]}
+        agentTrace={[]}
+        interpretation=""
+        followUps={[]}
+        highlights={[]}
+        interpretationHistory={[]}
+        parsedPages={[]}
+        parsedChunks={[]}
+        parserEngine=""
+        coordinateMode=""
+        activeChunkId=""
+        zoom={1}
+        onBookLoaded={vi.fn()}
+        onLibraryStatus={vi.fn()}
+        onParsedDocument={vi.fn()}
+        onPageChange={vi.fn()}
+        onVisiblePageChange={vi.fn()}
+        onZoomChange={vi.fn()}
+        onSelection={vi.fn()}
+        onActiveChunk={vi.fn()}
+        onChunkFocus={vi.fn()}
+        onPhaseChange={vi.fn()}
+        onDeepInterpret={vi.fn()}
+        onPlainExplain={vi.fn()}
+        onQuestionSubmit={vi.fn()}
+        onSaveHighlight={vi.fn(async () => false)}
+        onOpenHighlight={vi.fn()}
+        onDeleteHighlight={vi.fn()}
+        onOpenInterpretation={vi.fn()}
+        onDeleteInterpretation={vi.fn()}
+        onRegenerate={vi.fn()}
+        onStop={vi.fn()}
+      />,
+    )
+
+    expect(buttonByLabel(container, "阅读外观")).toBeTruthy()
+    expect(container.querySelector('[aria-label="切换夜间模式"]')).toBeNull()
     unmount()
   })
 
@@ -4038,6 +4182,16 @@ describe("ReaderShell desktop import", () => {
         attachmentTitle: "PDF",
         hasPdf: true,
       },
+      {
+        itemKey: "SECOND2",
+        title: "Trajectory reconstruction baseline",
+        creators: ["Chen"],
+        year: "2024",
+        itemType: "journalArticle",
+        attachmentKey: "SECONDPDF",
+        attachmentTitle: "PDF",
+        hasPdf: true,
+      },
     ])
     const importResult = {
       bookId: "book-zotero",
@@ -4162,10 +4316,13 @@ describe("ReaderShell desktop import", () => {
     await vi.waitFor(() => expect(searchZoteroItems).toHaveBeenCalledWith("RiskNet", 8))
     expect(textContent(container)).toContain("RiskNet: interaction-aware risk forecasting")
 
-    const resultCards = elementsByText(container, "article", "RiskNet: interaction-aware risk forecasting")
-    await clickAsync(buttonByText(resultCards[0], "导入"))
-    await vi.waitFor(() => expect(importZoteroItem).toHaveBeenCalledWith("TCLLD6HC", null))
+    const riskNetCards = elementsByText(container, "article", "RiskNet: interaction-aware risk forecasting")
+    const baselineCards = elementsByText(container, "article", "Trajectory reconstruction baseline")
+    await clickAsync(buttonByText(baselineCards[0], "导入"))
+    await vi.waitFor(() => expect(importZoteroItem).toHaveBeenCalledWith("SECOND2", null))
     expect(listenMineruProgress).toHaveBeenCalled()
+    expect(riskNetCards[0].querySelector(".animate-spin")).toBeNull()
+    expect(baselineCards[0].querySelector(".animate-spin")).not.toBeNull()
     await act(async () => {
       progressHandler?.({
         stage: "polling",
@@ -4180,7 +4337,8 @@ describe("ReaderShell desktop import", () => {
       await Promise.resolve()
     })
     expect(textContent(container)).toContain("解析中")
-    expect(textContent(container)).toContain("第 3 次轮询")
+    expect(textContent(container)).toContain("MinerU 正在解析中")
+    expect(textContent(container)).not.toContain("第 3 次轮询")
     await act(async () => {
       zoteroImport.resolve(importResult)
       await zoteroImport.promise

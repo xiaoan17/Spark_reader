@@ -196,7 +196,7 @@ describe("TranslationReader", () => {
     vi.unstubAllGlobals()
   })
 
-  it("renders translated blocks in an anchored rail instead of source-flow grid rows", async () => {
+  it("keeps translation in a fixed split pane even when the reader is wide", async () => {
     const clientWidthDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth")
     Object.defineProperty(HTMLElement.prototype, "clientWidth", {
       configurable: true,
@@ -254,11 +254,22 @@ describe("TranslationReader", () => {
       const translatedBlock = client.container.querySelector<HTMLElement>(
         "[data-translation-block-pane='translation'][data-translation-block-id='B002']",
       )!
+      const sourceBlock = client.container.querySelector<HTMLElement>(
+        "[data-translation-block-pane='source'][data-translation-block-id='B002']",
+      )!
       const scroller = client.container.querySelector<HTMLElement>("[data-translation-scroller]")!
-      expect(scroller.dataset.translationLayout).toBe("rail")
+      const translatedPane = client.container.querySelector<HTMLElement>(
+        "[data-translation-pane='translation']",
+      )!
+      expect(scroller.dataset.translationLayout).toBe("split")
       expect(translatedBlock).toBeTruthy()
-      expect(translatedBlock.style.gridRow).toBe("")
-      expect(translatedBlock.className).toContain("absolute")
+      expect(translatedBlock.className).not.toContain("absolute")
+      expect(translatedBlock.className).not.toContain("bg-muted")
+      expect(translatedBlock.style.getPropertyValue("--translation-grid-row")).toBe(
+        sourceBlock.style.getPropertyValue("--translation-grid-row"),
+      )
+      expect(translatedBlock.closest("[data-translation-pane='source']")).toBeNull()
+      expect(translatedBlock.closest("[data-translation-pane='translation']")).toBe(translatedPane)
       client.unmount()
     } finally {
       if (clientWidthDescriptor) {
@@ -320,9 +331,20 @@ describe("TranslationReader", () => {
     const translatedBlock = client.container.querySelector<HTMLElement>(
       "[data-translation-block-pane='translation'][data-translation-block-id='B002']",
     )!
-    expect(scroller.dataset.translationLayout).toBe("inline")
+    const sourceBlock = client.container.querySelector<HTMLElement>(
+      "[data-translation-block-pane='source'][data-translation-block-id='B002']",
+    )!
+    const translatedPane = client.container.querySelector<HTMLElement>(
+      "[data-translation-pane='translation']",
+    )!
+    expect(scroller.dataset.translationLayout).toBe("split")
     expect(translatedBlock.className).not.toContain("absolute")
-    expect(translatedBlock.closest("[data-translation-pane='source']")).toBeTruthy()
+    expect(translatedBlock.className).not.toContain("bg-muted")
+    expect(translatedBlock.style.getPropertyValue("--translation-grid-row")).toBe(
+      sourceBlock.style.getPropertyValue("--translation-grid-row"),
+    )
+    expect(translatedBlock.closest("[data-translation-pane='source']")).toBeNull()
+    expect(translatedBlock.closest("[data-translation-pane='translation']")).toBe(translatedPane)
     client.unmount()
   })
 })

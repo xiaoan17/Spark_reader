@@ -49,6 +49,7 @@ import {
   type ProgrammaticPageScroll,
 } from "./reader-scroll"
 import { cleanPdfLineBreaks } from "./reader-text"
+import type { ReaderDisplayThemeStyle } from "./reader-display-theme"
 
 const STORED_BOOK_PAGE_WINDOW_PREFETCH = 16
 
@@ -66,6 +67,7 @@ export type ConvertedTextReaderProps = {
   selectionRects: NormalizedPageRect[]
   selectionAnchor: TextSelectionAnchor | null
   quality?: TextQuality | null
+  displayThemeStyle?: ReaderDisplayThemeStyle
   onExplain: () => void
   onPlainExplain: () => void
   onComment?: () => void
@@ -102,6 +104,7 @@ export function ConvertedTextReader({
   selectionRects,
   selectionAnchor,
   quality,
+  displayThemeStyle,
   onExplain,
   onPlainExplain,
   onComment,
@@ -482,12 +485,13 @@ export function ConvertedTextReader({
   return (
     <div
       ref={scrollerRef}
-      className="h-full overflow-y-auto px-8 py-8"
+      className="reader-display-theme h-full overflow-y-auto px-6 py-8 sm:px-8 lg:px-10"
+      style={displayThemeStyle}
       onPointerDown={handleBackgroundPointerDown}
       onPointerUp={handleBackgroundPointerUp}
     >
       <div
-        className="relative mx-auto max-w-3xl bg-card"
+        className="relative mx-auto max-w-[var(--reader-page-width)]"
         style={{ height: virtualMetrics.totalHeight }}
       >
         {renderedPages.map((virtualPage) => {
@@ -524,6 +528,7 @@ export function ConvertedTextReader({
               onPointerUp={(event) => handlePointerUp(event, page)}
               style={{ top: virtualPage.offsetTop }}
             >
+              <ReadablePageLabel pageNumber={page.pageIndex + 1} totalPages={virtualPageCount} />
               <div
                 ref={(element) => {
                   if (element) {
@@ -534,7 +539,7 @@ export function ConvertedTextReader({
                 }}
                 data-spark-text-root
                 data-source-text={page.text}
-                className="relative font-ui text-[15px] leading-8 text-foreground"
+                className="reader-body-text relative"
               >
                 <SparkMarginDots
                   pageIndex={page.pageIndex}
@@ -638,15 +643,27 @@ const ReadablePagePlaceholder = forwardRef<
       className={readablePageClassName(pageIndex, totalPages, "py-4")}
       style={{ top, minHeight }}
     >
-      <div className="space-y-3">
-        <div className="h-4 w-11/12 rounded bg-muted reader-shimmer" />
-        <div className="h-4 w-9/12 rounded bg-muted reader-shimmer" />
-        <div className="h-4 w-10/12 rounded bg-muted reader-shimmer" />
-        <div className="h-4 w-7/12 rounded bg-muted reader-shimmer" />
+      <ReadablePageLabel pageNumber={pageIndex + 1} totalPages={totalPages} />
+      <div className="space-y-3 pt-2">
+        <div className="h-4 w-11/12 rounded bg-[var(--reader-code-bg)] reader-shimmer" />
+        <div className="h-4 w-9/12 rounded bg-[var(--reader-code-bg)] reader-shimmer" />
+        <div className="h-4 w-10/12 rounded bg-[var(--reader-code-bg)] reader-shimmer" />
+        <div className="h-4 w-7/12 rounded bg-[var(--reader-code-bg)] reader-shimmer" />
       </div>
     </article>
   )
 })
+
+function ReadablePageLabel({ pageNumber, totalPages }: { pageNumber: number; totalPages: number }) {
+  return (
+    <div
+      className="reader-page-label mb-5 flex justify-end font-ui text-[11px] font-medium"
+      aria-label={`第 ${pageNumber} 页，共 ${totalPages} 页`}
+    >
+      <span className="shrink-0 tabular-nums">第 {pageNumber} / {totalPages} 页</span>
+    </div>
+  )
+}
 
 function renderReadableTextWithHighlights(text: string, highlights: SavedHighlight[]) {
   const cleaned = cleanPdfLineBreaks(text)
@@ -737,7 +754,7 @@ function ReadablePageContent({
             : null
         }
         highlights={highlights}
-        className="max-w-none text-[15px] leading-8 [&_.markdown-highlight-source]:hidden"
+        className="reader-markdown max-w-none [&_.markdown-highlight-source]:hidden"
       />
     )
   }

@@ -14,12 +14,13 @@ describe("TLDR markdown rendering", () => {
     expect(html).not.toContain("**核心结论**")
   })
 
-  it("uses the UI font for mixed Chinese and English TLDR prose", () => {
+  it("uses the reader display theme for mixed Chinese and English TLDR prose", () => {
     const html = renderToStaticMarkup(
       <TldrReader text="这份 Computer 报告比较 Search 和 AI agents 的成本。" />,
     )
 
-    expect(html).toContain("font-ui text-[16px]")
+    expect(html).toContain("reader-markdown")
+    expect(html).toContain("reader-display-theme")
     expect(html).not.toContain("font-reading")
   })
 

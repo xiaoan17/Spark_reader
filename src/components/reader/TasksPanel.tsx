@@ -84,18 +84,21 @@ export function TasksPanel({ tasks, runningCount, disabled = false, onRunTask, o
 
   return (
     <div className="flex min-h-full flex-col gap-3">
-      <div className="space-y-3 rounded-md border bg-background p-3">
+      <div className="reader-panel-card space-y-3 rounded-md border p-3">
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-sm font-semibold">
-              <WandSparkles className="h-4 w-4 text-primary" />
+              <WandSparkles className="reader-panel-accent h-4 w-4" />
               工作规划
             </div>
-            <p className="mt-1 text-xs leading-5 text-muted-foreground">
+            <p className="reader-panel-muted mt-1 text-xs leading-5">
               用来处理跨段、整章、整书的长任务；当前选文的即时追问留在「当前」区。
             </p>
           </div>
-          <Badge variant={runningCount > 0 ? "default" : "secondary"} className="gap-1">
+          <Badge
+            variant={runningCount > 0 ? "default" : "secondary"}
+            className={cn("gap-1", runningCount > 0 && "reader-workbench-badge")}
+          >
             {runningCount > 0 ? (
               <>
                 运行中
@@ -118,17 +121,17 @@ export function TasksPanel({ tasks, runningCount, disabled = false, onRunTask, o
         </div>
       </div>
 
-      <div className="space-y-2 rounded-md border bg-background p-3">
+      <div className="reader-panel-card space-y-2 rounded-md border p-3">
         <div className="flex items-center gap-2 text-sm font-medium">
-          <SearchCheck className="h-4 w-4 text-muted-foreground" />
+          <SearchCheck className="reader-panel-muted h-4 w-4" />
           自定义任务
         </div>
-        <p className="text-xs leading-5 text-muted-foreground">
+        <p className="reader-panel-muted text-xs leading-5">
           适合一次性问题，比如回查某个观点、整理某组高亮、比较两个章节。
         </p>
         <div className="flex gap-2">
           <textarea
-            className="min-h-20 flex-1 resize-none rounded-md border bg-background px-3 py-2 text-sm leading-6 outline-none focus:ring-2 focus:ring-ring"
+            className="reader-panel-input min-h-20 flex-1 resize-none rounded-md border px-3 py-2 text-sm leading-6 outline-none focus:ring-2 focus:ring-ring"
             placeholder="检查这个观点在前文是否被限定…"
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
@@ -147,7 +150,7 @@ export function TasksPanel({ tasks, runningCount, disabled = false, onRunTask, o
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto">
         {tasks.length > 0 ? (
           <>
-            <div className="flex items-center justify-between px-1 text-xs text-muted-foreground">
+            <div className="reader-panel-muted flex items-center justify-between px-1 text-xs">
               <span>执行队列</span>
               <span>
                 <AnimatedValue value={tasks.length} variant="number" animation="snappy" /> 个任务
@@ -158,9 +161,9 @@ export function TasksPanel({ tasks, runningCount, disabled = false, onRunTask, o
             ))}
           </>
         ) : (
-          <div className="flex min-h-52 flex-col items-center justify-center rounded-md border bg-background p-6 text-center text-sm text-muted-foreground">
+          <div className="reader-panel-card reader-panel-muted flex min-h-52 flex-col items-center justify-center rounded-md border p-6 text-center text-sm">
             <TimerReset className="mb-3 h-8 w-8" />
-            <div className="font-medium text-foreground">暂无后台任务</div>
+            <div className="reader-panel-text font-medium">暂无后台任务</div>
             <p className="mt-2 max-w-56 leading-6">
               运行任务后，这里会显示计划、进度、证据和沉淀到知识体系的产物。
             </p>
@@ -181,35 +184,34 @@ function PresetTaskButton({
   onRunTask: (kind: AgentTaskKind, prompt?: string) => void
 }) {
   return (
-    <Button
-      size="sm"
-      variant="ghost"
-      className="h-auto justify-start rounded-md border bg-card/60 px-3 py-2 text-left hover:bg-accent"
+    <button
+      type="button"
+      className="reader-panel-card reader-panel-row h-auto w-full justify-start rounded-md border px-3 py-2 text-left transition-colors duration-100 disabled:cursor-not-allowed disabled:opacity-50"
       disabled={disabled}
       onClick={() => onRunTask(preset.kind)}
       title={preset.description}
     >
       <span className="flex w-full items-start gap-2">
-        <span className="mt-0.5 rounded-md bg-muted p-1.5 text-muted-foreground">
+        <span className="reader-panel-subtle mt-0.5 rounded-md p-1.5">
           <PresetIcon artifact={preset.artifact} />
         </span>
         <span className="min-w-0 flex-1">
           <span className="flex items-center justify-between gap-2">
             <span className="font-medium">{preset.label}</span>
-            <span className="inline-flex shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground">
+            <span className="reader-panel-border reader-panel-muted inline-flex shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-normal">
               {preset.scope}
             </span>
           </span>
-          <span className="mt-1 block text-xs font-normal leading-5 text-muted-foreground">
+          <span className="reader-panel-muted mt-1 block text-xs font-normal leading-5">
             {preset.description}
           </span>
-          <span className="mt-1 inline-flex items-center gap-1 text-[11px] font-normal text-muted-foreground">
+          <span className="reader-panel-muted mt-1 inline-flex items-center gap-1 text-[11px] font-normal">
             <FileCheck2 className="h-3 w-3" />
             {preset.output}
           </span>
         </span>
       </span>
-    </Button>
+    </button>
   )
 }
 
@@ -217,11 +219,11 @@ function TaskCard({ task, onStopTask }: { task: AgentTask; onStopTask: (taskId: 
   const running = task.status === "queued" || task.status === "running"
   const completedSteps = task.steps.filter((step) => step.status === "done").length
   return (
-    <article className="rounded-md border bg-background p-3 shadow-sm">
+    <article className="reader-panel-card rounded-md border p-3 shadow-sm">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="truncate text-sm font-semibold">{task.title}</div>
-          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+          <div className="reader-panel-muted mt-1 flex flex-wrap items-center gap-1.5 text-xs">
             <span>{taskStatusLabel(task.status)}</span>
             {task.steps.length ? (
               <span>
@@ -231,14 +233,21 @@ function TaskCard({ task, onStopTask }: { task: AgentTask; onStopTask: (taskId: 
           </div>
         </div>
         {running ? (
-          <Button size="icon" variant="ghost" aria-label="停止任务" title="停止任务" onClick={() => onStopTask(task.id)}>
+          <Button
+            size="icon"
+            variant="ghost"
+            className="reader-chrome-icon-button h-8 w-8"
+            aria-label="停止任务"
+            title="停止任务"
+            onClick={() => onStopTask(task.id)}
+          >
             <Square className="h-4 w-4" />
           </Button>
         ) : (
           <TaskStatusIcon status={task.status} />
         )}
       </div>
-      <div className="mt-3 space-y-2 border-l pl-3">
+      <div className="reader-panel-border mt-3 space-y-2 border-l pl-3">
         {task.steps.map((step) => (
           <TaskStepRow key={step.id} step={step} />
         ))}
@@ -250,8 +259,8 @@ function TaskCard({ task, onStopTask }: { task: AgentTask; onStopTask: (taskId: 
         </div>
       ) : null}
       {task.artifacts?.length ? (
-        <div className="mt-3 rounded-md border bg-success/10 px-3 py-2 text-xs leading-5 text-muted-foreground">
-          <span className="font-medium text-foreground/80">已沉淀</span>
+        <div className="reader-panel-card mt-3 rounded-md border px-3 py-2 text-xs leading-5">
+          <span className="font-medium">已沉淀</span>
           {task.artifacts.map((artifact) => (
             <span
               key={`${artifact.kind}-${artifact.cardIds?.join("-")}`}
@@ -278,11 +287,11 @@ function TaskStepRow({ step }: { step: AgentTaskStep }) {
     <div className="flex items-start gap-2 text-sm">
       <TaskStepIcon status={step.status} />
       <span className="min-w-0 flex-1">
-        <span className={cn(step.status === "done" ? "text-muted-foreground" : "text-foreground")}>
+        <span className={cn(step.status === "done" ? "reader-panel-muted" : "reader-panel-text")}>
           {step.label}
         </span>
         {step.evidence?.length ? (
-          <span className="mt-1 block text-xs text-muted-foreground">
+          <span className="reader-panel-muted mt-1 block text-xs">
             命中 <AnimatedValue value={step.evidence.length} variant="number" animation="snappy" /> 条证据
           </span>
         ) : null}
@@ -298,7 +307,7 @@ function TaskStatusIcon({ status }: { status: AgentTask["status"] }) {
   if (status === "error" || status === "stopped") {
     return <AlertCircle className="mt-1 h-4 w-4 shrink-0 text-warning" />
   }
-  return <Loader2 className="mt-1 h-4 w-4 shrink-0 animate-spin text-primary" />
+  return <Loader2 className="reader-panel-accent mt-1 h-4 w-4 shrink-0 animate-spin" />
 }
 
 function PresetIcon({ artifact }: { artifact: AgentTaskArtifactKind }) {
@@ -317,12 +326,12 @@ function TaskStepIcon({ status }: { status: AgentTaskStep["status"] }) {
     return <CheckCircle2 className="h-4 w-4 shrink-0 text-success" />
   }
   if (status === "running") {
-    return <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" />
+    return <Loader2 className="reader-panel-accent h-4 w-4 shrink-0 animate-spin" />
   }
   if (status === "error") {
     return <AlertCircle className="h-4 w-4 shrink-0 text-warning" />
   }
-  return <Circle className="h-4 w-4 shrink-0 text-muted-foreground" />
+  return <Circle className="reader-panel-muted h-4 w-4 shrink-0" />
 }
 
 function taskStatusLabel(status: AgentTask["status"]) {

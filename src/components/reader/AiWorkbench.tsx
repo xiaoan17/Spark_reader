@@ -1,6 +1,7 @@
 import { Sparkles, WandSparkles } from "lucide-react"
-import { Button } from "@/components/ui/button"
+import type React from "react"
 import { AnimatedValue } from "@/components/ui/animated-value"
+import { cn } from "@/lib/utils"
 import type {
   AgentTraceStep,
   AnswerSource,
@@ -91,23 +92,22 @@ export function AiWorkbench({
   onOpenSparkItem = () => undefined,
 }: AiWorkbenchProps) {
   return (
-    <aside className="flex h-full min-h-0 animate-fade-in flex-col overflow-hidden border-l bg-card/65 p-2 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none">
-      <div className="-mx-2 -mt-2 mb-2 shrink-0 border-b bg-card/95 px-2 py-2 backdrop-blur">
-        <div className="grid grid-cols-2 rounded-md border bg-background p-0.5">
-          <WorkbenchTabButton
-            active={tab === "spark"}
-            icon={<Sparkles className="h-4 w-4" />}
-            label="Spark"
-            onClick={() => onTabChange("spark")}
-          />
-          <WorkbenchTabButton
-            active={tab === "tasks"}
-            icon={<WandSparkles className="h-4 w-4" />}
-            label="任务"
-            badge={runningTaskCount}
-            onClick={() => onTabChange("tasks")}
-          />
-        </div>
+    <aside className="reader-panel flex h-full min-h-0 animate-fade-in flex-col overflow-hidden border-l transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none">
+      {/* Tab bar：底线模式，无 box 嵌套 */}
+      <div className="reader-panel-border -mb-px flex h-10 shrink-0 items-end gap-0 border-b px-3">
+        <WorkbenchTabButton
+          active={tab === "spark"}
+          icon={<Sparkles className="h-3.5 w-3.5" />}
+          label="Spark"
+          onClick={() => onTabChange("spark")}
+        />
+        <WorkbenchTabButton
+          active={tab === "tasks"}
+          icon={<WandSparkles className="h-3.5 w-3.5" />}
+          label="任务"
+          badge={runningTaskCount}
+          onClick={() => onTabChange("tasks")}
+        />
       </div>
 
       <div className="min-h-0 flex-1 overflow-hidden">
@@ -143,7 +143,7 @@ export function AiWorkbench({
             onOpenHistoryItem={onOpenSparkItem}
           />
         ) : (
-          <div className="h-full min-h-0 overflow-y-auto pr-1">
+          <div className="h-full min-h-0 overflow-y-auto px-3 py-3">
             <TasksPanel
               tasks={tasks}
               runningCount={runningTaskCount}
@@ -172,20 +172,22 @@ function WorkbenchTabButton({
   onClick: () => void
 }) {
   return (
-    <Button
-      size="sm"
-      variant={active ? "secondary" : "ghost"}
-      className="h-8 gap-1.5"
+    <button
+      type="button"
+      className={cn(
+        "reader-workbench-tab flex h-10 items-center gap-1.5 border-b-2 px-2.5 text-sm transition-colors duration-100",
+        active && "reader-workbench-tab-active font-medium",
+      )}
       aria-pressed={active}
       onClick={onClick}
     >
       {icon}
       {label}
       {badge && badge > 0 ? (
-        <span className="ml-0.5 inline-flex min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] leading-4 text-primary-foreground">
+        <span className="reader-workbench-badge ml-0.5 inline-flex min-w-4 items-center justify-center rounded-full px-1 text-[10px] leading-4">
           <AnimatedValue value={badge} variant="number" animation="snappy" />
         </span>
       ) : null}
-    </Button>
+    </button>
   )
 }
