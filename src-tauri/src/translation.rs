@@ -448,8 +448,9 @@ mod translate_opencode {
         wait_until_idle(&client, host_url, &session_id).await?;
 
         // Read the agent's output file.
-        let translated = std::fs::read_to_string(&output_path)
-            .with_context(|| format!("translator produced no output at {}", output_path.display()))?;
+        let translated = std::fs::read_to_string(&output_path).with_context(|| {
+            format!("translator produced no output at {}", output_path.display())
+        })?;
 
         // Best-effort cleanup of the one-shot sandbox.
         let _ = std::fs::remove_dir_all(&workspace);
@@ -547,8 +548,7 @@ App-owned preset for block-aligned reader translation. Do not run first-time set
             if started.elapsed() > PAGE_TIMEOUT {
                 return Err(anyhow!("translator page timeout"));
             }
-            let next =
-                tokio::time::timeout(std::time::Duration::from_secs(5), stream.next()).await;
+            let next = tokio::time::timeout(std::time::Duration::from_secs(5), stream.next()).await;
             let chunk = match next {
                 Ok(Some(Ok(chunk))) => chunk,
                 Ok(Some(Err(err))) => return Err(anyhow!("event stream error: {err}")),
@@ -1133,8 +1133,8 @@ mod tests {
         let mut manifest = storage::get_converted_book_manifest(&db_path, &saved.book_id)
             .expect("manifest should load");
         manifest.source_pdf_fingerprint = "pdf-fingerprint".to_string();
-        let fingerprint = translation_source_fingerprint(&db_path, &manifest)
-            .expect("fingerprint should build");
+        let fingerprint =
+            translation_source_fingerprint(&db_path, &manifest).expect("fingerprint should build");
         // Protocol version prefix + engine tag fold into the key so old caches
         // and cross-engine caches are naturally invalidated.
         assert!(

@@ -41,7 +41,7 @@ shasum -a 256 ~/Downloads/Spark_x.x.x_aarch64.dmg
 
 首次启动后，在应用内「设置」面板填入你自己的 API Key：
 
-- **MinerU Token**（必填，用于 PDF 解析）— https://mineru.net/apiManage/docs
+- **MinerU Token**（必填，用于 PDF 解析）— https://mineru.net/apiManage/token
 - **LLM Key**（必填，默认 DeepSeek）— https://platform.deepseek.com/api_keys
 - **Embedding Key**（可选，可关闭）— https://cloud.siliconflow.cn/account/ak
 

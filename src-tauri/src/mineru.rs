@@ -72,6 +72,14 @@ pub struct MinerUImportJob {
     pub page_range: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MinerUConnectionTestResponse {
+    pub base_url: String,
+    pub ok: bool,
+    pub checked: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MinerUProgressEvent {
@@ -255,6 +263,13 @@ pub async fn submit_local_pdf_with_progress(
 
 pub async fn fetch_batch_result(batch_id: &str) -> Result<Vec<MinerUResultItem>, MinerUError> {
     let config = config::mineru_config()?;
+    fetch_batch_result_with_config(&config, batch_id).await
+}
+
+async fn fetch_batch_result_with_config(
+    config: &config::MinerUConfig,
+    batch_id: &str,
+) -> Result<Vec<MinerUResultItem>, MinerUError> {
     let client = mineru_http_client(MINERU_REQUEST_TIMEOUT)?;
     let response = client
         .get(format!(
@@ -288,6 +303,59 @@ pub async fn fetch_batch_result(batch_id: &str) -> Result<Vec<MinerUResultItem>,
             err_msg: item.err_msg,
         })
         .collect())
+}
+
+pub async fn test_connection_with_settings(
+    request: config::SaveMinerUSettingsRequest,
+) -> Result<MinerUConnectionTestResponse, MinerUError> {
+    let config = config::mineru_config_from_request(&request)?;
+    let probe_batch_id = "codex-connectivity-probe-not-a-real-batch";
+    match fetch_batch_result_with_config(&config, probe_batch_id).await {
+        Ok(_) => Ok(MinerUConnectionTestResponse {
+            base_url: config.base_url,
+            ok: true,
+            checked: "extract-results/batch".to_string(),
+        }),
+        Err(MinerUError::Api { code, message }) if is_batch_probe_auth_success(code, &message) => {
+            Ok(MinerUConnectionTestResponse {
+                base_url: config.base_url,
+                ok: true,
+                checked: "extract-results/batch".to_string(),
+            })
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn is_batch_probe_auth_success(code: i64, message: &str) -> bool {
+    if code == 0 {
+        return true;
+    }
+    let lower = message.to_lowercase();
+    let mentions_missing_batch = (lower.contains("batch")
+        || lower.contains("batch_id")
+        || lower.contains("task")
+        || lower.contains("任务")
+        || lower.contains("批次"))
+        && (lower.contains("not found")
+            || lower.contains("not exist")
+            || lower.contains("not available")
+            || lower.contains("不存在")
+            || lower.contains("未找到"));
+    mentions_missing_batch
+        && !is_mineru_auth_error(code, message)
+        && !lower.contains("<html")
+        && !lower.contains("<!doctype")
+}
+
+fn is_mineru_auth_error(code: i64, message: &str) -> bool {
+    let lower = message.to_lowercase();
+    matches!(code, 401 | 403)
+        || lower.contains("a0202")
+        || lower.contains("a0211")
+        || lower.contains("token")
+        || lower.contains("unauthorized")
+        || lower.contains("forbidden")
 }
 
 pub async fn parse_pdf_to_output_dir_with_progress(
@@ -812,6 +880,21 @@ mod tests {
         assert_eq!(options.model_version, "vlm");
         assert!(options.enable_formula);
         assert!(options.enable_table);
+    }
+
+    #[test]
+    fn treats_missing_probe_batch_as_authenticated_connection() {
+        assert!(is_batch_probe_auth_success(404, "batch not found"));
+        assert!(is_batch_probe_auth_success(-1, "任务不存在"));
+        assert!(is_batch_probe_auth_success(0, ""));
+        assert!(!is_batch_probe_auth_success(404, "<html>not found</html>"));
+    }
+
+    #[test]
+    fn rejects_token_errors_for_connection_probe() {
+        assert!(!is_batch_probe_auth_success(401, "unauthorized"));
+        assert!(!is_batch_probe_auth_success(-1, "A0202 Token 错误"));
+        assert!(!is_batch_probe_auth_success(-1, "A0211 Token 过期"));
     }
 
     #[test]

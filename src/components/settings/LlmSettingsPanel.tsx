@@ -7,7 +7,7 @@ import {
   Settings2,
   XCircle,
 } from "lucide-react"
-import { useEffect, useState, type ReactNode } from "react"
+import { useEffect, useState, type MouseEvent, type ReactNode } from "react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import {
@@ -15,12 +15,14 @@ import {
   getLlmSettings,
   getMineruSettings,
   isTauriRuntime,
+  openExternalUrl,
   productSelfCheck,
   saveEmbeddingSettings,
   saveLlmSettings,
   saveMineruSettings,
   testEmbeddingConnection,
   testLlmConnectionWithSettings,
+  testMineruConnectionWithSettings,
   normalizeCommandError,
   type LlmSettings,
   type LlmProviderKind,
@@ -114,7 +116,7 @@ const defaultMineruSettings = {
   baseUrl: "https://mineru.net",
 }
 
-const mineruTokenLink = "https://mineru.net/apiManage/docs"
+const mineruTokenLink = "https://mineru.net/apiManage/token"
 const siliconFlowKeyLink = "https://cloud.siliconflow.cn/account/ak"
 
 const browserModeSaveMessage = "保存设置请使用桌面版。"
@@ -149,7 +151,7 @@ export function LlmSettingsPanel({
   const [mineruBaseUrl, setMineruBaseUrl] = useState(defaultMineruSettings.baseUrl)
   const [mineruApiToken, setMineruApiToken] = useState("")
   const [mineruApiTokenConfigured, setMineruApiTokenConfigured] = useState(false)
-  const [mineruStatus, setMineruStatus] = useState<"idle" | "saving" | "ok" | "error">("idle")
+  const [mineruStatus, setMineruStatus] = useState<"idle" | "saving" | "testing" | "ok" | "error">("idle")
   const [mineruMessage, setMineruMessage] = useState("")
   const [selfCheckStatus, setSelfCheckStatus] = useState<"idle" | "running" | "ok" | "error">("idle")
   const [selfCheckMessage, setSelfCheckMessage] = useState("")
@@ -332,6 +334,30 @@ export function LlmSettingsPanel({
     }
   }
 
+  async function handleTestMineru() {
+    if (!isTauriRuntime()) {
+      setMineruMessage(browserModeTestMessage)
+      return
+    }
+    setMineruStatus("testing")
+    setMineruMessage("")
+    try {
+      const result = await testMineruConnectionWithSettings({
+        baseUrl: mineruBaseUrl.trim() || defaultMineruSettings.baseUrl,
+        apiToken: mineruApiToken.trim() || undefined,
+      })
+      setMineruStatus(result.ok ? "ok" : "error")
+      setMineruMessage(
+        result.ok
+          ? "MinerU 连通正常，只读测试不消耗解析配额"
+          : "MinerU 连通失败",
+      )
+    } catch (error) {
+      setMineruStatus("error")
+      setMineruMessage(settingsErrorMessage(error))
+    }
+  }
+
   async function handleTest() {
     if (!isTauriRuntime()) {
       setMessage(browserModeTestMessage)
@@ -421,7 +447,7 @@ export function LlmSettingsPanel({
 
   const busy = status === "loading" || status === "saving" || status === "testing"
   const embeddingBusy = embeddingStatus === "saving" || embeddingStatus === "testing"
-  const mineruBusy = mineruStatus === "saving"
+  const mineruBusy = mineruStatus === "saving" || mineruStatus === "testing"
   const selfCheckBusy = selfCheckStatus === "running"
   const saveAllBusy = busy || embeddingBusy || mineruBusy || selfCheckBusy
   const canSaveAll =
@@ -520,7 +546,10 @@ export function LlmSettingsPanel({
             />
           </label>
           <div className="flex justify-end">
-            <ExternalHelpLink href={providerKeyLinks[provider].href}>
+            <ExternalHelpLink
+              href={providerKeyLinks[provider].href}
+              onError={(error) => setMessage(settingsErrorMessage(error))}
+            >
               {providerKeyLinks[provider].label}
             </ExternalHelpLink>
           </div>
@@ -557,15 +586,25 @@ export function LlmSettingsPanel({
             <div>
               <div className="text-sm font-semibold">MinerU 云端解析</div>
             </div>
-            <Button
-              size="sm"
-              className="shrink-0"
-              disabled={mineruBusy || !mineruBaseUrl.trim()}
-              onClick={() => void handleSaveMineru()}
-            >
-              {mineruStatus === "saving" ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}
-              保存 MinerU
-            </Button>
+            <div className="flex shrink-0 gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={mineruBusy || !mineruBaseUrl.trim()}
+                onClick={() => void handleTestMineru()}
+              >
+                {mineruStatus === "testing" ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}
+                测试
+              </Button>
+              <Button
+                size="sm"
+                disabled={mineruBusy || !mineruBaseUrl.trim()}
+                onClick={() => void handleSaveMineru()}
+              >
+                {mineruStatus === "saving" ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}
+                保存 MinerU
+              </Button>
+            </div>
           </div>
           <label className="block space-y-1.5">
             <span className="text-xs font-medium text-muted-foreground">
@@ -579,7 +618,12 @@ export function LlmSettingsPanel({
             />
           </label>
           <div className="flex justify-end">
-            <ExternalHelpLink href={mineruTokenLink}>获取 MinerU token</ExternalHelpLink>
+            <ExternalHelpLink
+              href={mineruTokenLink}
+              onError={(error) => setMineruMessage(settingsErrorMessage(error))}
+            >
+              获取 MinerU token
+            </ExternalHelpLink>
           </div>
           {advancedOpen ? (
             <label className="block space-y-1.5">
@@ -668,7 +712,12 @@ export function LlmSettingsPanel({
                 />
               </label>
               <div className="flex justify-end">
-                <ExternalHelpLink href={siliconFlowKeyLink}>获取 SiliconFlow key</ExternalHelpLink>
+                <ExternalHelpLink
+                  href={siliconFlowKeyLink}
+                  onError={(error) => setEmbeddingMessage(settingsErrorMessage(error))}
+                >
+                  获取 SiliconFlow key
+                </ExternalHelpLink>
               </div>
             </>
           ) : null}
@@ -792,15 +841,30 @@ export function LlmSettingsPanel({
 
 function ExternalHelpLink({
   href,
+  onError,
   children,
 }: {
   href: string
+  onError?: (error: unknown) => void
   children: ReactNode
 }) {
+  async function handleClick(event: MouseEvent<HTMLAnchorElement>) {
+    if (!isTauriRuntime()) {
+      return
+    }
+    event.preventDefault()
+    try {
+      await openExternalUrl(href)
+    } catch (error) {
+      onError?.(error)
+    }
+  }
+
   return (
     <a
       className="inline-flex items-center gap-1 rounded-sm font-medium text-foreground underline-offset-4 transition-colors duration-interactive hover:text-primary hover:underline"
       href={href}
+      onClick={(event) => void handleClick(event)}
       rel="noreferrer noopener"
       target="_blank"
     >

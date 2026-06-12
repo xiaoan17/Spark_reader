@@ -1,6 +1,5 @@
 import {
   AlertCircle,
-  Bot,
   ChevronDown,
   Copy,
   FileSearch,
@@ -15,7 +14,6 @@ import {
 import { useEffect, useRef, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { AnimatedValue } from "@/components/ui/animated-value"
 import { MarkdownContent } from "@/components/markdown/MarkdownContent"
 import { renderMarkdownTextWithCitations } from "@/components/markdown/markdown-citations"
 import { shouldSubmitTextarea } from "@/components/reader/textarea-submit"
@@ -130,19 +128,16 @@ export function InterpretationCard({
 
   return (
     <div className={cn("flex h-full min-h-0 flex-col", className)}>
-      <div className="shrink-0 pb-2">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="text-sm font-semibold text-foreground">Spark</span>
-            <Badge variant="secondary" className="h-5 px-1.5 text-[11px]">
-              {lightweight ? "轻量" : "深度"}
-            </Badge>
-          </div>
-          {streaming ? (
-            <Button
-              size="icon"
-              variant="ghost"
-              className="h-7 w-7 shrink-0"
+      {streaming ? (
+        <div className="shrink-0 pb-2">
+          <div className="reader-panel-muted flex items-center justify-between gap-2 text-xs">
+            <span className="inline-flex items-center gap-1.5">
+              <span className="reader-provider-dot-active h-1.5 w-1.5 animate-pulse rounded-full" />
+              正在生成
+            </span>
+            <button
+              type="button"
+              className="reader-chrome-icon-button inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors duration-100 disabled:cursor-not-allowed disabled:opacity-50"
               aria-label={stopping ? "停止中" : "停止生成"}
               disabled={stopping}
               onClick={() => {
@@ -151,10 +146,10 @@ export function InterpretationCard({
               }}
             >
               {stopping ? <RefreshCcw className="h-4 w-4 animate-spin" /> : <Square className="h-4 w-4" />}
-            </Button>
-          ) : null}
+            </button>
+          </div>
         </div>
-      </div>
+      ) : null}
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pb-3 pr-1">
         <PhaseBody
           phase={phase}
@@ -171,16 +166,16 @@ export function InterpretationCard({
           onOpenSettings={onOpenSettings}
         />
         {runtimeHint && !selectionText ? (
-          <p className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
+          <p className="reader-panel-subtle rounded-md px-3 py-2 text-xs">
             {sanitizeInternalReferenceText(runtimeHint)}
           </p>
         ) : null}
       </div>
       {showActions ? (
-        <div className="-mx-2 mt-auto shrink-0 space-y-2 border-t bg-card/95 px-2 py-2 backdrop-blur">
-          <div className="flex gap-1.5 rounded-md border bg-background p-1.5">
+        <div className="reader-panel-border reader-panel-input-bar -mx-2 mt-auto shrink-0 space-y-2 border-t px-2 py-2 backdrop-blur">
+          <div className="reader-panel-input flex gap-1.5 rounded-md border p-1.5">
             <textarea
-              className="max-h-24 min-h-9 flex-1 resize-none bg-transparent py-1 text-sm leading-5 outline-none"
+              className="max-h-24 min-h-9 flex-1 resize-none bg-transparent py-1 text-sm leading-5 outline-none placeholder:text-[var(--reader-panel-muted)]"
               placeholder="围绕这段继续追问；会检索证据后回答"
               value={question}
               onChange={(event) => onQuestionChange?.(event.target.value)}
@@ -213,10 +208,12 @@ export function InterpretationCard({
               }}
             />
             <div className="ml-auto flex shrink-0 items-center gap-0.5">
-              <Button
-                size="icon"
-                variant={noteOpen ? "secondary" : "ghost"}
-                className="h-7 w-7"
+              <button
+                type="button"
+                className={cn(
+                  "reader-chrome-icon-button inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors duration-100",
+                  noteOpen && "reader-chrome-view-active",
+                )}
                 aria-pressed={noteOpen}
                 aria-label="保存笔记"
                 title="保存笔记"
@@ -224,33 +221,31 @@ export function InterpretationCard({
               >
                 <NotebookPen className="h-4 w-4" />
                 <span className="sr-only">保存</span>
-              </Button>
-              <Button
-                size="icon"
-                variant="ghost"
-                className="h-7 w-7"
+              </button>
+              <button
+                type="button"
+                className="reader-chrome-icon-button inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors duration-100"
                 aria-label="复制解读"
                 title="复制解读"
                 onClick={onCopy}
               >
                 <Copy className="h-4 w-4" />
-              </Button>
-              <Button
-                size="icon"
-                variant="ghost"
-                className="h-7 w-7"
+              </button>
+              <button
+                type="button"
+                className="reader-chrome-icon-button inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors duration-100"
                 aria-label="重新生成解读"
                 title="重新生成解读"
                 onClick={onRegenerate}
               >
                 <RefreshCcw className="h-4 w-4" />
-              </Button>
+              </button>
             </div>
           </div>
           {noteOpen ? (
-            <div className="space-y-2 rounded-md border bg-background p-2">
+            <div className="reader-panel-input space-y-2 rounded-md border p-2">
               <textarea
-                className="min-h-14 w-full resize-none bg-transparent text-sm leading-6 outline-none"
+                className="min-h-14 w-full resize-none bg-transparent text-sm leading-6 outline-none placeholder:text-[var(--reader-panel-muted)]"
                 placeholder="写下这段文字触发的想法"
                 value={noteDraft}
                 onChange={(event) => onNoteChange?.(event.target.value)}
@@ -330,16 +325,16 @@ function PhaseBody({
     const retrievalSteps = retrievalTraceItems(agentTrace, visibleEvidence)
     return (
       <div className="animate-fade-in space-y-3">
-        <p className="text-sm text-muted-foreground">AI 正在书中查找</p>
+        <p className="reader-panel-muted text-sm">AI 正在书中查找</p>
         <div className="space-y-2">
           {retrievalSteps.map((step, index) => (
             <div
               key={`${step.label}-${index}`}
-              className="animate-slide-in-up rounded-md border bg-background px-3 py-2"
+              className="reader-panel-card animate-slide-in-up rounded-md border px-3 py-2"
               style={staggerStyle(index)}
             >
               <div className="flex items-start gap-2 text-sm font-medium">
-                <FileSearch className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                <FileSearch className="reader-panel-accent mt-0.5 h-4 w-4 shrink-0" />
                 <span>{step.label}</span>
               </div>
               <div className="mt-2 flex flex-wrap gap-2">
@@ -364,12 +359,8 @@ function PhaseBody({
         {answerSource === "local_fallback" ? (
           <LocalFallbackNotice message={errorMessage} onOpenSettings={onOpenSettings} />
         ) : null}
-        <InterpretationTrustBadge trust={trust} />
-        {phase === "streaming" ? (
-          <p className="inline-flex items-center gap-1.5 rounded-md bg-muted px-2.5 py-1 text-xs text-muted-foreground">
-            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
-            正在生成
-          </p>
+        {answerSource !== "local_fallback" && trust.droppedCitationCount > 0 ? (
+          <CitationValidationNotice />
         ) : null}
         <ConversationTimeline
           interpretation={interpretation}
@@ -416,7 +407,7 @@ function PhaseBody({
       )
     }
     return (
-      <div className="rounded-md border bg-muted/20 px-3 py-4 text-sm leading-6 text-muted-foreground">
+      <div className="reader-panel-card reader-panel-muted rounded-md border px-3 py-4 text-sm leading-6">
         在文中框选一段，Spark 会显示深度解读、证据和引用回跳。
       </div>
     )
@@ -459,7 +450,7 @@ function PhaseBody({
   }
 
   return (
-    <div className="rounded-md border bg-muted/20 px-3 py-4 text-sm leading-6 text-muted-foreground">
+    <div className="reader-panel-card reader-panel-muted rounded-md border px-3 py-4 text-sm leading-6">
       框选一段试试；Spark 会先找证据，再给出可回跳的解释。
     </div>
   )
@@ -484,11 +475,11 @@ function ConversationTimeline({
     <div className="space-y-4">
       {interpretation ? (
         <AssistantTurn
-          label="Spark"
           content={interpretation}
           evidence={evidence}
           citationChunkIds={citationChunkIds}
           citationLabels={citationLabels}
+          variant="plain"
           onCitationClick={onCitationClick}
         >
           {evidence.length > 0 ? (
@@ -506,12 +497,11 @@ function ConversationTimeline({
         </AssistantTurn>
       ) : null}
       {followUps.length > 0 ? (
-        <div className="space-y-4 border-t pt-4">
+        <div className="reader-panel-border space-y-4 border-t pt-4">
           {followUps.map((turn, index) => (
             <div key={turn.id} className="animate-slide-in-up space-y-3" style={staggerStyle(index)}>
               <UserTurn label={`你 · 追问 ${index + 1}`}>{turn.question}</UserTurn>
               <AssistantTurn
-                label="Spark"
                 content={turn.answer}
                 evidence={evidence}
                 citationChunkIds={citationChunkIds}
@@ -542,12 +532,11 @@ function FollowUpList({
 }) {
   const labels = citationLabels ?? visibleCitationLabelMap(evidence, citationChunkIds, "", followUps)
   return (
-    <div className="space-y-4 border-t pt-4 text-sm leading-7">
+    <div className="reader-panel-border space-y-4 border-t pt-4 text-sm leading-7">
       {followUps.map((turn, index) => (
         <div key={turn.id} className="animate-slide-in-up space-y-3" style={staggerStyle(index)}>
           <UserTurn label={`你 · 追问 ${index + 1}`}>{turn.question}</UserTurn>
           <AssistantTurn
-            label="Spark"
             content={turn.answer}
             evidence={evidence}
             citationChunkIds={citationChunkIds}
@@ -562,35 +551,35 @@ function FollowUpList({
 }
 
 function AssistantTurn({
-  label,
   content,
   evidence,
   citationChunkIds,
   citationLabels,
   streaming = false,
+  variant = "card",
   children,
   onCitationClick,
 }: {
-  label: string
   content: string
   evidence: EvidencePreview[]
   citationChunkIds?: string[]
   citationLabels?: ReadonlyMap<string, string>
   streaming?: boolean
+  variant?: "plain" | "card"
   children?: React.ReactNode
   onCitationClick?: (chunkId: string) => void
 }) {
   return (
-    <section className="rounded-md border bg-background px-3 py-3 shadow-sm">
-      <div className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-foreground">
-        <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-primary">
-          <Bot className="h-3.5 w-3.5" />
-        </span>
-        {label}
-      </div>
+    <section
+      className={cn(
+        variant === "card"
+          ? "reader-panel-card rounded-md border px-3 py-3 shadow-sm"
+          : "reader-panel-text px-0.5",
+      )}
+    >
       {streaming ? (
-        <p className="inline-flex items-center gap-1.5 rounded-md bg-muted px-2.5 py-1 text-xs text-muted-foreground">
-          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
+        <p className="reader-panel-chip inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs">
+          <span className="reader-provider-dot-active h-1.5 w-1.5 animate-pulse rounded-full" />
           正在回答
         </p>
       ) : (
@@ -616,9 +605,9 @@ function UserTurn({
   children: React.ReactNode
 }) {
   return (
-    <section className="ml-6 rounded-md bg-accent px-3 py-2 text-accent-foreground">
-      <div className="mb-1 flex items-center gap-2 text-xs font-medium text-accent-foreground/70">
-        <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-background/70">
+    <section className="reader-spark-user-turn ml-6 rounded-md px-3 py-2">
+      <div className="mb-1 flex items-center gap-2 text-xs font-medium opacity-75">
+        <span className="reader-spark-user-icon inline-flex h-5 w-5 items-center justify-center rounded-full">
           <User className="h-3 w-3" />
         </span>
         {label}
@@ -644,7 +633,7 @@ function SuggestedFollowUps({
         <button
           key={suggestion}
           type="button"
-          className="min-w-0 truncate rounded-md border bg-background px-2 py-1 text-xs text-muted-foreground transition-[background-color,color,box-shadow,transform] duration-interactive ease-reader hover:bg-muted hover:text-foreground hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-ring active:scale-[0.98]"
+          className="reader-panel-button min-w-0 truncate rounded-md border px-2 py-1 text-xs transition-[background-color,color,box-shadow,transform] duration-interactive ease-reader hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-ring active:scale-[0.98]"
           title={suggestion}
           onClick={() => onPick(suggestion)}
         >
@@ -680,7 +669,7 @@ function CitationPreviewButton({
     <span className="inline-flex">
       <button
         type="button"
-        className="inline-flex rounded px-1 text-xs font-semibold text-primary underline-offset-2 transition-colors duration-subtle ease-reader hover:text-primary/80 hover:underline focus:outline-none focus:ring-2 focus:ring-ring"
+        className="reader-spark-citation inline-flex rounded px-1 text-xs font-semibold underline-offset-2 transition-colors duration-subtle ease-reader hover:underline focus:outline-none focus:ring-2 focus:ring-ring"
         onClick={onClick}
         aria-label={`${label}，点击回到${pageLabel}原文`}
       >
@@ -797,25 +786,11 @@ function interpretationTrustState(
   }
 }
 
-function InterpretationTrustBadge({ trust }: { trust: InterpretationTrustState }) {
-  const className =
-    trust.tone === "ok"
-      ? "border-success/30 bg-success/10 text-success-foreground"
-      : trust.tone === "warn"
-        ? "border-warning/40 bg-warning/10 text-warning-foreground"
-        : "border-muted bg-muted/60 text-muted-foreground"
+function CitationValidationNotice() {
   return (
-    <div className={`inline-flex flex-wrap items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs ${className}`}>
-      <span className="font-medium">{trust.label}</span>
-      <span>
-        接地 <AnimatedValue value={trust.groundedCitationCount} variant="number" animation="snappy" />
-      </span>
-      {trust.droppedCitationCount > 0 ? (
-        <span>
-          丢弃 <AnimatedValue value={trust.droppedCitationCount} variant="number" animation="snappy" />
-        </span>
-      ) : null}
-      <span>{trust.answerSource === "llm" ? "LLM" : "local"}</span>
+    <div className="flex gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs leading-5 text-warning-foreground">
+      <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+      <span>部分引用未核验，已保留可点击的有效引用。</span>
     </div>
   )
 }
@@ -856,15 +831,15 @@ function LocalFallbackNotice({
 
 function CoordinateList({ selectionRects }: { selectionRects: NormalizedPageRect[] }) {
   return (
-    <details className="group rounded-md border bg-background text-xs text-muted-foreground">
+    <details className="reader-panel-details group rounded-md border text-xs">
       <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 marker:hidden">
         <span>
           PDF 坐标选区（校对）· 归一化页坐标 · {selectionRects.length} 个矩形
         </span>
         <ChevronDown className="h-3.5 w-3.5 transition-transform duration-subtle ease-reader group-open:rotate-180" />
       </summary>
-      <div className="max-h-52 space-y-2 overflow-auto border-t p-2 font-mono text-[11px] leading-5">
-        <p className="font-sans text-[11px] leading-5 text-muted-foreground">
+      <div className="reader-panel-border max-h-52 space-y-2 overflow-auto border-t p-2 font-mono text-[11px] leading-5">
+        <p className="reader-panel-muted font-sans text-[11px] leading-5">
           扫描版或 OCR 结果可能近似；以转换稿文本和引用回跳作为核对入口。
         </p>
         {selectionRects.map((rect, index) => (
@@ -884,21 +859,21 @@ function TraceList({ agentTrace }: { agentTrace: AgentTraceStep[] }) {
   }
 
   return (
-    <details className="group rounded-md border bg-background text-xs text-muted-foreground">
+    <details className="reader-panel-details group rounded-md border text-xs">
       <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 marker:hidden">
         <span>检索轨迹 · {agentTrace.length} 步</span>
         <ChevronDown className="h-3.5 w-3.5 transition-transform duration-subtle ease-reader group-open:rotate-180" />
       </summary>
-      <div className="space-y-2 border-t p-2">
+      <div className="reader-panel-border space-y-2 border-t p-2">
         {agentTrace.slice(0, 6).map((step, index) => (
-          <div key={`${step.phase}-${index}`} className="rounded bg-muted/60 px-2 py-1.5">
-            <div className="font-medium text-foreground/80">
+          <div key={`${step.phase}-${index}`} className="reader-panel-details-row rounded px-2 py-1.5">
+            <div className="reader-panel-text font-medium opacity-80">
               {tracePhaseLabel(step.phase)}
               {traceQueryLabel(step.query) ? (
-                <span className="ml-1 text-muted-foreground">· {traceQueryLabel(step.query)}</span>
+                <span className="reader-panel-muted ml-1">· {traceQueryLabel(step.query)}</span>
               ) : null}
             </div>
-            <div className="mt-0.5 text-muted-foreground">
+            <div className="reader-panel-muted mt-0.5">
               {sanitizeInternalReferenceText(step.note)}
             </div>
           </div>
@@ -960,7 +935,7 @@ export function renderCitations(
 }
 
 function SkeletonLine({ className }: { className?: string }) {
-  return <div className={cn("reader-shimmer h-3 animate-shimmer rounded bg-muted", className)} />
+  return <div className={cn("reader-shimmer reader-shimmer-reader h-3 animate-shimmer rounded", className)} />
 }
 
 function staggerStyle(index: number) {

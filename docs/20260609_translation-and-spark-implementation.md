@@ -16,7 +16,7 @@
 - 原文 chunk 是证据源。译文只用于帮助阅读和选择，不升级为引用证据。
 - Spark 的最终引用统一使用 `[chunk_id]`，不依赖任何厂商原生 citations。
 - 翻译、LLM、embedding key 都只在 Rust 后端读取，不能进前端 bundle。
-- 当前对照翻译不走 OpenCode。`docs/opencode-agent.md` 已明确：生产路径归 Rust 翻译管线所有。
+- 当前对照翻译不走 OpenCode。`docs/20260602_opencode-agent.md` 已明确：生产路径归 Rust 翻译管线所有。
 
 ## 1. 共享前提：书必须先被转换和索引
 
@@ -126,7 +126,7 @@ book_id + page_index + source_fingerprint + provider + model
 
 - `src/components/reader/TranslationReader.tsx`
 - `src/components/reader/translation-alignment.ts`
-- `docs/ui/translation-alignment.md`
+- `docs/ui/20260609_translation-alignment.md`
 
 渲染原则：
 
@@ -166,7 +166,7 @@ book_id + page_index + source_fingerprint + provider + model
 
 ### 2.7 翻译当前不走 OpenCode
 
-`docs/opencode-agent.md` 已写清楚边界：
+`docs/20260602_opencode-agent.md` 已写清楚边界：
 
 - 当前产品路径：前端调用 `start_translation`，Rust 翻译转换稿页，结果写入 SQLite。
 - `OpencodeAgentTaskRunner` 还是实验/骨架，不拥有翻译缓存，也不能产出阅读器需要的页级对齐译文。

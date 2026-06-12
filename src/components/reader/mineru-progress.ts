@@ -3,8 +3,8 @@ import type { MinerUProgressEvent } from "@/core/library-api"
 export function mineruProgressMessage(event: MinerUProgressEvent) {
   const batch = mineruProgressBatchLabel(event)
   const pageRange = event.pageRange ? ` · 页码 ${event.pageRange}` : ""
-  const poll = event.pollCount > 0 ? ` · 第 ${event.pollCount} 次轮询` : ""
-  return `${mineruProgressStageLabel(event.stage)}：${event.message}${batch ? ` · ${batch}` : ""}${pageRange}${poll}`
+  const detail = mineruProgressStageDetail(event)
+  return `${mineruProgressStageLabel(event.stage)}：${detail}${batch ? ` · ${batch}` : ""}${pageRange}`
 }
 
 export function mineruProgressBatchLabel(event: MinerUProgressEvent) {
@@ -41,5 +41,14 @@ function mineruProgressStageLabel(stage: MinerUProgressEvent["stage"]) {
       return "已入库"
     case "failed":
       return "失败"
+  }
+}
+
+function mineruProgressStageDetail(event: MinerUProgressEvent) {
+  switch (event.stage) {
+    case "polling":
+      return "MinerU 正在解析中"
+    default:
+      return event.message
   }
 }

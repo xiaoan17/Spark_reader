@@ -10,6 +10,7 @@ type ZoteroImportPanelProps = {
   query: string
   results: ZoteroSearchResult[]
   status: "idle" | "searching" | "importing" | "error"
+  importingItemKey?: string | null
   message: string
   onQueryChange: (query: string) => void
   onSearch: () => void
@@ -22,6 +23,7 @@ export function ZoteroImportPanel({
   query,
   results,
   status,
+  importingItemKey,
   message,
   onQueryChange,
   onSearch,
@@ -82,38 +84,41 @@ export function ZoteroImportPanel({
         <div className="min-h-0 flex-1 overflow-auto px-5 py-4">
           {results.length > 0 ? (
             <div className="space-y-2">
-              {results.map((result) => (
-                <article
-                  key={result.itemKey}
-                  className="flex items-start justify-between gap-4 rounded-md border bg-background p-3"
-                >
-                  <div className="min-w-0">
-                    <div className="line-clamp-2 text-sm font-medium">{result.title}</div>
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      {zoteroCreatorLine(result)}
-                    </div>
-                    <div className="mt-2 flex flex-wrap gap-1">
-                      <Badge variant="secondary">{result.itemType || "item"}</Badge>
-                      {result.year ? <Badge variant="secondary">{result.year}</Badge> : null}
-                      <Badge variant={result.hasPdf ? "secondary" : "outline"}>
-                        {result.hasPdf ? "PDF 可导入" : "无 PDF"}
-                      </Badge>
-                    </div>
-                  </div>
-                  <Button
-                    size="sm"
-                    disabled={!result.hasPdf || status === "importing"}
-                    onClick={() => onImport(result)}
+              {results.map((result) => {
+                const isImportingThisItem = status === "importing" && importingItemKey === result.itemKey
+                return (
+                  <article
+                    key={result.itemKey}
+                    className="flex items-start justify-between gap-4 rounded-md border bg-background p-3"
                   >
-                    {status === "importing" ? (
-                      <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                    ) : (
-                      <Upload className="mr-1.5 h-4 w-4" />
-                    )}
-                    导入
-                  </Button>
-                </article>
-              ))}
+                    <div className="min-w-0">
+                      <div className="line-clamp-2 text-sm font-medium">{result.title}</div>
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        {zoteroCreatorLine(result)}
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        <Badge variant="secondary">{result.itemType || "item"}</Badge>
+                        {result.year ? <Badge variant="secondary">{result.year}</Badge> : null}
+                        <Badge variant={result.hasPdf ? "secondary" : "outline"}>
+                          {result.hasPdf ? "PDF 可导入" : "无 PDF"}
+                        </Badge>
+                      </div>
+                    </div>
+                    <Button
+                      size="sm"
+                      disabled={!result.hasPdf || status === "importing"}
+                      onClick={() => onImport(result)}
+                    >
+                      {isImportingThisItem ? (
+                        <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                      ) : (
+                        <Upload className="mr-1.5 h-4 w-4" />
+                      )}
+                      导入
+                    </Button>
+                  </article>
+                )
+              })}
             </div>
           ) : (
             <div className="flex min-h-60 flex-col items-center justify-center rounded-md border border-dashed bg-background/70 p-8 text-center">

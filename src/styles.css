@@ -190,6 +190,11 @@
     border-color: var(--reader-panel-border);
   }
 
+  .reader-panel-input-bar {
+    background: color-mix(in srgb, var(--reader-panel-bg) 96%, var(--reader-workspace-bg));
+    border-color: var(--reader-panel-border);
+  }
+
   .reader-panel-subtle {
     background: var(--reader-panel-hover-bg);
     color: var(--reader-panel-muted);
@@ -214,6 +219,55 @@
   .reader-panel-input::placeholder {
     color: var(--reader-panel-muted);
     opacity: 0.72;
+  }
+
+  .reader-panel-button {
+    background: color-mix(in srgb, var(--reader-panel-bg) 90%, var(--reader-workspace-bg));
+    border-color: var(--reader-panel-border);
+    color: var(--reader-panel-muted);
+  }
+
+  .reader-panel-button:hover {
+    background: var(--reader-panel-hover-bg);
+    color: var(--reader-panel-text);
+  }
+
+  .reader-panel-chip {
+    background: var(--reader-panel-hover-bg);
+    color: var(--reader-panel-muted);
+  }
+
+  .reader-panel-details {
+    background: color-mix(in srgb, var(--reader-panel-bg) 90%, var(--reader-workspace-bg));
+    border-color: var(--reader-panel-border);
+    color: var(--reader-panel-muted);
+  }
+
+  .reader-panel-details-row {
+    background: var(--reader-panel-hover-bg);
+    color: var(--reader-panel-muted);
+  }
+
+  .reader-spark-user-turn {
+    background: var(--reader-panel-active-bg);
+    color: var(--reader-panel-active-text);
+  }
+
+  .reader-spark-user-icon {
+    background: color-mix(in srgb, var(--reader-panel-bg) 68%, transparent);
+    color: var(--reader-panel-active-text);
+  }
+
+  .reader-spark-citation {
+    color: var(--reader-panel-active-text);
+  }
+
+  .reader-spark-citation:hover {
+    color: color-mix(in srgb, var(--reader-panel-active-text) 78%, var(--reader-panel-text));
+  }
+
+  .reader-shimmer-reader {
+    background: var(--reader-panel-hover-bg);
   }
 
   .reader-panel-drop-active {

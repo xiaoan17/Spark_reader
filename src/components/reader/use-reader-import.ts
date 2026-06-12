@@ -92,6 +92,7 @@ export function useReaderImport(deps: UseReaderImportDeps) {
   const [zoteroQuery, setZoteroQuery] = useState("")
   const [zoteroResults, setZoteroResults] = useState<ZoteroSearchResult[]>([])
   const [zoteroStatus, setZoteroStatus] = useState<"idle" | "searching" | "importing" | "error">("idle")
+  const [zoteroImportingItemKey, setZoteroImportingItemKey] = useState<string | null>(null)
   const [zoteroMessage, setZoteroMessage] = useState("")
 
   async function handleFile(file: File) {
@@ -392,22 +393,26 @@ export function useReaderImport(deps: UseReaderImportDeps) {
   async function handleZoteroSearch() {
     if (!isTauriRuntime()) {
       setZoteroStatus("error")
+      setZoteroImportingItemKey(null)
       setZoteroMessage("从 Zotero 导入需要桌面版读取本机 Zotero 库")
       return
     }
     const query = zoteroQuery.trim()
     if (!query) {
       setZoteroStatus("idle")
+      setZoteroImportingItemKey(null)
       setZoteroResults([])
       setZoteroMessage("请输入论文标题或关键词")
       return
     }
     setZoteroStatus("searching")
+    setZoteroImportingItemKey(null)
     setZoteroMessage("")
     try {
       const results = await searchZoteroItems(query, 8)
       setZoteroResults(results)
       setZoteroStatus("idle")
+      setZoteroImportingItemKey(null)
       setZoteroMessage(
         results.length > 0
           ? `找到 ${results.length} 条 Zotero 文献`
@@ -416,6 +421,7 @@ export function useReaderImport(deps: UseReaderImportDeps) {
     } catch (error) {
       setZoteroResults([])
       setZoteroStatus("error")
+      setZoteroImportingItemKey(null)
       setZoteroMessage(error instanceof Error ? error.message : "Zotero 搜索失败")
     }
   }
@@ -423,12 +429,14 @@ export function useReaderImport(deps: UseReaderImportDeps) {
   async function handleImportZoteroItem(result: ZoteroSearchResult) {
     if (!result.hasPdf) {
       setZoteroStatus("error")
+      setZoteroImportingItemKey(null)
       setZoteroMessage("这条 Zotero 文献没有可用 PDF 附件；请在 Zotero 中确认附件路径，或改用本地 PDF 导入。")
       return
     }
     setLoadError("")
     setIsExtracting(true)
     setZoteroStatus("importing")
+    setZoteroImportingItemKey(result.itemKey)
     setZoteroMessage(`正在从 Zotero 导入《${result.title}》`)
     pushNotice("正在读取 Zotero PDF 路径并导入")
     let pendingPdf: PDFDocumentProxy | null = null
@@ -463,6 +471,7 @@ export function useReaderImport(deps: UseReaderImportDeps) {
       )
       void refreshStoredBooks()
       setZoteroStatus("idle")
+      setZoteroImportingItemKey(null)
       setZoteroMessage("Zotero 文献已导入")
       setPanelOpen("zoteroOpen", false)
       onPhaseChange("reading")
@@ -470,6 +479,7 @@ export function useReaderImport(deps: UseReaderImportDeps) {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       setZoteroStatus("error")
+      setZoteroImportingItemKey(null)
       setZoteroMessage(message)
       handleImportFailure(error, "Zotero 导入失败")
     } finally {
@@ -477,6 +487,7 @@ export function useReaderImport(deps: UseReaderImportDeps) {
         await pendingPdf.cleanup()
       }
       unlistenProgress?.()
+      setZoteroImportingItemKey(null)
       setIsExtracting(false)
     }
   }
@@ -489,6 +500,7 @@ export function useReaderImport(deps: UseReaderImportDeps) {
     zoteroQuery,
     zoteroResults,
     zoteroStatus,
+    zoteroImportingItemKey,
     zoteroMessage,
     setZoteroQuery,
     handleFile,

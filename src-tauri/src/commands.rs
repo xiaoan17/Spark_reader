@@ -133,6 +133,12 @@ fn classify_command_error(message: &str) -> (&'static str, Option<&'static str>)
             Some("请在设置里填入有效的 MinerU API Token 后重试。"),
         );
     }
+    if lower.contains("a0202") || lower.contains("a0211") {
+        return (
+            "mineru_token",
+            Some("请在设置里填入有效的 MinerU API Token 后重试。"),
+        );
+    }
     if lower.contains("401") || lower.contains("403") || lower.contains("unauthorized") {
         return (
             "authentication",
@@ -204,6 +210,12 @@ pub fn coordinate_version() -> u32 {
 }
 
 #[command]
+pub fn open_external_url(url: String) -> CommandResult<()> {
+    let url = validate_external_https_url(&url)?;
+    launch_external_url(&url)
+}
+
+#[command]
 pub async fn test_llm_connection() -> CommandResult<llm::ConnectionTestResponse> {
     llm::test_connection().await.map_err(command_error)
 }
@@ -220,6 +232,15 @@ pub async fn test_llm_connection_with_settings(
 #[command]
 pub fn test_embedding_connection() -> CommandResult<embeddings::EmbeddingConnectionTestResponse> {
     embeddings::test_connection().map_err(command_error)
+}
+
+#[command]
+pub async fn test_mineru_connection_with_settings(
+    request: crate::config::SaveMinerUSettingsRequest,
+) -> CommandResult<mineru::MinerUConnectionTestResponse> {
+    mineru::test_connection_with_settings(request)
+        .await
+        .map_err(command_error)
 }
 
 #[command]
@@ -1182,6 +1203,34 @@ fn is_pdf_name_char(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'+')
 }
 
+fn validate_external_https_url(url: &str) -> CommandResult<String> {
+    let parsed = reqwest::Url::parse(url)
+        .map_err(|_| CommandError::validation("只能打开有效的 HTTPS 外部链接"))?;
+    if parsed.scheme() != "https" {
+        return Err(CommandError::validation("只能打开 HTTPS 外部链接"));
+    }
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| CommandError::validation("外部链接缺少 host"))?;
+    if !external_url_host_is_allowed(host) {
+        return Err(CommandError::validation(format!(
+            "外部链接 host 不在允许列表：{host}"
+        )));
+    }
+    Ok(parsed.as_str().to_string())
+}
+
+fn external_url_host_is_allowed(host: &str) -> bool {
+    matches!(
+        host.to_ascii_lowercase().as_str(),
+        "platform.deepseek.com"
+            | "platform.openai.com"
+            | "console.anthropic.com"
+            | "mineru.net"
+            | "cloud.siliconflow.cn"
+    )
+}
+
 fn launch_open_path(path: &std::path::Path) -> CommandResult<()> {
     launch_path(path, false)
 }
@@ -1236,6 +1285,34 @@ fn spawn_launch_command(mut command: std::process::Command) -> CommandResult<()>
         .map_err(|err| CommandError::from_message(format!("failed to open local asset: {err}")))
 }
 
+#[cfg(target_os = "macos")]
+fn launch_external_url(url: &str) -> CommandResult<()> {
+    let mut command = std::process::Command::new("open");
+    command.arg(url);
+    spawn_external_launch_command(command)
+}
+
+#[cfg(target_os = "windows")]
+fn launch_external_url(url: &str) -> CommandResult<()> {
+    let mut command = std::process::Command::new("cmd");
+    command.arg("/C").arg("start").arg("").arg(url);
+    spawn_external_launch_command(command)
+}
+
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+fn launch_external_url(url: &str) -> CommandResult<()> {
+    let mut command = std::process::Command::new("xdg-open");
+    command.arg(url);
+    spawn_external_launch_command(command)
+}
+
+fn spawn_external_launch_command(mut command: std::process::Command) -> CommandResult<()> {
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|err| CommandError::from_message(format!("failed to open external URL: {err}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1253,5 +1330,19 @@ mod tests {
         assert!(network_error
             .suggestion
             .is_some_and(|suggestion| suggestion.contains("稍后重试")));
+    }
+
+    #[test]
+    fn external_url_validation_allows_only_known_https_key_hosts() {
+        assert_eq!(
+            validate_external_https_url("https://console.anthropic.com/settings/keys").unwrap(),
+            "https://console.anthropic.com/settings/keys"
+        );
+        assert!(validate_external_https_url("http://console.anthropic.com/settings/keys").is_err());
+        assert!(
+            validate_external_https_url("https://console.anthropic.com.evil/settings/keys")
+                .is_err()
+        );
+        assert!(validate_external_https_url("https://example.com/settings/keys").is_err());
     }
 }

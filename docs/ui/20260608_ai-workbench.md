@@ -1,7 +1,7 @@
 # AI 工作台 · 右栏重构 Spec
 
 > 目标:把现在「靠一个布尔在 SparkPanel / InterpretationCard 之间切换」的右栏,重构成一个**上下文驱动的 AI 工作台**——统一收编解读 / 陪读 / 追问 / 知识 / Agent 长任务,让 AI 围绕「用户正在读的这一段」工作,而不是站在右边当结果列表。
-> 基准:`BRAND.md`(阅读优先、AI 退居其次、框选是第一动作、AI 思考可感知)、`UI-UX.md`(热路径、三栏布局、§7 纯展示组件)、`docs/ui/UI改造清单.md`。
+> 基准:`20260603_BRAND.md`(阅读优先、AI 退居其次、框选是第一动作、AI 思考可感知)、`20260531_UI-UX.md`(热路径、三栏布局、§7 纯展示组件)、`docs/ui/20260608_UI改造清单.md`。
 > 范围:本轮**只产出 spec,不动代码**。决策已确认:① OpenCode 以**嵌入式 agent 终端**进入;② 右栏**保持常驻**(不做默认收起),只重构内容。
 
 ---
@@ -195,7 +195,7 @@ interface AgentTaskRunner {
 └────────────────────────────────────┘
 ```
 
-- 高亮 / 解读 / 笔记 / Agent 产物**统一沉淀为 `kb_cards`**(对齐 `knowledge-system-implementation-plan.md`)。
+- 高亮 / 解读 / 笔记 / Agent 产物**统一沉淀为 `kb_cards`**(对齐 `20260607_knowledge-system-implementation-plan.md`)。
 - 标签全中文(清单 #5);卡片不露裸 chunkId(清单 #3)。
 - 右栏知识区 = 「此刻相关」,全屏 knowledge view = 「全书纵览」。两者通过「打开全书知识地图」连接,不再是顶栏平级竞争。
 

@@ -94,7 +94,7 @@ export function AiWorkbench({
   return (
     <aside className="reader-panel flex h-full min-h-0 animate-fade-in flex-col overflow-hidden border-l transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none">
       {/* Tab bar：底线模式，无 box 嵌套 */}
-      <div className="reader-panel-border -mb-px flex h-10 shrink-0 items-end gap-0 border-b px-3">
+      <div className="reader-panel-border -mb-px flex h-9 shrink-0 items-end gap-0 border-b px-3">
         <WorkbenchTabButton
           active={tab === "spark"}
           icon={<Sparkles className="h-3.5 w-3.5" />}
@@ -175,16 +175,18 @@ function WorkbenchTabButton({
     <button
       type="button"
       className={cn(
-        "reader-workbench-tab flex h-10 items-center gap-1.5 border-b-2 px-2.5 text-sm transition-colors duration-100",
+        "reader-workbench-tab relative flex h-9 w-9 items-center justify-center border-b-2 text-sm transition-colors duration-100",
         active && "reader-workbench-tab-active font-medium",
       )}
       aria-pressed={active}
+      aria-label={label}
+      title={label}
       onClick={onClick}
     >
       {icon}
-      {label}
+      <span className="sr-only">{label}</span>
       {badge && badge > 0 ? (
-        <span className="reader-workbench-badge ml-0.5 inline-flex min-w-4 items-center justify-center rounded-full px-1 text-[10px] leading-4">
+        <span className="reader-workbench-badge absolute right-0.5 top-0.5 inline-flex min-w-4 items-center justify-center rounded-full px-1 text-[10px] leading-4">
           <AnimatedValue value={badge} variant="number" animation="snappy" />
         </span>
       ) : null}

@@ -79,6 +79,7 @@ pub fn run() {
             commands::list_structure,
             commands::knowledge_health,
             commands::open_book_asset,
+            commands::open_external_url,
             commands::product_self_check,
             commands::read_pdf_file,
             commands::rebuild_search_index,
@@ -98,6 +99,7 @@ pub fn run() {
             commands::test_embedding_connection,
             commands::test_llm_connection,
             commands::test_llm_connection_with_settings,
+            commands::test_mineru_connection_with_settings,
             commands::translation_status,
             commands::upsert_knowledge_card,
         ])

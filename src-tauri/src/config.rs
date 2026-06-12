@@ -60,6 +60,30 @@ pub struct SaveMinerUSettingsRequest {
     pub base_url: String,
 }
 
+pub fn mineru_config_from_request(
+    request: &SaveMinerUSettingsRequest,
+) -> Result<MinerUConfig, ConfigError> {
+    load_dotenv();
+    let stored = load_stored_settings()?;
+    let request_token = request.api_token.as_deref().unwrap_or_default().trim();
+    let api_token = if request_token.is_empty() {
+        required_env("MINERU_API_TOKEN")?
+    } else {
+        request_token.to_string()
+    };
+    let base_url = request.base_url.trim().trim_end_matches('/').to_string();
+    let base_url = if base_url.is_empty() {
+        active_mineru_base_url(&stored.mineru)
+    } else {
+        base_url
+    };
+
+    Ok(MinerUConfig {
+        api_token,
+        base_url,
+    })
+}
+
 #[derive(Debug, Clone)]
 pub struct EmbeddingConfig {
     pub provider: String,
@@ -1229,6 +1253,35 @@ mod tests {
         let config = mineru_config().expect("MinerU config should load");
         assert_eq!(config.api_token, "mineru-test-token");
         assert_eq!(config.base_url, "https://mineru.net");
+
+        let _ = fs::remove_dir_all(&dir);
+        env::remove_var("FOCUSED_READING_CONFIG_DIR");
+        env::remove_var("FOCUSED_READING_ENV_PATH");
+        env::remove_var("MINERU_API_TOKEN");
+    }
+
+    #[test]
+    fn mineru_config_from_request_uses_unsaved_draft_without_persisting() {
+        let _guard = crate::TEST_ENV_LOCK.lock().expect("env lock");
+        let dir = config_dir("mineru-draft-config");
+        let _ = fs::remove_dir_all(&dir);
+        env::set_var("FOCUSED_READING_CONFIG_DIR", &dir);
+        env::remove_var("MINERU_API_TOKEN");
+        env::remove_var("MINERU_BASE_URL");
+        let env_path = isolated_env_path(&dir);
+
+        let config = mineru_config_from_request(&SaveMinerUSettingsRequest {
+            api_token: Some("mineru-draft-token".to_string()),
+            base_url: " https://mineru.net/ ".to_string(),
+        })
+        .expect("draft MinerU config should load");
+
+        assert_eq!(config.api_token, "mineru-draft-token");
+        assert_eq!(config.base_url, "https://mineru.net");
+        assert!(
+            !env_path.exists(),
+            "testing a draft MinerU token must not persist it"
+        );
 
         let _ = fs::remove_dir_all(&dir);
         env::remove_var("FOCUSED_READING_CONFIG_DIR");

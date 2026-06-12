@@ -1,6 +1,6 @@
 # AGENTS.md · 多 Agent 协作规则
 
-> 本项目用异构 multi-agent 方式开发(方法论见 `UI-UX.md` §0)。本文件是给所有参与 agent(Codex / Claude Code / 其他)的工作守则。
+> 本项目用异构 multi-agent 方式开发(方法论见 `20260531_UI-UX.md` §0)。本文件是给所有参与 agent(Codex / Claude Code / 其他)的工作守则。
 
 ---
 
@@ -17,14 +17,14 @@
 
 ## 2. 铁律(违反会引入难查的 bug)
 
-1. **坐标只有一个规范空间** = 归一化 PDF 页坐标。任何引擎(pdf.js / MinerU)进出都必须经显式转换函数,且有单测。改坐标相关代码前先读 `docs/coordinate-spec.md`。
-2. **锚点:几何为真相,引用为桥,偏移仅提示**(见 `PLANNING.md` §7)。绝不把 pdf.js 字符偏移量当耐久锚点。
+1. **坐标只有一个规范空间** = 归一化 PDF 页坐标。任何引擎(pdf.js / MinerU)进出都必须经显式转换函数,且有单测。改坐标相关代码前先读 `docs/20260531_coordinate-spec.md`。
+2. **锚点:几何为真相,引用为桥,偏移仅提示**(见 `20260531_PLANNING.md` §7)。绝不把 pdf.js 字符偏移量当耐久锚点。
 3. **embedding 模型不可混用**:DB 存模型名+维度,切换即整本重嵌。
 4. **绝不缓存整本书 / 绝不缓存 tool_results**:prompt caching 只缓存静态前缀(DeepSeek/OpenAI 自动,Anthropic 显式三断点)。
-5. **引用统一用 chunk_id**:所有 LLM provider 走同一套 `[chunk_id]` 引用 + 后处理,**不依赖厂商原生 Citations**(Anthropic Citations 仅 V2 可选增强)。LLM 默认 DeepSeek,三家可切换(见 `docs/llm-provider.md`)。
+5. **引用统一用 chunk_id**:所有 LLM provider 走同一套 `[chunk_id]` 引用 + 后处理,**不依赖厂商原生 Citations**(Anthropic Citations 仅 V2 可选增强)。LLM 默认 DeepSeek,三家可切换(见 `docs/20260531_llm-provider.md`)。
 6. **扫描版/OCR 锚点是尽力而为**:UI 必须标注"近似",代码注释必须说明。
 7. **pre-1.0 / 外部接口依赖锁版本**:Tauri、rusqlite、MinerU API 版本、各 LLM/embedding provider 模型名锁精确版本,升级要过测试。(注:向量检索走外部 provider,不引入 sqlite-vec/LanceDB 本地向量库。)
-8. **MinerU 坐标真相 = `middle.json`**:bbox 经 `bbox/page_size` 换算到归一化页空间;原点方向必须经验验证(见 `docs/mineru-integration.md` §4)。**绝不用 `content_list.json` 的 0–1000 或 model.json 像素值直接当渲染坐标。**
+8. **MinerU 坐标真相 = `middle.json`**:bbox 经 `bbox/page_size` 换算到归一化页空间;原点方向必须经验验证(见 `docs/20260531_mineru-integration.md` §4)。**绝不用 `content_list.json` 的 0–1000 或 model.json 像素值直接当渲染坐标。**
 9. **MinerU token / LLM key 只走后端**:仅存 `.env`,经 Tauri Rust 后端读取调用,**绝不进前端代码、绝不打包进客户端**。MinerU 解析结果缓存本地,不重复消耗配额。LLM key 同理(DeepSeek/OpenAI/Anthropic)。
 10. **知识层只沉淀,不污染原文、不升级为引用证据**:`kb_cards` / `kb_evidence` 只能从高亮、解读、笔记和抽取候选沉淀;自动流程只能新建/补空,不得覆盖 `user_locked` 或用户正文;最终回答仍必须落回原文 `[chunk_id]`,不得把知识卡 ID 当最终 citation。
 
@@ -32,7 +32,7 @@
 
 ## 3. 前端约定
 
-1. **用 shadcn/ui 组件名沟通和命名**(见 `UI-UX.md` §3)。描述交互说"用 Accordion",别写一长段口语。
+1. **用 shadcn/ui 组件名沟通和命名**(见 `20260531_UI-UX.md` §3)。描述交互说"用 Accordion",别写一长段口语。
 2. **新增组件必须建 Storybook**,枚举全状态:正常 / 空 / 加载(Skeleton) / 错误 / 禁用。
    - 解读卡片额外枚举:planning / 检索中 / 流式 / 完成 / API 错误。
    - Story 用 mock 数据,不依赖真实接口。
@@ -44,7 +44,7 @@
 ## 4. 流程
 
 1. **文档先行**:开新界面/新模块前,先在 `docs/` 写实现方案 spec,对齐后再写代码。
-2. **逐阶段**:按 `ROADMAP.md` 阶段推进,前一阶段跑通自测再开下一阶段。
+2. **逐阶段**:按 `20260531_ROADMAP.md` 阶段推进,前一阶段跑通自测再开下一阶段。
 3. **改坏兜底**:Storybook 是防止 AI 改坏已有组件的安全网,每次改组件后过一遍相关 story。
 4. **用户指定快速验证路径**:用户说"测试/验证/帮我跑一下"且没有额外指定时,默认按以下顺序执行并汇报结果:
    - `pnpm check:reader` — 阅读器/对照翻译快速回归。当前基线:3 files,60 tests passed。
@@ -56,16 +56,16 @@
 
 ## 5. 文档地图
 
-> **新 agent 上手先读 `HANDOFF.md`**(交接第一文档),再按需读以下:
+> **新 agent 上手先读 `20260531_HANDOFF.md`**(交接第一文档),再按需读以下:
 
-- `HANDOFF.md` — 交接/上手第一文档:做了什么、关键认识、从哪开始、坑在哪
-- `PLANNING.md` — 产品定位 + 技术架构 + 风险(含事实核查修正)
-- `ROADMAP.md` — 分阶段可执行任务
-- `UI-UX.md` — 设计语言 + 前端工程约定
+- `20260531_HANDOFF.md` — 交接/上手第一文档:做了什么、关键认识、从哪开始、坑在哪
+- `20260531_PLANNING.md` — 产品定位 + 技术架构 + 风险(含事实核查修正)
+- `20260531_ROADMAP.md` — 分阶段可执行任务
+- `20260531_UI-UX.md` — 设计语言 + 前端工程约定
 - `AGENTS.md` — 本文件,协作守则
-- `docs/coordinate-spec.md` — (Phase 0 产出)坐标系统真相,头号 bug 来源
-- `docs/tech-stack.md` — 完整技术栈
-- `docs/mineru-integration.md` — MinerU 开放 API 集成规范(接口/坐标/配额/安全)
-- `docs/llm-provider.md` — LLM 多 provider 可配置设计(DeepSeek/OpenAI/Anthropic)
-- `docs/knowledge-system-implementation-plan.md` — 单书知识库任务清单、阶段 check 和验收总控
+- `docs/20260531_coordinate-spec.md` — (Phase 0 产出)坐标系统真相,头号 bug 来源
+- `docs/20260531_tech-stack.md` — 完整技术栈
+- `docs/20260531_mineru-integration.md` — MinerU 开放 API 集成规范(接口/坐标/配额/安全)
+- `docs/20260531_llm-provider.md` — LLM 多 provider 可配置设计(DeepSeek/OpenAI/Anthropic)
+- `docs/20260607_knowledge-system-implementation-plan.md` — 单书知识库任务清单、阶段 check 和验收总控
 - `docs/ui/*.md` — (按界面)UI 实现 spec

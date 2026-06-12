@@ -7,10 +7,12 @@ import {
   getLlmSettings,
   getMineruSettings,
   isTauriRuntime,
+  openExternalUrl,
   productSelfCheck,
   saveEmbeddingSettings,
   saveLlmSettings,
   saveMineruSettings,
+  testMineruConnectionWithSettings,
   testLlmConnectionWithSettings,
 } from "@/core/library-api"
 import { LlmSettingsPanel } from "./LlmSettingsPanel"
@@ -59,6 +61,7 @@ vi.mock("@/core/library-api", async (importOriginal) => {
       apiTokenConfigured: false,
     })),
     isTauriRuntime: vi.fn(() => false),
+    openExternalUrl: vi.fn(async () => undefined),
     productSelfCheck: vi.fn(),
     saveEmbeddingSettings: vi.fn(async () => ({
       provider: "siliconflow",
@@ -86,6 +89,11 @@ vi.mock("@/core/library-api", async (importOriginal) => {
       baseUrl: "https://mineru.net",
       apiTokenConfigured: true,
     })),
+    testMineruConnectionWithSettings: vi.fn(async () => ({
+      baseUrl: "https://mineru.net",
+      ok: true,
+      checked: "extract-results/batch",
+    })),
     testLlmConnectionWithSettings: vi.fn(async () => ({
       provider: "deep_seek",
       model: "deepseek-v4-flash",
@@ -100,10 +108,12 @@ beforeEach(() => {
   vi.mocked(getEmbeddingSettings).mockClear()
   vi.mocked(getLlmSettings).mockClear()
   vi.mocked(getMineruSettings).mockClear()
+  vi.mocked(openExternalUrl).mockClear()
   vi.mocked(productSelfCheck).mockReset()
   vi.mocked(saveEmbeddingSettings).mockClear()
   vi.mocked(saveLlmSettings).mockClear()
   vi.mocked(saveMineruSettings).mockClear()
+  vi.mocked(testMineruConnectionWithSettings).mockClear()
   vi.mocked(testLlmConnectionWithSettings).mockClear()
 })
 
@@ -135,6 +145,16 @@ function buttonByText(container: ParentNode, text: string) {
   )
   if (!button) {
     throw new Error(`missing button: ${text}`)
+  }
+  return button
+}
+
+function exactButtonByText(container: ParentNode, text: string) {
+  const button = [...container.querySelectorAll("button")].find((element) =>
+    textContent(element) === text,
+  )
+  if (!button) {
+    throw new Error(`missing exact button: ${text}`)
   }
   return button
 }
@@ -177,6 +197,16 @@ async function setInputValue(input: HTMLInputElement, value: string) {
   })
 }
 
+function linkByText(container: ParentNode, text: string) {
+  const link = [...container.querySelectorAll("a")].find((element) =>
+    textContent(element).includes(text),
+  )
+  if (!link) {
+    throw new Error(`missing link: ${text}`)
+  }
+  return link
+}
+
 describe("LlmSettingsPanel defaults", () => {
   it("starts in recommended mode with provider presets and no advanced fields", () => {
     const html = renderToStaticMarkup(
@@ -193,7 +223,7 @@ describe("LlmSettingsPanel defaults", () => {
     expect(html).toContain("获取 DeepSeek key")
     expect(html).toContain("https://platform.deepseek.com/api_keys")
     expect(html).toContain("获取 MinerU token")
-    expect(html).toContain("https://mineru.net/apiManage/docs")
+    expect(html).toContain("https://mineru.net/apiManage/token")
     expect(html).toContain("获取 SiliconFlow key")
     expect(html).toContain("https://cloud.siliconflow.cn/account/ak")
     expect(html).not.toContain("Provider ID")
@@ -243,6 +273,36 @@ describe("LlmSettingsPanel defaults", () => {
     unmount()
   })
 
+  it("opens key helper links through the desktop command", async () => {
+    vi.mocked(isTauriRuntime).mockReturnValue(true)
+
+    const { container, unmount } = await renderClient(
+      <LlmSettingsPanel open onClose={() => undefined} />,
+    )
+
+    await click(linkByText(container, "获取 DeepSeek key"))
+    await vi.waitFor(() => {
+      expect(openExternalUrl).toHaveBeenCalledWith("https://platform.deepseek.com/api_keys")
+    })
+
+    await click(buttonByText(container, "Anthropic"))
+    await click(linkByText(container, "获取 Anthropic key"))
+    await vi.waitFor(() => {
+      expect(openExternalUrl).toHaveBeenCalledWith("https://console.anthropic.com/settings/keys")
+    })
+
+    await click(linkByText(container, "获取 MinerU token"))
+    await vi.waitFor(() => {
+      expect(openExternalUrl).toHaveBeenCalledWith("https://mineru.net/apiManage/token")
+    })
+
+    await click(linkByText(container, "获取 SiliconFlow key"))
+    await vi.waitFor(() => {
+      expect(openExternalUrl).toHaveBeenCalledWith("https://cloud.siliconflow.cn/account/ak")
+    })
+    unmount()
+  })
+
   it("saves MinerU token from the settings panel without rendering the secret", async () => {
     vi.mocked(isTauriRuntime).mockReturnValue(true)
 
@@ -262,6 +322,29 @@ describe("LlmSettingsPanel defaults", () => {
       expect(textContent(container)).toContain("MinerU 设置已保存")
     })
     expect(textContent(container)).not.toContain("mineru-secret-token")
+    unmount()
+  })
+
+  it("tests MinerU with the current draft token without saving it", async () => {
+    vi.mocked(isTauriRuntime).mockReturnValue(true)
+
+    const { container, unmount } = await renderClient(
+      <LlmSettingsPanel open onClose={() => undefined} />,
+    )
+
+    const tokenInput = inputByLabel(container, "API Token")
+    await setInputValue(tokenInput, "mineru-draft-token")
+    await click(exactButtonByText(container, "测试"))
+
+    await vi.waitFor(() => {
+      expect(testMineruConnectionWithSettings).toHaveBeenCalledWith({
+        baseUrl: "https://mineru.net",
+        apiToken: "mineru-draft-token",
+      })
+      expect(saveMineruSettings).not.toHaveBeenCalled()
+      expect(textContent(container)).toContain("MinerU 连通正常，只读测试不消耗解析配额")
+    })
+    expect(textContent(container)).not.toContain("mineru-draft-token")
     unmount()
   })
 
@@ -599,7 +682,7 @@ describe("LlmSettingsPanel defaults", () => {
     expect(getEmbeddingSettings).not.toHaveBeenCalled()
     expect(getMineruSettings).not.toHaveBeenCalled()
 
-    await click(buttonByText(container, "测试"))
+    await click(exactButtonByText(container, "测试"))
     expect(textContent(container)).toContain("连接测试请使用桌面版")
     expect(statusMessages(container)).not.toContain("Tauri")
     expect(statusMessages(container)).not.toContain("后端")

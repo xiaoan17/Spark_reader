@@ -37,7 +37,7 @@ xattr -cr /Applications/Spark.app
 
 然后再正常双击打开 **Spark**。
 
-更完整的 macOS 安装说明见 [docs/INSTALL-macos.md](docs/INSTALL-macos.md)。
+更完整的 macOS 安装说明见 [docs/20260603_INSTALL-macos.md](docs/20260603_INSTALL-macos.md)。
 
 ## 配置 API
 
@@ -47,7 +47,7 @@ xattr -cr /Applications/Spark.app
 
 | 用途 | 是否必需 | 配置项 | 获取入口 |
 |---|---:|---|---|
-| PDF 解析 | 必需 | `MINERU_API_TOKEN` | [MinerU API 管理](https://mineru.net/apiManage/docs) |
+| PDF 解析 | 必需 | `MINERU_API_TOKEN` | [MinerU API 管理](https://mineru.net/apiManage/token) |
 | AI 解读/翻译 | 必需，默认 | `DEEPSEEK_API_KEY` | [DeepSeek API Keys](https://platform.deepseek.com/api_keys) |
 | AI 解读/翻译 | 可替代 DeepSeek | `OPENAI_API_KEY` | [OpenAI API Keys](https://platform.openai.com/api-keys) |
 | AI 解读/翻译 | 可替代 DeepSeek | `ANTHROPIC_API_KEY` | [Anthropic Console](https://console.anthropic.com/settings/keys) |
@@ -99,8 +99,8 @@ pnpm release:dmg  # 本机打 macOS DMG
 
 ## 更多文档
 
-- [docs/INSTALL-macos.md](docs/INSTALL-macos.md)：macOS 安装和首次打开
-- [docs/architecture.md](docs/architecture.md)：架构设计
-- [docs/tech-stack.md](docs/tech-stack.md)：技术栈
-- [docs/mineru-integration.md](docs/mineru-integration.md)：MinerU 集成
-- [docs/llm-provider.md](docs/llm-provider.md)：LLM provider 配置
+- [docs/20260603_INSTALL-macos.md](docs/20260603_INSTALL-macos.md)：macOS 安装和首次打开
+- [docs/20260603_architecture.md](docs/20260603_architecture.md)：架构设计
+- [docs/20260531_tech-stack.md](docs/20260531_tech-stack.md)：技术栈
+- [docs/20260531_mineru-integration.md](docs/20260531_mineru-integration.md)：MinerU 集成
+- [docs/20260531_llm-provider.md](docs/20260531_llm-provider.md)：LLM provider 配置

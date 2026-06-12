@@ -88,7 +88,7 @@ const meta = {
   },
   decorators: [
     (Story) => (
-      <div className="h-screen w-[360px] bg-background">
+      <div className="h-screen w-[300px] bg-background">
         <Story />
       </div>
     ),

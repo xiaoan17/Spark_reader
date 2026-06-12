@@ -71,7 +71,7 @@
 - **`TextQuoteSelector`(桥)**——存框选文本及其前后文,用 diff-match-patch 做模糊重定位,几何对不上时靠它救回。
 - **`TextPositionSelector`(仅提示)**——字符偏移只当加速提示,绝不当唯一真相。
 
-详见 `docs/coordinate-spec.md`。
+详见 `docs/20260531_coordinate-spec.md`。
 
 ### 4.2 坐标:只有一个规范空间
 
@@ -83,7 +83,7 @@
 - **坐标真相 = MinerU `middle.json`** 里的 bbox(PDF points)+ page_size,**不是** `content_list.json` 的 0–1000 整数坐标。
 - MinerU `angle≠0` 的旋转块标记为「近似」,不假装精确。
 
-详见 `docs/coordinate-spec.md`。
+详见 `docs/20260531_coordinate-spec.md`。
 
 ### 4.3 引用:统一用 chunk_id,不依赖厂商 Citations
 
@@ -109,7 +109,7 @@
 - embedding **只走外部 OpenAI-compatible provider,不在客户端本地部署模型**。
 - provider 超时/失败时**降级为纯 FTS 文本检索,不阻断**主流程。
 
-详见 `docs/llm-provider.md`、`docs/opencode-agent.md`。
+详见 `docs/20260531_llm-provider.md`、`docs/20260602_opencode-agent.md`。
 
 ## 6. 解析:统一走 MinerU
 
@@ -117,7 +117,7 @@
 
 **理由**:本地解析在论文、扫描件、复杂版式上质量不可控,而坐标和切块质量直接决定后续检索与引用精度。解析结果缓存进本地 SQLite,**不重复消耗 MinerU 配额**。
 
-详见 `docs/mineru-integration.md`。
+详见 `docs/20260531_mineru-integration.md`。
 
 ## 7. 存储
 
@@ -126,8 +126,8 @@
 ## 8. 给同伴的上手建议
 
 1. 先读本文档建立全局观。
-2. 想动坐标/锚点相关代码 → **必读** `docs/coordinate-spec.md`,这里最容易引入隐蔽 bug。
-3. 想动检索/解读 → 读 `docs/llm-provider.md` + `docs/mineru-integration.md`。
+2. 想动坐标/锚点相关代码 → **必读** `docs/20260531_coordinate-spec.md`,这里最容易引入隐蔽 bug。
+3. 想动检索/解读 → 读 `docs/20260531_llm-provider.md` + `docs/20260531_mineru-integration.md`。
 4. 前端唯一入口是 `src-tauri/src/commands.rs` 的 ~40 个 Tauri command,从这里能反查每条数据流。
 5. 改任何带密钥的逻辑前,记住铁律:**密钥只在 Rust,绝不进前端**。
 6. 推送前跑 `pnpm secret-scan`。

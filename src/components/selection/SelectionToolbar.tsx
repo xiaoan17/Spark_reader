@@ -32,7 +32,7 @@ export const SelectionToolbar = forwardRef<HTMLDivElement, SelectionToolbarProps
       ref={ref}
       data-testid="selection-toolbar"
       className={cn(
-        "w-fit rounded-lg border bg-card p-2 text-card-foreground shadow-lg transition-[opacity,transform,box-shadow] duration-subtle ease-reader will-change-transform",
+        "w-fit rounded-md border border-neutral-700 bg-neutral-950 p-1 text-neutral-100 shadow-lg transition-[opacity,transform,box-shadow] duration-subtle ease-reader will-change-transform",
         visible
           ? "pointer-events-auto translate-y-0 scale-100 opacity-100"
           : "pointer-events-none -translate-y-1 scale-95 opacity-0",
@@ -40,43 +40,56 @@ export const SelectionToolbar = forwardRef<HTMLDivElement, SelectionToolbarProps
       )}
       style={style}
     >
-      <div className="flex items-center gap-1">
-        {/* 主操作：唯一 filled primary，眼睛第一落点 */}
+      <div className="flex items-center gap-0.5">
+        {/* 主操作：Spark 深度解读 */}
         <Button
           size="sm"
           disabled={disabled}
+          className="h-7 bg-primary px-2.5 text-xs text-primary-foreground hover:bg-primary/90"
           title="Spark 深度解读：检索全书证据（Cmd/Ctrl+E）"
           onClick={onExplain}
         >
-          <Zap className="mr-1.5 h-4 w-4" />
+          <Zap className="mr-1.5 h-3.5 w-3.5" />
           Spark
         </Button>
         <Button
           size="sm"
           variant="ghost"
           disabled={disabled}
+          className="h-7 px-2.5 text-xs text-neutral-200 hover:bg-white/10 hover:text-white"
           title="轻量解读：快速解释当前选区"
           onClick={onPlainExplain}
         >
           轻量
         </Button>
+        {/* 分隔线 */}
+        <div className="mx-0.5 h-4 w-px bg-white/20" />
+        {onComment ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={disabled}
+            title="批注：把你的 comment 保存为一个 Spark"
+            className="h-7 px-2.5 text-xs text-neutral-200 hover:bg-white/10 hover:text-white"
+            onClick={onComment}
+          >
+            <MessageSquare className="mr-1 h-3.5 w-3.5" />
+            批注
+          </Button>
+        ) : null}
+        {/* 高亮标记 */}
         <Button
           size="sm"
           variant="ghost"
           disabled={disabled}
-          title="批注：把你的 comment 保存为一个 Spark"
-          onClick={onComment}
+          className="h-7 px-2.5 text-xs text-neutral-200 hover:bg-white/10 hover:text-white"
+          onClick={onHighlight}
         >
-          <MessageSquare className="mr-1.5 h-4 w-4" />
-          批注
-        </Button>
-        {/* 次级常用：标记 */}
-        <Button size="sm" variant="ghost" disabled={disabled} onClick={onHighlight}>
-          <Highlighter className="mr-1.5 h-4 w-4" />
+          <Highlighter className="mr-1 h-3.5 w-3.5" />
           标记
         </Button>
         {approximate ? (
-          <Badge variant="secondary" className="ml-1">
+          <Badge variant="secondary" className="ml-1 bg-white/10 text-neutral-200">
             近似
           </Badge>
         ) : null}

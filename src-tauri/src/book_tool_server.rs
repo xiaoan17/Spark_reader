@@ -235,7 +235,9 @@ async fn read_request(
                 // Node's fetch never chunk-encodes our small JSON bodies; refuse rather
                 // than mis-parse.
                 if value.to_ascii_lowercase().contains("chunked") {
-                    return Err(ConnError::BadRequest("chunked transfer-encoding unsupported"));
+                    return Err(ConnError::BadRequest(
+                        "chunked transfer-encoding unsupported",
+                    ));
                 }
             }
             "authorization" => authorization = Some(value.to_string()),

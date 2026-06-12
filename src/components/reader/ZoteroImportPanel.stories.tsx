@@ -63,6 +63,7 @@ export const Searching: Story = {
 export const Importing: Story = {
   args: {
     status: "importing",
+    importingItemKey: "ABCD1234",
     message: "正在从 Zotero 导入《Attention Is All You Need》",
   },
 }

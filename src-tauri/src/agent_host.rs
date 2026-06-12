@@ -222,10 +222,7 @@ fn spawn_sidecar(book_tool_token: String, book_tool_port: u16) -> Result<(), Str
         .spawn()
         .map_err(|err| format!("failed to spawn agent-host: {err}"))?;
 
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or("agent-host stdout unavailable")?;
+    let stdout = child.stdout.take().ok_or("agent-host stdout unavailable")?;
 
     // Read stdout looking for the ready JSON line. Keep reading afterwards so the
     // pipe never fills and blocks the child.

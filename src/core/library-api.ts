@@ -365,6 +365,12 @@ export type MinerUSettings = {
   apiTokenConfigured: boolean
 }
 
+export type MinerUConnectionTestResponse = {
+  baseUrl: string
+  ok: boolean
+  checked: string
+}
+
 export type ZoteroSearchResult = {
   itemKey: string
   title: string
@@ -643,6 +649,10 @@ export async function openBookAsset(bookId: string, kind: BookAssetKind) {
   return invokeCommand<OpenBookAssetResponse>("open_book_asset", { bookId, kind })
 }
 
+export async function openExternalUrl(url: string) {
+  return invokeCommand<void>("open_external_url", { url })
+}
+
 export async function revealBookAsset(bookId: string, kind: BookAssetKind) {
   return invokeCommand<OpenBookAssetResponse>("reveal_book_asset", { bookId, kind })
 }
@@ -734,6 +744,12 @@ export async function getMineruSettings() {
 
 export async function saveMineruSettings(request: SaveMinerUSettingsRequest) {
   return invokeCommand<MinerUSettings>("save_mineru_settings", { request })
+}
+
+export async function testMineruConnectionWithSettings(request: SaveMinerUSettingsRequest) {
+  return invokeCommand<MinerUConnectionTestResponse>("test_mineru_connection_with_settings", {
+    request,
+  })
 }
 
 export async function testEmbeddingConnection() {

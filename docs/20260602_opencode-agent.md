@@ -1,7 +1,7 @@
 # OpenCode Reader Agent
 
 > Status update (2026-06-10): the real wiring described as TODO below is now
-> IMPLEMENTED behind a flag. See `docs/opencode-real-wiring.md` for the shipped
+> IMPLEMENTED behind a flag. See `docs/20260610_opencode-real-wiring.md` for the shipped
 > design + implementation. The book-tool HTTP server (TODO 2 below) now exists at
 > `src-tauri/src/book_tool_server.rs`; Tauri spawns the sidecar (`src-tauri/src/
 > agent_host.rs`); Spark routes through `deep_reader` and translation through a

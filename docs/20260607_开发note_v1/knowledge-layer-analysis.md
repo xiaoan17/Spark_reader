@@ -172,5 +172,5 @@ shiji-kb 和框选精读是**两类不同的产品**：
 ## 附：本方案的产出方法（可复核）
 
 - 并行深读 shiji-kb：`kg/`（实体/事件/关系/家谱/纪年）、`ontology/taxonomy/common-sense`、`wiki/server+scripts` 反思管线、`corpus` 标注体系 + `app/metro` 可视化。
-- 并行深读框选精读：`src-tauri/src/`（storage/interpretation/llm/commands，含确切行号）、`src/core` + `src/components`、`docs/architecture.md`/`tech-stack.md`、`AGENTS.md`/`ROADMAP.md`。
+- 并行深读框选精读：`src-tauri/src/`（storage/interpretation/llm/commands，含确切行号）、`src/core` + `src/components`、`docs/20260603_architecture.md`/`20260531_tech-stack.md`、`AGENTS.md`/`20260531_ROADMAP.md`。
 - 对 34 条候选逐条「怀疑式验证」：每条都对照当前真实代码判断 feasible / effort / 落点 / 风险，默认对「过度工程」保持怀疑。**34 → 7** 的收敛比例本身就是结论：shiji-kb 真正可借的是少数工程纪律，多数耀眼能力是单书人工策展的产物。

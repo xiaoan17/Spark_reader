@@ -74,7 +74,8 @@ describe("InterpretationCard citations", () => {
     expect(html).not.toContain("相关段落")
     expect(html).not.toContain(`[${chunkA}]`)
     expect(html).not.toContain(`[${chunkB}]`)
-    expect(html).toContain("部分引用未核验")
+    expect(html).toContain("部分引用未核验，已保留可点击的有效引用。")
+    expect(html).not.toContain("接地")
   })
 
   it("renders markdown structure in interpretation answers", () => {
@@ -174,11 +175,38 @@ describe("InterpretationCard citations", () => {
       />,
     )
 
-    expect(html).toContain("Spark")
+    expect(html).not.toContain(">Spark<")
     expect(html).toContain("你 · 追问 1")
     expect(html).toContain("这是首轮解读")
     expect(html).toContain("为什么强调长期")
     expect(html).toContain("因为时间会放大差异")
+  })
+
+  it("keeps normal answers focused on content instead of implementation status", () => {
+    const html = renderToStaticMarkup(
+      <InterpretationCard
+        phase="reading"
+        selectionText="复利来自长期坚持"
+        selectionRects={[]}
+        evidence={[{ chunkId: chunkA, title: `Chunk ${chunkA}`, pageIndex: 0 }]}
+        interpretation={`这是首轮解读。[${chunkA}]`}
+        followUps={[]}
+      />,
+    )
+
+    expect(html).toContain("reader-panel-text")
+    expect(html).toContain("reader-panel-input-bar")
+    expect(html).toContain("reader-panel-input")
+    expect(html).toContain("reader-panel-button")
+    expect(html).not.toContain(">Spark<")
+    expect(html).not.toContain("全部引用可核验")
+    expect(html).not.toContain("接地")
+    expect(html).not.toContain(">LLM<")
+    expect(html).not.toContain("bg-background")
+    expect(html).not.toContain("bg-card")
+    expect(html).not.toContain("bg-muted ")
+    expect(html).not.toContain("bg-muted/")
+    expect(html).not.toContain("hover:bg-accent")
   })
 
   it("offers one-click follow-up prompts that submit the picked question", async () => {

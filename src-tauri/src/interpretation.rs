@@ -231,11 +231,7 @@ fn representative_tldr_hits(structure: &[storage::SearchHit]) -> Vec<&storage::S
 }
 
 fn clean_tldr_text(text: &str) -> String {
-    let compact = text
-        .lines()
-        .map(str::trim)
-        .collect::<Vec<_>>()
-        .join("\n");
+    let compact = text.lines().map(str::trim).collect::<Vec<_>>().join("\n");
     let normalized = compact
         .split("\n\n")
         .map(|paragraph| {
@@ -2305,17 +2301,11 @@ mod opencode_session {
                 return Err(OpencodeInterpretError::Http("session timeout".to_string()));
             }
 
-            let next = tokio::time::timeout(
-                std::time::Duration::from_secs(5),
-                stream.next(),
-            )
-            .await;
+            let next = tokio::time::timeout(std::time::Duration::from_secs(5), stream.next()).await;
             let chunk = match next {
                 Ok(Some(Ok(chunk))) => chunk,
-                Ok(Some(Err(err))) => {
-                    return Err(OpencodeInterpretError::Http(err.to_string()))
-                }
-                Ok(None) => break, // stream ended
+                Ok(Some(Err(err))) => return Err(OpencodeInterpretError::Http(err.to_string())),
+                Ok(None) => break,  // stream ended
                 Err(_) => continue, // 5s poll tick; re-check cancel/timeout
             };
             pending.push_str(&String::from_utf8_lossy(&chunk));
@@ -2418,8 +2408,10 @@ mod opencode_session {
         }
 
         let evidence = rank_evidence(by_id.into_values().collect(), request);
-        let evidence: Vec<EvidenceItem> =
-            evidence.into_iter().take(MAX_SYNTHESIS_EVIDENCE_CHUNKS).collect();
+        let evidence: Vec<EvidenceItem> = evidence
+            .into_iter()
+            .take(MAX_SYNTHESIS_EVIDENCE_CHUNKS)
+            .collect();
 
         // 5) Re-ground citations in Rust: OpenCode's citations are not trusted.
         let answer = enforce_grounded_citations(&answer, request, &evidence);
@@ -2457,7 +2449,11 @@ mod opencode_session {
         if let Some(question) = request.question.as_deref().filter(|q| !q.trim().is_empty()) {
             parts.push(format!("用户追问：{question}"));
         }
-        if let Some(prior) = request.prior_answer.as_deref().filter(|a| !a.trim().is_empty()) {
+        if let Some(prior) = request
+            .prior_answer
+            .as_deref()
+            .filter(|a| !a.trim().is_empty())
+        {
             parts.push(format!(
                 "上一轮回答（供延续，不要重复）：\n{}",
                 trim_for_prompt(prior, 800)
@@ -2625,7 +2621,10 @@ mod opencode_session {
     fn sse_data_payloads(raw_event: &str) -> Vec<String> {
         raw_event
             .lines()
-            .filter_map(|line| line.strip_prefix("data:").map(|rest| rest.trim().to_string()))
+            .filter_map(|line| {
+                line.strip_prefix("data:")
+                    .map(|rest| rest.trim().to_string())
+            })
             .collect()
     }
 
