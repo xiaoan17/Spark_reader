@@ -1,7 +1,7 @@
 # 技术栈(Tech Stack)
 
 > 一句话:**Tauri v2(Rust 核心)+ React/TS/shadcn 前端 + pdf.js 渲染 + MinerU 解析 + SQLite 文本/向量索引 + 多 provider LLM 解读**
-> 选型依据见 `20260531_PLANNING.md` §8 与经事实核查的风险表;MinerU 已端到端实测通过(见 `docs/20260531_mineru-integration.md`)。
+> 选型依据见 `_internal/[finish]20260531_PLANNING.md` §8 与经事实核查的风险表;MinerU 已端到端实测通过(见 `docs/[todo]20260531_mineru-integration.md`)。
 
 ---
 
@@ -20,7 +20,7 @@
 | 本地数据库 | **SQLite**(`rusqlite`) | — | 书/高亮/锚点/解析缓存/解读历史 |
 | 检索索引 | **SQLite FTS5** + provider 向量表 | `rusqlite`;向量存 provider/model/dim | 文本检索可离线;向量只来自外部 embedding provider;防混用;provider 超时/失败不阻断 FTS |
 | Embedding | **外部 provider**(OpenAI-compatible `/embeddings`) | `.env` 后端读取: `EMBEDDING_*` | 用户提供 provider 数据;客户端不本地部署/下载 embedding 模型 |
-| LLM 编排 | **多 provider 可配置**:DeepSeek(默认)/OpenAI/Anthropic | OpenAI 兼容适配器(DeepSeek+OpenAI 共用)+ Anthropic 独立;统一 chunk_id 引用 | 可切换;DeepSeek 已实测;详见 `docs/20260531_llm-provider.md` |
+| LLM 编排 | **多 provider 可配置**:DeepSeek(默认)/OpenAI/Anthropic | OpenAI 兼容适配器(DeepSeek+OpenAI 共用)+ Anthropic 独立;统一 chunk_id 引用 | 可切换;DeepSeek 已实测;详见 `docs/[todo]20260531_llm-provider.md` |
 | 锚点 | `apache-annotator` + `diff-match-patch` | — | 几何为真相、引用为桥 |
 
 ---

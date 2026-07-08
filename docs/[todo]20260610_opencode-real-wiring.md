@@ -1,8 +1,15 @@
 # OpenCode 真接线设计：翻译 + Spark 迁移
 
+> **DEPRECATED (2026-07-07): 本文描述的 OpenCode 接线已整体替换为 Codex。**
+> 替换后架构:Rust 直接 spawn `codex exec --json`(per-request,无常驻 sidecar),
+> book 工具经 `book_tool_server.rs` 的 /mcp 端点(streamable HTTP MCP)直连,
+> Node agent-host 已删除。回退链 codex → rust → deterministic 保持不变。
+> 见 `docs/[todo]20260707_稳健化-Obsidian-Agent引擎计划.md`。本文保留作历史参考——
+> 其中 book-tool server 的设计与三个对抗验证坑仍然有效。
+
 > 状态：**已落地（2026-06-10）**，默认关闭、可一键启用、失败自动回退 Rust。本文既是设计蓝图也是实现记录。
-> 与 `docs/20260602_opencode-agent.md` 的关系：那篇描述了 host 的隔离/provider/agent 契约（边界规范）；本文给出**真正接线的工程方案、接口、数据流和落地结果**，并修正它遗漏的架构张力。
-> 配套阅读：`docs/20260609_translation-and-spark-implementation.md`（当前真实代码路径）、`docs/20260531_llm-provider.md`、`docs/20260531_coordinate-spec.md`。
+> 与 `docs/[todo]20260602_opencode-agent.md` 的关系：那篇描述了 host 的隔离/provider/agent 契约（边界规范）；本文给出**真正接线的工程方案、接口、数据流和落地结果**，并修正它遗漏的架构张力。
+> 配套阅读：`docs/[todo]20260609_translation-and-spark-implementation.md`（当前真实代码路径）、`docs/[todo]20260531_llm-provider.md`、`docs/[finish]20260531_coordinate-spec.md`。
 
 ## 落地状态（已实现）
 
@@ -246,7 +253,7 @@ translate_via_opencode:
   7. 解析失败的页标 status=failed 保留 error（不污染缓存）
 ```
 
-**不变量（对齐 docs 铁律 + 20260602_opencode-agent.md）**：
+**不变量（对齐 docs 铁律 + [todo]20260602_opencode-agent.md）**：
 - 译文选区仍映射回原文 chunk（`TranslationReader.tsx` 逻辑不变）；译文永不作为 Spark 证据。
 - 输出必须保留 `[[B###]]` 或等价确定性块映射，否则该页判失败。
 - 沙箱一次性：翻译完成后可清理；绝不写用户全局 `~/.config/opencode`。
@@ -341,4 +348,4 @@ cargo test --manifest-path src-tauri/Cargo.toml   # book_tool_server 单测
 - `core/agent-task/opencode-runner.ts`：`createAgentTaskRunner` 守卫切换 + 路由校验。
 - `App.tsx`：runner 注入用 host url。
 
-**文档/记忆**：本文、`20260602_opencode-agent.md` 状态更新、记忆更新。
+**文档/记忆**：本文、`docs/[todo]20260602_opencode-agent.md` 状态更新、记忆更新。

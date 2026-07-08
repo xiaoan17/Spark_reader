@@ -58,7 +58,7 @@ EMBEDDING_BATCH_SIZE=64         # 可选;provider 限流/超时时会自动减�
 ```
 DB 存 `provider/model + dimension`;切换 provider 或模型必须重建整本索引,绝不混用向量。
 
-**设置 UI**(接 `20260531_UI-UX.md`):设置页用 provider 预设按钮选择 DeepSeek / OpenAI / Anthropic,`Input`(密码态)填 key,高级模式可分别编辑每个 provider 的 `Base URL` 和 `Model`,`Button` 测试当前界面配置。切换 provider 时保留各自草稿和已保存配置;保存后即时生效。
+**设置 UI**(接 `[finish]20260531_UI-UX.md`):设置页用 provider 预设按钮选择 DeepSeek / OpenAI / Anthropic,`Input`(密码态)填 key,高级模式可分别编辑每个 provider 的 `Base URL` 和 `Model`,`Button` 测试当前界面配置。切换 provider 时保留各自草稿和已保存配置;保存后即时生效。
 
 **自定义接入规则**:
 - DeepSeek / OpenAI 走 OpenAI-compatible Chat Completions,后端会把 `Base URL` 拼成 `{base_url}/chat/completions`。
@@ -101,7 +101,7 @@ DB 存 `provider/model + dimension`;切换 provider 或模型必须重建整本�
 
 ## 6. agentic RAG 循环(provider 无关版)
 
-对齐 `20260531_PLANNING.md` §5,但工具循环写成 provider 无关:
+对齐 `_internal/[finish]20260531_PLANNING.md` §5,但工具循环写成 provider 无关:
 
 ```
 Plan(可选 thinking)→ 分解焦点段落为子问题

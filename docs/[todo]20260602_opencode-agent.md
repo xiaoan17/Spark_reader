@@ -1,7 +1,13 @@
 # OpenCode Reader Agent
 
+> **DEPRECATED (2026-07-07): OpenCode 已整体替换为 Codex。**
+> agent-host Node sidecar 与 OpenCode 依赖已从仓库移除。当前引擎:per-request
+> `codex exec` + book-tool MCP 端点(`src-tauri/src/book_tool_server.rs` /mcp,
+> `src-tauri/src/codex_exec.rs`)。见 `docs/[todo]20260707_稳健化-Obsidian-Agent引擎计划.md` C 节。
+> 本文仅保留作历史设计参考。
+
 > Status update (2026-06-10): the real wiring described as TODO below is now
-> IMPLEMENTED behind a flag. See `docs/20260610_opencode-real-wiring.md` for the shipped
+> IMPLEMENTED behind a flag. See `docs/[todo]20260610_opencode-real-wiring.md` for the shipped
 > design + implementation. The book-tool HTTP server (TODO 2 below) now exists at
 > `src-tauri/src/book_tool_server.rs`; Tauri spawns the sidecar (`src-tauri/src/
 > agent_host.rs`); Spark routes through `deep_reader` and translation through a
