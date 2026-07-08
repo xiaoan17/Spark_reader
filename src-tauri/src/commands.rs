@@ -280,6 +280,11 @@ pub fn save_mineru_settings(
 }
 
 #[command]
+pub fn secret_storage_status() -> CommandResult<crate::config::SecretStorageStatus> {
+    crate::config::secret_storage_status().map_err(command_error)
+}
+
+#[command]
 pub async fn product_self_check(
     app: AppHandle,
 ) -> CommandResult<product_self_check::ProductSelfCheckResponse> {

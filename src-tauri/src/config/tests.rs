@@ -1,4 +1,25 @@
     use super::*;
+    use std::sync::Arc;
+
+    /// 每个碰密钥的测试都装一个全新的内存 store,并在 drop 时清除——**绝不触碰真实系统
+    /// 钥匙串**,且测试之间互不串味。
+    struct SecretStoreGuard {
+        store: Arc<MemorySecretStore>,
+    }
+
+    impl SecretStoreGuard {
+        fn install() -> Self {
+            let store = Arc::new(MemorySecretStore::default());
+            set_override_secret_store(store.clone());
+            Self { store }
+        }
+    }
+
+    impl Drop for SecretStoreGuard {
+        fn drop(&mut self) {
+            clear_override_secret_store();
+        }
+    }
 
     fn config_dir(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
@@ -30,6 +51,7 @@
     #[test]
     fn embedding_settings_roundtrip_and_config_loads() {
         let _guard = crate::TEST_ENV_LOCK.lock().expect("env lock");
+        let secret = SecretStoreGuard::install();
         let dir = config_dir("embedding-roundtrip");
         let _ = fs::remove_dir_all(&dir);
         env::set_var("FOCUSED_READING_CONFIG_DIR", &dir);
@@ -61,10 +83,17 @@
         assert_eq!(config.model, "Qwen/Qwen3-Embedding-4B");
         assert_eq!(config.expected_dimension, Some(2560));
         assert_eq!(config.api_key, "test-key");
-        assert!(fs::read_to_string(&env_path)
-            .expect("dotenv should exist")
-            .contains("EMBEDDING_API_KEY=test-key"));
-        assert_dotenv_permissions_are_private(&env_path);
+        assert_eq!(
+            secret.store.get("EMBEDDING_API_KEY").as_deref(),
+            Some("test-key"),
+            "key must land in the keychain, not .env"
+        );
+        if let Ok(dotenv) = fs::read_to_string(&env_path) {
+            assert!(
+                !dotenv.contains("test-key"),
+                ".env must never hold the plaintext key"
+            );
+        }
         assert!(
             !fs::read_to_string(dir.join("llm-settings.json"))
                 .expect("settings should exist")
@@ -81,6 +110,7 @@
     #[test]
     fn embedding_settings_are_prefilled_from_provider_defaults() {
         let _guard = crate::TEST_ENV_LOCK.lock().expect("env lock");
+        let _secret = SecretStoreGuard::install();
         let dir = config_dir("embedding-defaults");
         let _ = fs::remove_dir_all(&dir);
         env::set_var("FOCUSED_READING_CONFIG_DIR", &dir);
@@ -112,6 +142,7 @@
     #[test]
     fn embedding_dimension_accepts_expected_dim_alias() {
         let _guard = crate::TEST_ENV_LOCK.lock().expect("env lock");
+        let _secret = SecretStoreGuard::install();
         let dir = config_dir("embedding-dimension-alias");
         let _ = fs::remove_dir_all(&dir);
         env::set_var("FOCUSED_READING_CONFIG_DIR", &dir);
@@ -159,6 +190,7 @@
     #[test]
     fn settings_save_works_when_current_dir_is_read_only() {
         let _guard = crate::TEST_ENV_LOCK.lock().expect("env lock");
+        let _secret = SecretStoreGuard::install();
         let previous_home = env::var_os("HOME");
         let previous_dir = env::current_dir().expect("current dir");
         let dir = config_dir("readonly-cwd");
@@ -220,6 +252,7 @@
     #[test]
     fn old_settings_json_without_embedding_field_still_loads() {
         let _guard = crate::TEST_ENV_LOCK.lock().expect("env lock");
+        let _secret = SecretStoreGuard::install();
         let dir = config_dir("legacy-json");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("config dir");
@@ -248,8 +281,9 @@
     }
 
     #[test]
-    fn llm_settings_save_key_to_dotenv_not_json() {
+    fn llm_settings_save_key_to_keychain_not_json_or_dotenv() {
         let _guard = crate::TEST_ENV_LOCK.lock().expect("env lock");
+        let secret = SecretStoreGuard::install();
         let dir = config_dir("llm-secret-dotenv");
         let _ = fs::remove_dir_all(&dir);
         env::set_var("FOCUSED_READING_CONFIG_DIR", &dir);
@@ -265,9 +299,14 @@
         .expect("settings should save");
         assert!(saved.api_key_configured);
 
-        let dotenv = fs::read_to_string(&env_path).expect("dotenv should exist");
-        assert!(dotenv.contains("DEEPSEEK_API_KEY=deepseek-test-key"));
-        assert_dotenv_permissions_are_private(&env_path);
+        assert_eq!(
+            secret.store.get("DEEPSEEK_API_KEY").as_deref(),
+            Some("deepseek-test-key"),
+            "key must land in the keychain"
+        );
+        if let Ok(dotenv) = fs::read_to_string(&env_path) {
+            assert!(!dotenv.contains("deepseek-test-key"));
+        }
         let json = fs::read_to_string(dir.join("llm-settings.json")).expect("settings JSON");
         assert!(!json.contains("deepseek-test-key"));
         assert!(json.contains("deepseek-v4-flash"));
@@ -285,6 +324,7 @@
     #[test]
     fn llm_settings_roundtrip_custom_openai_compatible_provider() {
         let _guard = crate::TEST_ENV_LOCK.lock().expect("env lock");
+        let secret = SecretStoreGuard::install();
         let dir = config_dir("llm-openai-compatible");
         let _ = fs::remove_dir_all(&dir);
         env::set_var("FOCUSED_READING_CONFIG_DIR", &dir);
@@ -327,8 +367,14 @@
         assert_eq!(config.api_key, "openai-compatible-key");
         assert_eq!(config.base_url, "https://gateway.example.com/openai/v1");
         assert_eq!(config.model, "custom-openai-model");
-        let dotenv = fs::read_to_string(&env_path).expect("dotenv should exist");
-        assert!(dotenv.contains("OPENAI_API_KEY=openai-compatible-key"));
+        assert_eq!(
+            secret.store.get("OPENAI_API_KEY").as_deref(),
+            Some("openai-compatible-key"),
+            "key must land in the keychain"
+        );
+        if let Ok(dotenv) = fs::read_to_string(&env_path) {
+            assert!(!dotenv.contains("openai-compatible-key"));
+        }
         let json = fs::read_to_string(dir.join("llm-settings.json")).expect("settings JSON");
         assert!(json.contains("https://gateway.example.com/openai/v1"));
         assert!(!json.contains("openai-compatible-key"));
@@ -342,6 +388,7 @@
     #[test]
     fn llm_config_from_request_uses_unsaved_anthropic_draft() {
         let _guard = crate::TEST_ENV_LOCK.lock().expect("env lock");
+        let _secret = SecretStoreGuard::install();
         let dir = config_dir("llm-unsaved-anthropic-draft");
         let _ = fs::remove_dir_all(&dir);
         env::set_var("FOCUSED_READING_CONFIG_DIR", &dir);
@@ -374,8 +421,9 @@
     }
 
     #[test]
-    fn mineru_settings_save_token_to_dotenv_not_json() {
+    fn mineru_settings_save_token_to_keychain_not_json_or_dotenv() {
         let _guard = crate::TEST_ENV_LOCK.lock().expect("env lock");
+        let secret = SecretStoreGuard::install();
         let dir = config_dir("mineru-token-dotenv");
         let _ = fs::remove_dir_all(&dir);
         env::set_var("FOCUSED_READING_CONFIG_DIR", &dir);
@@ -391,9 +439,14 @@
 
         assert_eq!(saved.base_url, "https://mineru.net");
         assert!(saved.api_token_configured);
-        let dotenv = fs::read_to_string(&env_path).expect("dotenv should exist");
-        assert!(dotenv.contains("MINERU_API_TOKEN=mineru-test-token"));
-        assert_dotenv_permissions_are_private(&env_path);
+        assert_eq!(
+            secret.store.get("MINERU_API_TOKEN").as_deref(),
+            Some("mineru-test-token"),
+            "token must land in the keychain"
+        );
+        if let Ok(dotenv) = fs::read_to_string(&env_path) {
+            assert!(!dotenv.contains("mineru-test-token"));
+        }
         let json = fs::read_to_string(dir.join("llm-settings.json")).expect("settings JSON");
         assert!(json.contains("https://mineru.net"));
         assert!(!json.contains("mineru-test-token"));
@@ -411,6 +464,7 @@
     #[test]
     fn mineru_config_from_request_uses_unsaved_draft_without_persisting() {
         let _guard = crate::TEST_ENV_LOCK.lock().expect("env lock");
+        let _secret = SecretStoreGuard::install();
         let dir = config_dir("mineru-draft-config");
         let _ = fs::remove_dir_all(&dir);
         env::set_var("FOCUSED_READING_CONFIG_DIR", &dir);
@@ -438,15 +492,16 @@
     }
 
     #[test]
-    fn legacy_json_keys_are_migrated_to_dotenv_and_scrubbed() {
+    fn legacy_json_keys_are_migrated_to_keychain_and_scrubbed() {
         let _guard = crate::TEST_ENV_LOCK.lock().expect("env lock");
+        let secret = SecretStoreGuard::install();
         let dir = config_dir("legacy-secret-migration");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("config dir");
         env::set_var("FOCUSED_READING_CONFIG_DIR", &dir);
         env::remove_var("DEEPSEEK_API_KEY");
         env::remove_var("EMBEDDING_API_KEY");
-        let env_path = isolated_env_path(&dir);
+        let _env_path = isolated_env_path(&dir);
         fs::write(
             dir.join("llm-settings.json"),
             r#"{
@@ -461,10 +516,15 @@
 
         let settings = get_embedding_settings().expect("settings should load");
         assert!(settings.api_key_configured);
-        let dotenv = fs::read_to_string(&env_path).expect("dotenv should exist");
-        assert!(dotenv.contains("DEEPSEEK_API_KEY=legacy-deepseek-key"));
-        assert!(dotenv.contains("EMBEDDING_API_KEY=legacy-embedding-key"));
-        assert_dotenv_permissions_are_private(&env_path);
+        assert_eq!(
+            secret.store.get("DEEPSEEK_API_KEY").as_deref(),
+            Some("legacy-deepseek-key"),
+            "legacy JSON key must migrate into the keychain"
+        );
+        assert_eq!(
+            secret.store.get("EMBEDDING_API_KEY").as_deref(),
+            Some("legacy-embedding-key")
+        );
         let json = fs::read_to_string(dir.join("llm-settings.json")).expect("settings JSON");
         assert!(!json.contains("legacy-deepseek-key"));
         assert!(!json.contains("legacy-embedding-key"));
@@ -490,3 +550,236 @@
 
     #[cfg(not(unix))]
     fn assert_dotenv_permissions_are_private(_path: &Path) {}
+
+    fn location_of<'a>(status: &'a SecretStorageStatus, name: &str) -> &'a SecretLocation {
+        &status
+            .items
+            .iter()
+            .find(|item| item.name == name)
+            .unwrap_or_else(|| panic!("status must include {name}"))
+            .location
+    }
+
+    #[test]
+    fn dotenv_plaintext_migrates_to_keychain_and_is_idempotent() {
+        let _guard = crate::TEST_ENV_LOCK.lock().expect("env lock");
+        let secret = SecretStoreGuard::install();
+        let dir = config_dir("secret-migration-live-path");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("config dir");
+        for key in SECRET_KEYS {
+            env::remove_var(key);
+        }
+        env::remove_var("EMBEDDING_PROVIDER");
+        env::remove_var("MINERU_BASE_URL");
+        env::set_var("FOCUSED_READING_CONFIG_DIR", &dir);
+        let env_path = isolated_env_path(&dir);
+        fs::write(
+            &env_path,
+            "# focused-reading secrets\n\
+             MINERU_BASE_URL=https://mineru.net\n\
+             DEEPSEEK_API_KEY=real-deepseek-plaintext\n\
+             EMBEDDING_PROVIDER=siliconflow\n",
+        )
+        .expect("seed .env");
+
+        let outcome = migrate_dotenv_secrets_to_keychain().expect("migration should run");
+        assert!(outcome.migrated_now, "a real plaintext key must migrate");
+
+        // 1) 明文进了钥匙串
+        assert_eq!(
+            secret.store.get("DEEPSEEK_API_KEY").as_deref(),
+            Some("real-deepseek-plaintext")
+        );
+        // 2) .env 该行变占位,其它行原样保留
+        let dotenv = fs::read_to_string(&env_path).expect("dotenv should exist");
+        assert!(dotenv.contains("DEEPSEEK_API_KEY=moved-to-keychain"));
+        assert!(!dotenv.contains("real-deepseek-plaintext"));
+        assert!(dotenv.contains("# focused-reading secrets"));
+        assert!(dotenv.contains("MINERU_BASE_URL=https://mineru.net"));
+        assert!(dotenv.contains("EMBEDDING_PROVIDER=siliconflow"));
+        assert_dotenv_permissions_are_private(&env_path);
+        // 3) 读取顺序:钥匙串命中,拿回原值(占位不外泄)
+        assert_eq!(
+            resolve_secret("DEEPSEEK_API_KEY").as_deref(),
+            Some("real-deepseek-plaintext")
+        );
+        // 4) 状态命令:该项在钥匙串,历史迁移标记为真
+        let status = secret_storage_status().expect("status");
+        assert_eq!(location_of(&status, "DEEPSEEK_API_KEY"), &SecretLocation::Keychain);
+        assert!(status.had_plaintext_migration);
+
+        // 5) 幂等:再迁一次不动占位,不重复迁移
+        let again = migrate_dotenv_secrets_to_keychain().expect("second migration");
+        assert!(!again.migrated_now, "placeholder must not migrate again");
+        let dotenv_again = fs::read_to_string(&env_path).expect("dotenv should exist");
+        assert_eq!(dotenv, dotenv_again, ".env must be untouched on the idempotent run");
+
+        let _ = fs::remove_dir_all(&dir);
+        env::remove_var("FOCUSED_READING_CONFIG_DIR");
+        env::remove_var("FOCUSED_READING_ENV_PATH");
+        for key in SECRET_KEYS {
+            env::remove_var(key);
+        }
+        env::remove_var("EMBEDDING_PROVIDER");
+        env::remove_var("MINERU_BASE_URL");
+    }
+
+    #[test]
+    fn resolve_secret_prefers_keychain_then_env_then_none() {
+        let _guard = crate::TEST_ENV_LOCK.lock().expect("env lock");
+        let secret = SecretStoreGuard::install();
+        env::remove_var("DEEPSEEK_API_KEY");
+
+        // 钥匙串优先于 .env / 进程环境
+        secret
+            .store
+            .set("DEEPSEEK_API_KEY", "from-keychain")
+            .expect("seed keychain");
+        env::set_var("DEEPSEEK_API_KEY", "from-env-plaintext");
+        assert_eq!(
+            resolve_secret("DEEPSEEK_API_KEY").as_deref(),
+            Some("from-keychain")
+        );
+
+        // 钥匙串没有、.env 是占位 → 视为未配置
+        secret
+            .store
+            .delete("DEEPSEEK_API_KEY")
+            .expect("clear keychain");
+        env::set_var("DEEPSEEK_API_KEY", KEYCHAIN_PLACEHOLDER);
+        assert_eq!(resolve_secret("DEEPSEEK_API_KEY"), None);
+
+        // 钥匙串没有、.env 是真实明文 → 回退到明文(兼容旧布局/源码用户)
+        env::set_var("DEEPSEEK_API_KEY", "from-env-plaintext");
+        assert_eq!(
+            resolve_secret("DEEPSEEK_API_KEY").as_deref(),
+            Some("from-env-plaintext")
+        );
+
+        // 三处都没有 → None
+        env::remove_var("DEEPSEEK_API_KEY");
+        assert_eq!(resolve_secret("DEEPSEEK_API_KEY"), None);
+    }
+
+    #[test]
+    fn secret_storage_status_reports_each_location() {
+        let _guard = crate::TEST_ENV_LOCK.lock().expect("env lock");
+        let secret = SecretStoreGuard::install();
+        let dir = config_dir("secret-status");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("config dir");
+        for key in SECRET_KEYS {
+            env::remove_var(key);
+        }
+        env::set_var("FOCUSED_READING_CONFIG_DIR", &dir);
+        let env_path = isolated_env_path(&dir);
+        fs::write(
+            &env_path,
+            "OPENAI_API_KEY=openai-plaintext\nANTHROPIC_API_KEY=moved-to-keychain\n",
+        )
+        .expect("seed .env");
+        secret
+            .store
+            .set("DEEPSEEK_API_KEY", "in-keychain")
+            .expect("seed keychain");
+
+        let status = secret_storage_status().expect("status");
+        assert_eq!(location_of(&status, "DEEPSEEK_API_KEY"), &SecretLocation::Keychain);
+        assert_eq!(location_of(&status, "OPENAI_API_KEY"), &SecretLocation::EnvPlaintext);
+        assert_eq!(
+            location_of(&status, "ANTHROPIC_API_KEY"),
+            &SecretLocation::Placeholder
+        );
+        assert_eq!(location_of(&status, "MINERU_API_TOKEN"), &SecretLocation::Absent);
+        assert_eq!(location_of(&status, "EMBEDDING_API_KEY"), &SecretLocation::Absent);
+        assert!(!status.had_plaintext_migration);
+
+        let _ = fs::remove_dir_all(&dir);
+        env::remove_var("FOCUSED_READING_CONFIG_DIR");
+        env::remove_var("FOCUSED_READING_ENV_PATH");
+        for key in SECRET_KEYS {
+            env::remove_var(key);
+        }
+    }
+
+    /// 真实系统钥匙串冒烟(仿 mcp_codex_live_smoke 惯例,默认忽略)。**用唯一的一次性
+    /// account 名**,绝不碰生产密钥项;结束即清理。
+    ///
+    /// 运行:`cargo test --lib real_keychain_round_trip -- --ignored --test-threads=1`
+    #[test]
+    #[ignore = "touches the real system keychain; run manually"]
+    fn real_keychain_round_trip() {
+        let _guard = crate::TEST_ENV_LOCK.lock().expect("env lock");
+        set_override_secret_store(Arc::new(KeyringSecretStore));
+        let store = active_secret_store();
+        let account = "FOCUSED_READING_KEYCHAIN_LIVE_SMOKE";
+        let _ = store.delete(account);
+
+        store.set(account, "live-smoke-value").expect("write keychain");
+        assert_eq!(store.get(account).as_deref(), Some("live-smoke-value"));
+        store.delete(account).expect("cleanup keychain");
+        assert_eq!(store.get(account), None);
+
+        clear_override_secret_store();
+    }
+
+    /// 真机端到端迁移冒烟:含真实 key 的 .env → 迁入**真实钥匙串** → `security
+    /// find-generic-password` 能查到 → .env 变占位 → 读取返回原值 → 清理。默认忽略。
+    ///
+    /// 运行:`cargo test --lib live_env_migration_round_trip -- --ignored --test-threads=1`
+    #[test]
+    #[ignore = "touches the real system keychain; run manually"]
+    #[cfg(target_os = "macos")]
+    fn live_env_migration_round_trip() {
+        let _guard = crate::TEST_ENV_LOCK.lock().expect("env lock");
+        set_override_secret_store(Arc::new(KeyringSecretStore));
+        let store = active_secret_store();
+        let _ = store.delete("DEEPSEEK_API_KEY");
+
+        let dir = config_dir("live-env-migration");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("config dir");
+        for key in SECRET_KEYS {
+            env::remove_var(key);
+        }
+        env::set_var("FOCUSED_READING_CONFIG_DIR", &dir);
+        let env_path = isolated_env_path(&dir);
+        let secret_value = format!("live-migration-secret-{}", std::process::id());
+        fs::write(&env_path, format!("DEEPSEEK_API_KEY={secret_value}\n")).expect("seed .env");
+
+        let outcome = migrate_dotenv_secrets_to_keychain().expect("migration should run");
+        assert!(outcome.migrated_now);
+
+        // 真实钥匙串读回
+        assert_eq!(store.get("DEEPSEEK_API_KEY").as_deref(), Some(secret_value.as_str()));
+        // security CLI 能查到
+        let cli = std::process::Command::new("security")
+            .args([
+                "find-generic-password",
+                "-s",
+                "com.anbc.focused-reading",
+                "-a",
+                "DEEPSEEK_API_KEY",
+                "-w",
+            ])
+            .output()
+            .expect("run security");
+        assert!(cli.status.success(), "security must find the entry");
+        assert_eq!(String::from_utf8_lossy(&cli.stdout).trim(), secret_value);
+        // .env 变占位;读取顺序返回原值
+        let dotenv = fs::read_to_string(&env_path).expect("dotenv");
+        assert!(dotenv.contains("DEEPSEEK_API_KEY=moved-to-keychain"));
+        assert!(!dotenv.contains(&secret_value));
+        assert_eq!(resolve_secret("DEEPSEEK_API_KEY").as_deref(), Some(secret_value.as_str()));
+
+        // 清理
+        store.delete("DEEPSEEK_API_KEY").expect("cleanup keychain");
+        let _ = fs::remove_dir_all(&dir);
+        env::remove_var("FOCUSED_READING_CONFIG_DIR");
+        env::remove_var("FOCUSED_READING_ENV_PATH");
+        for key in SECRET_KEYS {
+            env::remove_var(key);
+        }
+        clear_override_secret_store();
+    }

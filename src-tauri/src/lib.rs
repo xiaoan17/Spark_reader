@@ -28,6 +28,14 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            // 启动即把 .env 中的明文密钥迁入系统钥匙串(幂等)。失败不致命,仅记录。
+            match config::migrate_dotenv_secrets_to_keychain() {
+                Ok(outcome) if outcome.migrated_now => {
+                    eprintln!("migrated plaintext secrets from .env into the system keychain");
+                }
+                Ok(_) => {}
+                Err(err) => eprintln!("secret keychain migration skipped: {err}"),
+            }
             // Resolve the library db path once and hand it to the agent-host
             // supervisor, which starts the book-tool HTTP/MCP server and probes
             // the Codex engine.
@@ -102,6 +110,7 @@ pub fn run() {
             commands::save_mineru_settings,
             commands::save_obsidian_settings,
             commands::search_book,
+            commands::secret_storage_status,
             commands::search_index_summary,
             commands::search_knowledge,
             commands::search_zotero_items,

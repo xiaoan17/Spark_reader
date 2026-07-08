@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     env, fs,
     path::{Path, PathBuf},
 };
@@ -13,6 +13,15 @@ use std::os::unix::fs::PermissionsExt;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+mod secret_store;
+
+use secret_store::active_secret_store;
+#[cfg(test)]
+use secret_store::{
+    clear_override_secret_store, set_override_secret_store, KeyringSecretStore, MemorySecretStore,
+    SecretStore,
+};
+
 const DEFAULT_EMBEDDING_PROVIDER: &str = "siliconflow";
 const DEFAULT_EMBEDDING_BASE_URL: &str = "https://api.siliconflow.cn/v1/embeddings";
 const DEFAULT_EMBEDDING_MODEL: &str = "Qwen/Qwen3-Embedding-4B";
@@ -23,6 +32,19 @@ const MAX_EMBEDDING_BATCH_SIZE: usize = 256;
 const APP_CONFIG_DIR_NAME: &str = "com.anbc.focused-reading";
 const SETTINGS_FILE_NAME: &str = "llm-settings.json";
 const DOTENV_FILE_NAME: &str = ".env";
+
+/// `.env` 中敏感项迁入钥匙串后留下的占位值。占位不再被迁移(幂等),读取时视为未配置。
+pub const KEYCHAIN_PLACEHOLDER: &str = "moved-to-keychain";
+
+/// 所有由后端管理、绝不进前端的敏感项(环境变量名)。非敏感配置(开关 / URL / 模型名)
+/// 继续留在 `.env` / settings.json,不在此列。
+const SECRET_KEYS: [&str; 5] = [
+    "MINERU_API_TOKEN",
+    "DEEPSEEK_API_KEY",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "EMBEDDING_API_KEY",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -158,6 +180,10 @@ struct StoredLlmSettings {
     mineru: StoredMinerUSettings,
     #[serde(default)]
     obsidian: StoredObsidianSettings,
+    /// 是否曾把明文 key 从 `.env` 迁入钥匙串(本次或历史)。供前端一次性提示"建议轮换
+    /// 已明文落盘过的 key"。`#[serde(default)]` 保证旧 settings.json 仍能加载。
+    #[serde(default)]
+    had_plaintext_migration: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -232,6 +258,8 @@ pub enum ConfigError {
     ReadSettings(String),
     #[error("failed to write settings: {0}")]
     WriteSettings(String),
+    #[error("secret store error: {0}")]
+    SecretStore(String),
 }
 
 pub fn load_dotenv() {
@@ -308,7 +336,7 @@ pub fn save_mineru_settings(
     let mut stored = load_stored_settings()?;
     let trimmed_token = request.api_token.unwrap_or_default().trim().to_string();
     if !trimmed_token.is_empty() {
-        save_secret_to_dotenv("MINERU_API_TOKEN", &trimmed_token)?;
+        save_secret("MINERU_API_TOKEN", &trimmed_token)?;
     }
     stored.mineru.api_token = None;
     stored.mineru.base_url = Some(request.base_url.trim().trim_end_matches('/').to_string());
@@ -427,7 +455,7 @@ pub fn save_embedding_settings(
     let provider = normalize_embedding_provider(&request.provider);
     let trimmed_key = request.api_key.unwrap_or_default().trim().to_string();
     if !trimmed_key.is_empty() {
-        save_secret_to_dotenv("EMBEDDING_API_KEY", &trimmed_key)?;
+        save_secret("EMBEDDING_API_KEY", &trimmed_key)?;
     }
     stored.embedding.api_key = None;
     stored.embedding.provider = Some(if request.enabled {
@@ -473,7 +501,7 @@ pub fn save_llm_settings(
     let target = provider_settings_mut(&mut stored, request.provider);
     let trimmed_key = request.api_key.unwrap_or_default().trim().to_string();
     if !trimmed_key.is_empty() {
-        save_secret_to_dotenv(env_key_name(request.provider), &trimmed_key)?;
+        save_secret(env_key_name(request.provider), &trimmed_key)?;
     }
     let base_url = normalize_base_url(&request.base_url)
         .unwrap_or_else(|| active_base_url(target, request.provider));
@@ -489,10 +517,22 @@ pub fn save_llm_settings(
 }
 
 fn required_env(name: &'static str) -> Result<String, ConfigError> {
+    resolve_secret(name).ok_or(ConfigError::MissingEnv(name))
+}
+
+/// 敏感项读取顺序:钥匙串 → `.env` / 进程环境(兼容旧布局/源码用户) → 无。
+/// `.env` 里的占位值(已迁移)视为未配置,避免占位串被当成真 key 用出去。
+fn resolve_secret(name: &str) -> Option<String> {
+    if let Some(value) = active_secret_store().get(name) {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
     env::var(name)
         .ok()
-        .filter(|value| !value.trim().is_empty())
-        .ok_or(ConfigError::MissingEnv(name))
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty() && value != KEYCHAIN_PLACEHOLDER)
 }
 
 fn load_stored_settings() -> Result<StoredLlmSettings, ConfigError> {
@@ -755,7 +795,7 @@ fn migrate_legacy_api_keys(stored: &mut StoredLlmSettings) -> Result<bool, Confi
     ] {
         if let Some(key) = key.filter(|value| !value.trim().is_empty()) {
             if required_env(name).is_err() {
-                save_secret_to_dotenv(name, &key)?;
+                save_secret(name, &key)?;
             }
             changed = true;
         }
@@ -763,40 +803,75 @@ fn migrate_legacy_api_keys(stored: &mut StoredLlmSettings) -> Result<bool, Confi
     Ok(changed)
 }
 
-fn save_secret_to_dotenv(name: &'static str, value: &str) -> Result<(), ConfigError> {
+/// 保存敏感项:写入钥匙串(不再写 `.env` 明文),同步进程环境使当前会话立即生效,并把
+/// `.env` 里残留的同名明文替换为占位。
+fn save_secret(name: &'static str, value: &str) -> Result<(), ConfigError> {
+    active_secret_store()
+        .set(name, value)
+        .map_err(ConfigError::SecretStore)?;
+    env::set_var(name, value);
+    scrub_dotenv_secret_to_placeholder(name)?;
+    Ok(())
+}
+
+/// 若 `.env` 里存在该敏感项的非占位赋值,原子地替换为占位串;否则不动(不新建 `.env`)。
+fn scrub_dotenv_secret_to_placeholder(name: &str) -> Result<(), ConfigError> {
     let path = dotenv_path()?;
-    let raw = if path.exists() {
-        fs::read_to_string(&path).map_err(|err| ConfigError::ReadSettings(err.to_string()))?
-    } else {
-        String::new()
-    };
-    let mut found = false;
-    let mut lines = raw
+    if !path.exists() {
+        return Ok(());
+    }
+    let raw =
+        fs::read_to_string(&path).map_err(|err| ConfigError::ReadSettings(err.to_string()))?;
+    let mut changed = false;
+    let lines = raw
         .lines()
         .map(|line| {
-            let key = line.trim_start().split_once('=').map(|(key, _)| key.trim());
-            if key == Some(name) && !line.trim_start().starts_with('#') {
-                found = true;
-                format_dotenv_assignment(name, value)
+            if line.trim_start().starts_with('#') {
+                return line.to_string();
+            }
+            let Some((key, current)) = line.split_once('=') else {
+                return line.to_string();
+            };
+            if key.trim() == name && current.trim() != KEYCHAIN_PLACEHOLDER {
+                changed = true;
+                format_dotenv_assignment(name, KEYCHAIN_PLACEHOLDER)
             } else {
                 line.to_string()
             }
         })
         .collect::<Vec<_>>();
-    if !found {
-        lines.push(format_dotenv_assignment(name, value));
+    if !changed {
+        return Ok(());
     }
+    write_dotenv_atomic(&path, &lines)
+}
+
+/// 原子写 `.env`:写临时文件 → 收紧权限 → rename 覆盖。同目录 rename 在 unix 上是原子的,
+/// 避免半截写坏配置。
+fn write_dotenv_atomic(path: &Path, lines: &[String]) -> Result<(), ConfigError> {
     if let Some(parent) = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
     {
         fs::create_dir_all(parent).map_err(|err| ConfigError::WriteSettings(err.to_string()))?;
     }
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .ok_or_else(|| ConfigError::WriteSettings("dotenv path has no file name".to_string()))?;
+    let tmp_path = path.with_file_name(format!("{file_name}.{}.tmp", std::process::id()));
+
     let mut output = lines.join("\n");
     output.push('\n');
-    fs::write(&path, output).map_err(|err| ConfigError::WriteSettings(err.to_string()))?;
-    restrict_secret_file_permissions(&path)?;
-    env::set_var(name, value);
+    fs::write(&tmp_path, output).map_err(|err| ConfigError::WriteSettings(err.to_string()))?;
+    if let Err(err) = restrict_secret_file_permissions(&tmp_path) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(err);
+    }
+    if let Err(err) = fs::rename(&tmp_path, path) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(ConfigError::WriteSettings(err.to_string()));
+    }
     Ok(())
 }
 
@@ -930,6 +1005,153 @@ fn active_mineru_base_url(settings: &StoredMinerUSettings) -> String {
         .filter(|value| !value.trim().is_empty())
         .map(|value| value.trim().trim_end_matches('/').to_string())
         .unwrap_or_else(|| "https://mineru.net".to_string())
+}
+
+/// 单个敏感项当前的存放位置。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SecretLocation {
+    /// 已在系统钥匙串。
+    Keychain,
+    /// 仍以明文留在 `.env` / 进程环境。
+    EnvPlaintext,
+    /// `.env` 里是迁移占位(已迁走,但钥匙串当前查不到)。
+    Placeholder,
+    /// 三处都没有。
+    Absent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretItemStatus {
+    pub name: String,
+    pub location: SecretLocation,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretStorageStatus {
+    pub items: Vec<SecretItemStatus>,
+    /// 本次或历史上是否发生过明文迁移(供前端一次性"建议轮换 key" banner)。
+    pub had_plaintext_migration: bool,
+}
+
+/// 迁移一次的结果,供启动流程记录日志。历史累计标记通过 [`secret_storage_status`] 查询。
+#[derive(Debug, Clone, Copy)]
+pub struct SecretMigrationOutcome {
+    /// 本次调用是否实际迁移/清理了明文项。
+    pub migrated_now: bool,
+}
+
+/// 用 dotenvy 解析 `.env` 的赋值(不写进程环境),便于拿到已去引号的真实值。
+fn parse_dotenv_assignments(path: &Path) -> Result<HashMap<String, String>, ConfigError> {
+    let mut map = HashMap::new();
+    let iter = dotenvy::from_path_iter(path)
+        .map_err(|err| ConfigError::ReadSettings(err.to_string()))?;
+    for item in iter {
+        let (key, value) = item.map_err(|err| ConfigError::ReadSettings(err.to_string()))?;
+        map.insert(key, value);
+    }
+    Ok(map)
+}
+
+/// 启动时把 `.env` 中的明文敏感项迁入钥匙串,并把该项替换为占位。幂等:占位/空值跳过,
+/// 已在钥匙串中的项不会被 `.env` 里的旧值覆盖(仅清理明文)。任一项曾明文落盘即置持久
+/// 标记 `had_plaintext_migration`。
+pub fn migrate_dotenv_secrets_to_keychain() -> Result<SecretMigrationOutcome, ConfigError> {
+    let mut stored = load_stored_settings()?;
+    let path = dotenv_path()?;
+    let mut migrated_now = false;
+
+    if path.exists() {
+        let parsed = parse_dotenv_assignments(&path)?;
+        let store = active_secret_store();
+        for name in SECRET_KEYS {
+            let Some(raw) = parsed.get(name) else {
+                continue;
+            };
+            let value = raw.trim();
+            if value.is_empty() || value == KEYCHAIN_PLACEHOLDER {
+                continue;
+            }
+            // 真实明文:钥匙串没有才写入(不拿旧 .env 覆盖更新的钥匙串值),随后清理明文。
+            if store.get(name).is_none() {
+                store
+                    .set(name, value)
+                    .map_err(ConfigError::SecretStore)?;
+            }
+            scrub_dotenv_secret_to_placeholder(name)?;
+            migrated_now = true;
+        }
+    }
+
+    if migrated_now && stored.had_plaintext_migration != Some(true) {
+        stored.had_plaintext_migration = Some(true);
+        write_stored_settings(&stored)?;
+    }
+
+    Ok(SecretMigrationOutcome { migrated_now })
+}
+
+/// 返回每个敏感项的存放位置 + 历史明文迁移标记,供前端设置页展示与 banner 决策。
+pub fn secret_storage_status() -> Result<SecretStorageStatus, ConfigError> {
+    load_dotenv();
+    let stored = load_stored_settings()?;
+    let path = dotenv_path()?;
+    let parsed = if path.exists() {
+        parse_dotenv_assignments(&path).unwrap_or_default()
+    } else {
+        HashMap::new()
+    };
+    let store = active_secret_store();
+
+    let items = SECRET_KEYS
+        .iter()
+        .map(|name| {
+            let location = secret_location(name, store.as_ref(), &parsed);
+            SecretItemStatus {
+                name: (*name).to_string(),
+                location,
+            }
+        })
+        .collect();
+
+    Ok(SecretStorageStatus {
+        items,
+        had_plaintext_migration: stored.had_plaintext_migration.unwrap_or(false),
+    })
+}
+
+fn secret_location(
+    name: &str,
+    store: &dyn secret_store::SecretStore,
+    parsed_dotenv: &HashMap<String, String>,
+) -> SecretLocation {
+    if store.get(name).is_some() {
+        return SecretLocation::Keychain;
+    }
+    if let Some(value) = parsed_dotenv
+        .get(name)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    {
+        return if value == KEYCHAIN_PLACEHOLDER {
+            SecretLocation::Placeholder
+        } else {
+            SecretLocation::EnvPlaintext
+        };
+    }
+    // 不在 .env 文件里,但可能通过真实 shell 环境导出。
+    let in_process_env = env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty() && value != KEYCHAIN_PLACEHOLDER)
+        .is_some();
+    if in_process_env {
+        SecretLocation::EnvPlaintext
+    } else {
+        SecretLocation::Absent
+    }
 }
 
 #[cfg(test)]
