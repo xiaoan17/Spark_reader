@@ -5,22 +5,23 @@ import {
   Library,
   Loader2,
   Network,
-  Palette,
   PanelLeftClose,
   Search,
   Settings,
   Sparkles,
   Upload,
-  Check,
 } from "lucide-react"
-import { useEffect, useRef, type RefObject } from "react"
+import { type RefObject } from "react"
 import { Button } from "@/components/ui/button"
 import { isTauriRuntime } from "@/core/library-api"
 import { cn } from "@/lib/utils"
 import type { ReaderView } from "./highlight-target-view"
 import type { ReaderViewConfig } from "./reader-view-config"
 import { readerViewHeaderLabel } from "./reader-view-config"
-import type { ReaderDisplayTheme, ReaderDisplayThemeId } from "./reader-display-theme"
+import {
+  ReaderAppearanceControl,
+  type ReaderAppearanceControlProps,
+} from "./ReaderAppearanceControl"
 
 type ReaderTopBarProps = {
   bookTitle: string
@@ -37,10 +38,8 @@ type ReaderTopBarProps = {
   libraryOpen: boolean
   pdfLoadStatus: "idle" | "loading" | "error"
   readerViewItems: ReaderViewConfig[]
-  readerDisplayThemeId: ReaderDisplayThemeId
-  readerDisplayThemeItems: ReaderDisplayTheme[]
-  /** 外观下拉受控:状态提升到 ReaderShell,原生菜单"阅读外观…"也能打开它 */
-  themeMenuOpen: boolean
+  /** 阅读外观「Aa」浮层的全部受控状态与回调,统一透传给 ReaderAppearanceControl。 */
+  appearanceControl: ReaderAppearanceControlProps
   fileInputRef: RefObject<HTMLInputElement | null>
   onToggleSidebar: () => void
   onFileSelected: (file: File) => void
@@ -49,8 +48,6 @@ type ReaderTopBarProps = {
   onSelectView: (item: ReaderViewConfig) => void
   onToggleSearch: () => void
   onOpenGuide: () => void
-  onReaderDisplayThemeChange: (themeId: ReaderDisplayThemeId) => void
-  onThemeMenuOpenChange: (open: boolean) => void
   onToggleSettings: () => void
 }
 
@@ -73,9 +70,7 @@ export function ReaderTopBar({
   libraryOpen: _libraryOpen,
   pdfLoadStatus,
   readerViewItems,
-  readerDisplayThemeId,
-  readerDisplayThemeItems,
-  themeMenuOpen,
+  appearanceControl,
   fileInputRef,
   onToggleSidebar,
   onFileSelected,
@@ -84,28 +79,9 @@ export function ReaderTopBar({
   onSelectView,
   onToggleSearch,
   onOpenGuide: _onOpenGuide,
-  onReaderDisplayThemeChange,
-  onThemeMenuOpenChange,
   onToggleSettings,
 }: ReaderTopBarProps) {
-  const themeMenuRef = useRef<HTMLDivElement | null>(null)
   const llmReady = _llmProviderText && _llmProviderText !== "provider 未读取" && _llmProviderText !== "本地兜底"
-  const readerDisplayTheme = readerDisplayThemeItems.find((item) => item.id === readerDisplayThemeId)
-
-  useEffect(() => {
-    if (!themeMenuOpen) {
-      return
-    }
-    function handlePointerDown(event: PointerEvent) {
-      const target = event.target
-      if (target instanceof Node && themeMenuRef.current?.contains(target)) {
-        return
-      }
-      onThemeMenuOpenChange(false)
-    }
-    document.addEventListener("pointerdown", handlePointerDown)
-    return () => document.removeEventListener("pointerdown", handlePointerDown)
-  }, [themeMenuOpen, onThemeMenuOpenChange])
 
   return (
     <header className="reader-chrome-bar flex h-11 shrink-0 items-center justify-between gap-2 border-b px-3">
@@ -242,66 +218,8 @@ export function ReaderTopBar({
 
         <div className="reader-chrome-divider mx-1 h-4 w-px shrink-0" />
 
-        {/* 组四:偏好（外观 + 设置） */}
-        <div ref={themeMenuRef} className="relative">
-          <button
-            type="button"
-            className="reader-chrome-icon-button inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors duration-100 focus:outline-none focus:ring-2 focus:ring-ring"
-            aria-label="阅读外观"
-            aria-haspopup="menu"
-            aria-expanded={themeMenuOpen}
-            title={readerDisplayTheme ? `阅读外观：${readerDisplayTheme.label}` : "阅读外观"}
-            data-testid="reader-display-theme-button"
-            onClick={() => onThemeMenuOpenChange(!themeMenuOpen)}
-          >
-            <Palette className="h-4 w-4" />
-          </button>
-          {themeMenuOpen ? (
-            <div
-              role="menu"
-              aria-label="阅读外观"
-              className="reader-floating-surface absolute right-0 top-8 z-50 w-64 overflow-hidden rounded-md border py-1 shadow-lg"
-              data-testid="reader-display-theme-menu"
-            >
-              {readerDisplayThemeItems.map((item) => {
-                const selected = item.id === readerDisplayThemeId
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked={selected}
-                    className={cn(
-                      "reader-floating-item flex w-full items-start gap-2 px-3 py-2 text-left transition-colors duration-100",
-                      selected && "reader-floating-item-active",
-                    )}
-                    onClick={() => {
-                      onReaderDisplayThemeChange(item.id)
-                      onThemeMenuOpenChange(false)
-                    }}
-                  >
-                    <span className="reader-panel-accent mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center">
-                      {selected ? <Check className="h-3.5 w-3.5" /> : null}
-                    </span>
-                    <span className="min-w-0">
-                      <span className="reader-panel-text block text-xs font-medium">
-                        {item.label}
-                        {item.sourceName !== "current" ? (
-                          <span className="reader-floating-muted ml-1 font-normal">
-                            {item.sourceName}
-                          </span>
-                        ) : null}
-                      </span>
-                      <span className="reader-floating-muted mt-0.5 block text-[11px] leading-4">
-                        {item.description}
-                      </span>
-                    </span>
-                  </button>
-                )
-              })}
-            </div>
-          ) : null}
-        </div>
+        {/* 组四:偏好（外观 + 设置）。外观合并为唯一「Aa」入口 */}
+        <ReaderAppearanceControl {...appearanceControl} />
 
         <button
           type="button"

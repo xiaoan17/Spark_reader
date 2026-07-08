@@ -9,7 +9,7 @@ export type ReaderPanelState = {
   importMenuOpen: boolean
   onboardingOpen: boolean
   zoteroOpen: boolean
-  themeMenuOpen: boolean
+  appearanceMenuOpen: boolean
 }
 
 export type ReaderPanelName = keyof ReaderPanelState
@@ -28,7 +28,7 @@ export const initialReaderPanelState: ReaderPanelState = {
   importMenuOpen: false,
   onboardingOpen: false,
   zoteroOpen: false,
-  themeMenuOpen: false,
+  appearanceMenuOpen: false,
 }
 
 export function readerPanelReducer(

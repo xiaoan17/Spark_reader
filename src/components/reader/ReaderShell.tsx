@@ -102,13 +102,11 @@ import {
   type ReaderViewConfig,
 } from "./reader-view-config"
 import {
-  READER_DISPLAY_THEME_STORAGE_KEY,
-  normalizeReaderDisplayThemeId,
   readerDisplayThemeById,
   readerDisplayThemeOptions,
-  readerDisplayThemeStyle,
   type ReaderDisplayThemeId,
 } from "./reader-display-theme"
+import { useReaderAppearance } from "./use-reader-appearance"
 
 const STORED_BOOK_INITIAL_PAGE_WINDOW = 48
 const ONBOARDING_SEEN_STORAGE_KEY = "focused-reading.onboarding.seen.v1"
@@ -117,16 +115,6 @@ const llmProviderLabels: Record<LlmProviderKind, string> = {
   deep_seek: "DeepSeek",
   open_ai: "OpenAI",
   anthropic: "Anthropic",
-}
-
-function readInitialReaderDisplayThemeId(): ReaderDisplayThemeId {
-  try {
-    return normalizeReaderDisplayThemeId(
-      window.localStorage.getItem(READER_DISPLAY_THEME_STORAGE_KEY),
-    )
-  } catch {
-    return "spark-paper"
-  }
 }
 
 type ReaderShellProps = {
@@ -365,8 +353,7 @@ export function ReaderShell({
     zoteroOpen,
   } = panels
   const [readerView, setReaderView] = useState<ReaderView>("text")
-  const [readerDisplayThemeId, setReaderDisplayThemeId] =
-    useState<ReaderDisplayThemeId>(readInitialReaderDisplayThemeId)
+  const appearance = useReaderAppearance()
   const [outlineTarget, setOutlineTarget] = useState<ConvertedTextOutlineTarget | null>(null)
   const { llmSettings, llmSettingsError, setLlmSettings, setLlmSettingsError } = useLlmSettings()
   const canUseLibrary = isTauriRuntime() || browserLibraryAvailable()
@@ -399,10 +386,7 @@ export function ReaderShell({
     pushNotice,
     setPanelOpen,
   })
-  const readerDisplayStyle = useMemo(
-    () => readerDisplayThemeStyle(readerDisplayThemeId),
-    [readerDisplayThemeId],
-  )
+  const readerDisplayStyle = appearance.readerDisplayStyle
 
   useEffect(() => {
     if (phase !== "empty" || totalPages > 0 || parsedPages.length > 0) {
@@ -764,7 +748,7 @@ export function ReaderShell({
     onToggleSettings: () => togglePanel("settingsOpen"),
     onOpenObsidianSettings: () => setPanelOpen("obsidianSettingsOpen", true),
     onToggleSidebar: () => togglePanel("sidebarOpen"),
-    onToggleAppearance: () => togglePanel("themeMenuOpen"),
+    onToggleAppearance: () => togglePanel("appearanceMenuOpen"),
     onSelectView: (view) => {
       const item = readerViewItems.find((candidate) => candidate.view === view)
       if (item) {
@@ -784,14 +768,8 @@ export function ReaderShell({
   })
 
   function handleReaderDisplayThemeChange(themeId: ReaderDisplayThemeId) {
-    const normalizedThemeId = normalizeReaderDisplayThemeId(themeId)
-    setReaderDisplayThemeId(normalizedThemeId)
-    try {
-      window.localStorage.setItem(READER_DISPLAY_THEME_STORAGE_KEY, normalizedThemeId)
-    } catch {
-      // Display preference persistence is best-effort; the in-memory switch already applied.
-    }
-    pushNotice(`阅读外观：${readerDisplayThemeById(normalizedThemeId).label}`)
+    appearance.setDisplayThemeId(themeId)
+    pushNotice(`阅读外观：${readerDisplayThemeById(themeId).label}`)
   }
 
   // 顶栏和原生菜单共用同一个视图切换入口,保证两处行为永不分叉。
@@ -829,9 +807,19 @@ export function ReaderShell({
         libraryOpen={libraryOpen}
         pdfLoadStatus={pdfLoadStatus}
         readerViewItems={readerViewItems}
-        readerDisplayThemeId={readerDisplayThemeId}
-        readerDisplayThemeItems={readerDisplayThemeOptions}
-        themeMenuOpen={panels.themeMenuOpen}
+        appearanceControl={{
+          open: panels.appearanceMenuOpen,
+          onOpenChange: (open) => setPanelOpen("appearanceMenuOpen", open),
+          displayThemeId: appearance.displayThemeId,
+          displayThemeItems: readerDisplayThemeOptions,
+          colorMode: appearance.colorMode,
+          typography: appearance.typography,
+          hasTypographyOverride: appearance.hasTypographyOverride,
+          onDisplayThemeChange: handleReaderDisplayThemeChange,
+          onColorModeChange: appearance.setColorMode,
+          onTypographyChange: appearance.setTypographyOverride,
+          onResetTypography: appearance.resetTypography,
+        }}
         fileInputRef={inputRef}
         onToggleSidebar={() => togglePanel("sidebarOpen")}
         onFileSelected={(file) => void handleFile(file)}
@@ -846,8 +834,6 @@ export function ReaderShell({
           pushNotice(parsedPages.length > 0 ? "搜索面板已切换" : "导入书籍并生成转换稿后才能搜索")
         }}
         onOpenGuide={() => setPanelOpen("onboardingOpen", true)}
-        onReaderDisplayThemeChange={handleReaderDisplayThemeChange}
-        onThemeMenuOpenChange={(open) => setPanelOpen("themeMenuOpen", open)}
         onToggleSettings={() => togglePanel("settingsOpen")}
       />
       <LlmSettingsPanel

@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react"
+import type { ReaderResolvedColorMode } from "./reader-color-mode"
 
 export type ReaderDisplayThemeId =
   | "spark-paper"
@@ -15,13 +16,16 @@ export type ReaderDisplayTheme = {
   sourceName: string
   description: string
   vars: ReaderDisplayThemeVars
+  /** 暗色变体:只覆盖配色 token,排版 token(字号/行距/页宽/字体)保持不变。 */
+  darkVars: ReaderDisplayThemeColorVars
 }
 
 export type ReaderDisplayThemeStyle = CSSProperties & {
   [key: `--reader-${string}`]: string
 }
 
-type ReaderDisplayThemeVars = {
+/** 会随明暗切换的配色 token。 */
+type ReaderDisplayThemeColorVars = {
   shellBg: string
   surfaceBg: string
   text: string
@@ -30,16 +34,6 @@ type ReaderDisplayThemeVars = {
   link: string
   quoteBorder: string
   codeBg: string
-  bodyFont: string
-  headingFont: string
-  fontSize: string
-  lineHeight: string
-  pageWidth: string
-  paragraphMargin: string
-  textAlign: "start" | "justify"
-  h1Size: string
-  h2Size: string
-  h3Size: string
   workspaceBg: string
   chromeBg: string
   chromeText: string
@@ -55,6 +49,22 @@ type ReaderDisplayThemeVars = {
   floatingText: string
   floatingBorder: string
 }
+
+/** 与明暗无关的排版 token。 */
+type ReaderDisplayThemeTypographyVars = {
+  bodyFont: string
+  headingFont: string
+  fontSize: string
+  lineHeight: string
+  pageWidth: string
+  paragraphMargin: string
+  textAlign: "start" | "justify"
+  h1Size: string
+  h2Size: string
+  h3Size: string
+}
+
+type ReaderDisplayThemeVars = ReaderDisplayThemeColorVars & ReaderDisplayThemeTypographyVars
 
 export const READER_DISPLAY_THEME_STORAGE_KEY = "focused-reading.reader-display-theme.v1"
 
@@ -98,6 +108,30 @@ export const readerDisplayThemeOptions: ReaderDisplayTheme[] = [
       floatingText: "hsl(220 18% 13%)",
       floatingBorder: "hsl(36 16% 80%)",
     },
+    darkVars: {
+      shellBg: "hsl(34 12% 12%)",
+      surfaceBg: "hsl(34 12% 15%)",
+      text: "hsl(38 16% 86%)",
+      muted: "hsl(34 8% 60%)",
+      border: "hsl(34 10% 28%)",
+      link: "hsl(174 46% 58%)",
+      quoteBorder: "hsl(174 34% 46%)",
+      codeBg: "hsl(34 10% 20%)",
+      workspaceBg: "hsl(34 12% 10%)",
+      chromeBg: "hsl(34 12% 14%)",
+      chromeText: "hsl(38 16% 88%)",
+      chromeMuted: "hsl(34 8% 62%)",
+      panelBg: "hsl(34 12% 15%)",
+      panelText: "hsl(38 16% 88%)",
+      panelMuted: "hsl(34 8% 62%)",
+      panelBorder: "hsl(34 10% 26%)",
+      panelHoverBg: "hsl(34 10% 20%)",
+      panelActiveBg: "hsl(174 22% 22%)",
+      panelActiveText: "hsl(174 46% 64%)",
+      floatingBg: "hsl(34 12% 16%)",
+      floatingText: "hsl(38 16% 88%)",
+      floatingBorder: "hsl(34 10% 30%)",
+    },
   },
   {
     id: "typora-github",
@@ -137,6 +171,30 @@ export const readerDisplayThemeOptions: ReaderDisplayTheme[] = [
       floatingBg: "#ffffff",
       floatingText: "#24292f",
       floatingBorder: "#d0d7de",
+    },
+    darkVars: {
+      shellBg: "#0d1117",
+      surfaceBg: "#0d1117",
+      text: "#c9d1d9",
+      muted: "#8b949e",
+      border: "#30363d",
+      link: "#58a6ff",
+      quoteBorder: "#3b434b",
+      codeBg: "#161b22",
+      workspaceBg: "#010409",
+      chromeBg: "#161b22",
+      chromeText: "#c9d1d9",
+      chromeMuted: "#8b949e",
+      panelBg: "#161b22",
+      panelText: "#c9d1d9",
+      panelMuted: "#8b949e",
+      panelBorder: "#30363d",
+      panelHoverBg: "#21262d",
+      panelActiveBg: "#1f2d3d",
+      panelActiveText: "#58a6ff",
+      floatingBg: "#1c2128",
+      floatingText: "#c9d1d9",
+      floatingBorder: "#30363d",
     },
   },
   {
@@ -178,6 +236,30 @@ export const readerDisplayThemeOptions: ReaderDisplayTheme[] = [
       floatingText: "#2f1b16",
       floatingBorder: "#c8beb0",
     },
+    darkVars: {
+      shellBg: "#1c1a17",
+      surfaceBg: "#1c1a17",
+      text: "#ddd6cc",
+      muted: "#a99f92",
+      border: "#3a352d",
+      link: "#5aa9e0",
+      quoteBorder: "#6b6154",
+      codeBg: "#24211c",
+      workspaceBg: "#16140f",
+      chromeBg: "#232019",
+      chromeText: "#ddd6cc",
+      chromeMuted: "#a99f92",
+      panelBg: "#232019",
+      panelText: "#ddd6cc",
+      panelMuted: "#a99f92",
+      panelBorder: "#3a352d",
+      panelHoverBg: "#2b271f",
+      panelActiveBg: "#26332e",
+      panelActiveText: "#7cc0a8",
+      floatingBg: "#24211a",
+      floatingText: "#ddd6cc",
+      floatingBorder: "#423c32",
+    },
   },
   {
     id: "typora-night",
@@ -203,6 +285,31 @@ export const readerDisplayThemeOptions: ReaderDisplayTheme[] = [
       h1Size: "2.25em",
       h2Size: "1.56em",
       h3Size: "1.18em",
+      workspaceBg: "#2f3439",
+      chromeBg: "#2e3033",
+      chromeText: "#d5dbe1",
+      chromeMuted: "#9aa3ad",
+      panelBg: "#2e3033",
+      panelText: "#d5dbe1",
+      panelMuted: "#98a1aa",
+      panelBorder: "#4a5158",
+      panelHoverBg: "#3b4148",
+      panelActiveBg: "#344955",
+      panelActiveText: "#9ed8f5",
+      floatingBg: "#33383e",
+      floatingText: "#d5dbe1",
+      floatingBorder: "#626b75",
+    },
+    // Night 本身即暗色主题,暗色变体就是自身配色。
+    darkVars: {
+      shellBg: "#363b40",
+      surfaceBg: "#363b40",
+      text: "#b8bfc6",
+      muted: "#929aa2",
+      border: "#555d66",
+      link: "#a3d5fe",
+      quoteBorder: "#6dc1e7",
+      codeBg: "#2e3033",
       workspaceBg: "#2f3439",
       chromeBg: "#2e3033",
       chromeText: "#d5dbe1",
@@ -258,6 +365,30 @@ export const readerDisplayThemeOptions: ReaderDisplayTheme[] = [
       floatingText: "#333333",
       floatingBorder: "#d6d6d6",
     },
+    darkVars: {
+      shellBg: "#1a1a1a",
+      surfaceBg: "#1e1e1e",
+      text: "#d4d4d4",
+      muted: "#9a9a9a",
+      border: "#3a3a3a",
+      link: "#4a9eff",
+      quoteBorder: "#555555",
+      codeBg: "#262626",
+      workspaceBg: "#141414",
+      chromeBg: "#1e1e1e",
+      chromeText: "#d4d4d4",
+      chromeMuted: "#9a9a9a",
+      panelBg: "#1e1e1e",
+      panelText: "#d4d4d4",
+      panelMuted: "#9a9a9a",
+      panelBorder: "#3a3a3a",
+      panelHoverBg: "#2a2a2a",
+      panelActiveBg: "#1c3049",
+      panelActiveText: "#4a9eff",
+      floatingBg: "#222222",
+      floatingText: "#d4d4d4",
+      floatingBorder: "#3d3d3d",
+    },
   },
   {
     id: "typora-gothic",
@@ -297,6 +428,30 @@ export const readerDisplayThemeOptions: ReaderDisplayTheme[] = [
       floatingBg: "#ffffff",
       floatingText: "#111111",
       floatingBorder: "#dddddd",
+    },
+    darkVars: {
+      shellBg: "#17181a",
+      surfaceBg: "#17181a",
+      text: "#d8dade",
+      muted: "#9298a0",
+      border: "#33363b",
+      link: "#5ab0e8",
+      quoteBorder: "#40444a",
+      codeBg: "#202225",
+      workspaceBg: "#111214",
+      chromeBg: "#1d1f22",
+      chromeText: "#d8dade",
+      chromeMuted: "#9298a0",
+      panelBg: "#1d1f22",
+      panelText: "#d8dade",
+      panelMuted: "#9298a0",
+      panelBorder: "#33363b",
+      panelHoverBg: "#26292d",
+      panelActiveBg: "#2a2d31",
+      panelActiveText: "#e4e6ea",
+      floatingBg: "#1f2225",
+      floatingText: "#d8dade",
+      floatingBorder: "#35383d",
     },
   },
   {
@@ -338,6 +493,30 @@ export const readerDisplayThemeOptions: ReaderDisplayTheme[] = [
       floatingText: "#333333",
       floatingBorder: "#dddddd",
     },
+    darkVars: {
+      shellBg: "#1b1a18",
+      surfaceBg: "#1f1e1b",
+      text: "#ddd8cf",
+      muted: "#a29b8f",
+      border: "#38352f",
+      link: "#6fb8e0",
+      quoteBorder: "#45413a",
+      codeBg: "#26241f",
+      workspaceBg: "#151412",
+      chromeBg: "#1f1e1b",
+      chromeText: "#ddd8cf",
+      chromeMuted: "#a29b8f",
+      panelBg: "#1f1e1b",
+      panelText: "#ddd8cf",
+      panelMuted: "#a29b8f",
+      panelBorder: "#38352f",
+      panelHoverBg: "#292620",
+      panelActiveBg: "#26333a",
+      panelActiveText: "#6fb8e0",
+      floatingBg: "#211f1b",
+      floatingText: "#ddd8cf",
+      floatingBorder: "#403c34",
+    },
   },
 ]
 
@@ -357,8 +536,13 @@ export function normalizeReaderDisplayThemeId(
     : "spark-paper"
 }
 
-export function readerDisplayThemeStyle(id: ReaderDisplayThemeId): ReaderDisplayThemeStyle {
-  const theme = readerDisplayThemeById(id).vars
+export function readerDisplayThemeStyle(
+  id: ReaderDisplayThemeId,
+  mode: ReaderResolvedColorMode = "light",
+): ReaderDisplayThemeStyle {
+  const base = readerDisplayThemeById(id).vars
+  // 暗色只覆盖配色 token,排版 token 从亮色变体沿用,保证明暗切换不改变字号/行距/页宽。
+  const theme = mode === "dark" ? { ...base, ...readerDisplayThemeById(id).darkVars } : base
   return {
     "--reader-shell-bg": theme.shellBg,
     "--reader-surface-bg": theme.surfaceBg,

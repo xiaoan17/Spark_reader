@@ -29,9 +29,19 @@ const meta = {
     libraryOpen: false,
     pdfLoadStatus: "idle",
     readerViewItems,
-    readerDisplayThemeId: readerDisplayThemeOptions[0].id,
-    readerDisplayThemeItems: readerDisplayThemeOptions,
-    themeMenuOpen: false,
+    appearanceControl: {
+      open: false,
+      onOpenChange: () => undefined,
+      displayThemeId: readerDisplayThemeOptions[0].id,
+      displayThemeItems: readerDisplayThemeOptions,
+      colorMode: "system",
+      typography: { fontScale: null, lineHeight: null, pageWidth: null },
+      hasTypographyOverride: false,
+      onDisplayThemeChange: () => undefined,
+      onColorModeChange: () => undefined,
+      onTypographyChange: () => undefined,
+      onResetTypography: () => undefined,
+    },
     fileInputRef: createRef<HTMLInputElement | null>(),
     onToggleSidebar: () => undefined,
     onFileSelected: () => undefined,
@@ -40,8 +50,6 @@ const meta = {
     onSelectView: () => undefined,
     onToggleSearch: () => undefined,
     onOpenGuide: () => undefined,
-    onReaderDisplayThemeChange: () => undefined,
-    onThemeMenuOpenChange: () => undefined,
     onToggleSettings: () => undefined,
   },
 } satisfies Meta<typeof ReaderTopBar>
@@ -75,9 +83,12 @@ export const Extracting: Story = {
 }
 
 /** 外观菜单展开(受控,原生菜单"阅读外观…"也走同一状态) */
-export const ThemeMenuOpen: Story = {
+export const AppearanceMenuOpen: Story = {
   args: {
-    themeMenuOpen: true,
+    appearanceControl: {
+      ...meta.args.appearanceControl,
+      open: true,
+    },
   },
 }
 
