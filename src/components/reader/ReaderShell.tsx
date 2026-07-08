@@ -19,10 +19,7 @@ import { Button } from "@/components/ui/button"
 import { KnowledgePanel } from "@/components/knowledge/KnowledgePanel"
 import { TldrReader } from "@/components/reader/TldrReader"
 import { LlmSettingsPanel } from "@/components/settings/LlmSettingsPanel"
-import {
-  ObsidianSettingsPanel,
-  type ObsidianSettingsStatus,
-} from "@/components/settings/ObsidianSettingsPanel"
+import { ObsidianSettingsPanel } from "@/components/settings/ObsidianSettingsPanel"
 import { pageTextByIndex } from "@/core/page-lookup"
 import { replaceInternalCitationsWithReadableLabels } from "@/core/citation-display"
 import { PdfDocumentViewer } from "./PdfCanvasPage"
@@ -78,20 +75,10 @@ import {
 } from "@/core/browser-library"
 import {
   isTauriRuntime,
-  getLlmSettings,
-  getObsidianSettings,
-  saveObsidianSettings,
-  exportSnippetToObsidian,
-  exportBookKnowledgeToObsidian,
-  listenAppMenuAction,
-  normalizeCommandError,
   type ConvertedBookAsset,
-  type LlmSettings,
   type LlmProviderKind,
-  type ObsidianSnippet,
   type UpsertKnowledgeCardRequest,
 } from "@/core/library-api"
-import { dispatchAppMenuAction, type AppMenuHandlers } from "./app-menu-actions"
 import { readerChunkSearchResults } from "./search-results"
 import { bookHasPdfParser, tldrMetadataFromAsset } from "./stored-book-asset"
 import { useReaderPageNavigation } from "./page-navigation"
@@ -101,6 +88,10 @@ import { useReaderPdf } from "./use-reader-pdf"
 import { useReaderImport } from "./use-reader-import"
 import { useReaderLibrary } from "./use-reader-library"
 import { useReaderSearch } from "./use-reader-search"
+import { useReaderShortcuts } from "./use-reader-shortcuts"
+import { useAppMenu } from "./use-app-menu"
+import { useLlmSettings } from "./use-llm-settings"
+import { useObsidianSettings } from "./use-obsidian-settings"
 import { useReaderPanels } from "./reader-panels"
 import { friendlyImportErrorMessage } from "./import-errors"
 import {
@@ -352,27 +343,7 @@ export function ReaderShell({
 
   // macOS 原生菜单:订阅一次,动作经 ref 分发到与顶栏相同的 handler
   // (ref 在每次渲染时刷新为最新闭包,见 return 前的赋值)。
-  const appMenuHandlersRef = useRef<AppMenuHandlers | null>(null)
-  useEffect(() => {
-    let disposed = false
-    let unlisten: (() => void) | null = null
-    void listenAppMenuAction((actionId) => {
-      const handlers = appMenuHandlersRef.current
-      if (handlers) {
-        dispatchAppMenuAction(actionId, handlers)
-      }
-    }).then((fn) => {
-      if (disposed) {
-        fn?.()
-      } else {
-        unlisten = fn
-      }
-    })
-    return () => {
-      disposed = true
-      unlisten?.()
-    }
-  }, [])
+  const appMenuHandlersRef = useAppMenu()
   const {
     sidebarOpen,
     searchOpen,
@@ -387,21 +358,37 @@ export function ReaderShell({
   const [readerDisplayThemeId, setReaderDisplayThemeId] =
     useState<ReaderDisplayThemeId>(readInitialReaderDisplayThemeId)
   const [outlineTarget, setOutlineTarget] = useState<ConvertedTextOutlineTarget | null>(null)
-  const [llmSettings, setLlmSettings] = useState<LlmSettings | null>(null)
-  const [llmSettingsError, setLlmSettingsError] = useState("")
-  const [obsidianVaultPath, setObsidianVaultPath] = useState("")
-  const [obsidianSubdir, setObsidianSubdir] = useState("")
-  const [obsidianConfigured, setObsidianConfigured] = useState(false)
-  const [obsidianStatus, setObsidianStatus] = useState<ObsidianSettingsStatus>("idle")
-  const [obsidianMessage, setObsidianMessage] = useState("")
-  const [sparkObsidianExporting, setSparkObsidianExporting] = useState(false)
-  const [knowledgeObsidianExporting, setKnowledgeObsidianExporting] = useState(false)
+  const { llmSettings, llmSettingsError, setLlmSettings, setLlmSettingsError } = useLlmSettings()
   const canUseLibrary = isTauriRuntime() || browserLibraryAvailable()
   const hasCurrentThreadSelection = (currentThreadSelectionText ?? "").trim().length > 0
   const sparkSelectionText = hasCurrentThreadSelection ? (currentThreadSelectionText ?? "") : selectionText
   const sparkSelectionRects = hasCurrentThreadSelection
     ? (currentThreadSelectionRects ?? [])
     : selectionRects
+  const {
+    obsidianVaultPath,
+    obsidianSubdir,
+    obsidianConfigured,
+    obsidianStatus,
+    obsidianMessage,
+    sparkObsidianExporting,
+    knowledgeObsidianExporting,
+    setObsidianVaultPath,
+    setObsidianSubdir,
+    handleSaveObsidianSettings,
+    handleExportSparkToObsidian,
+    handleExportHighlightToObsidian,
+    handleExportKnowledgeToObsidian,
+  } = useObsidianSettings({
+    bookId,
+    interpretation,
+    sparkSelectionText,
+    sparkSelectionRects,
+    citationChunkIds,
+    evidence,
+    pushNotice,
+    setPanelOpen,
+  })
   const readerDisplayStyle = useMemo(
     () => readerDisplayThemeStyle(readerDisplayThemeId),
     [readerDisplayThemeId],
@@ -420,171 +407,6 @@ export function ReaderShell({
     }
     setPanelOpen("onboardingOpen", true)
   }, [phase, totalPages, parsedPages.length])
-
-  useEffect(() => {
-    void refreshLlmSettings()
-    void refreshObsidianSettings()
-  }, [])
-
-  async function refreshLlmSettings() {
-    if (!isTauriRuntime()) {
-      setLlmSettings(null)
-      setLlmSettingsError("")
-      return null
-    }
-
-    try {
-      const settings = await getLlmSettings()
-      setLlmSettings(settings)
-      setLlmSettingsError("")
-      return settings
-    } catch (error) {
-      setLlmSettings(null)
-      setLlmSettingsError(error instanceof Error ? error.message : "AI provider 读取失败")
-      return null
-    }
-  }
-
-  async function refreshObsidianSettings() {
-    if (!isTauriRuntime()) {
-      return
-    }
-    setObsidianStatus("loading")
-    try {
-      const settings = await getObsidianSettings()
-      setObsidianVaultPath(settings.vaultPath)
-      setObsidianSubdir(settings.subdir)
-      setObsidianConfigured(settings.configured)
-      setObsidianStatus("idle")
-      setObsidianMessage("")
-    } catch (error) {
-      setObsidianStatus("error")
-      setObsidianMessage(normalizeCommandError(error).message)
-    }
-  }
-
-  async function handleSaveObsidianSettings() {
-    if (!isTauriRuntime()) {
-      setObsidianStatus("error")
-      setObsidianMessage("Obsidian 导出需要桌面版。")
-      return
-    }
-    setObsidianStatus("saving")
-    setObsidianMessage("")
-    try {
-      const settings = await saveObsidianSettings({
-        vaultPath: obsidianVaultPath.trim(),
-        subdir: obsidianSubdir.trim() || null,
-      })
-      setObsidianVaultPath(settings.vaultPath)
-      setObsidianSubdir(settings.subdir)
-      setObsidianConfigured(settings.configured)
-      setObsidianStatus("ok")
-      setObsidianMessage(settings.configured ? "Obsidian 设置已保存" : "已清除 Obsidian 配置")
-    } catch (error) {
-      setObsidianStatus("error")
-      setObsidianMessage(normalizeCommandError(error).message)
-    }
-  }
-
-  function obsidianTimestamp() {
-    const now = new Date()
-    const pad = (value: number) => String(value).padStart(2, "0")
-    return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`
-  }
-
-  async function handleExportSparkToObsidian() {
-    if (!bookId) {
-      pushNotice("请先打开一本书")
-      return
-    }
-    if (!interpretation.trim()) {
-      pushNotice("还没有可导出的解读内容")
-      return
-    }
-    if (!obsidianConfigured) {
-      pushNotice("请先配置 Obsidian vault")
-      setPanelOpen("obsidianSettingsOpen", true)
-      return
-    }
-    const pageIndex = sparkSelectionRects[0]?.pageIndex ?? null
-    const snippet: ObsidianSnippet = {
-      kind: "spark",
-      pageNumber: pageIndex === null ? null : pageIndex + 1,
-      quote: sparkSelectionText.trim() || null,
-      content: interpretation,
-      chunkIds:
-        citationChunkIds && citationChunkIds.length > 0
-          ? citationChunkIds
-          : evidence.map((item) => item.chunkId),
-      timestamp: obsidianTimestamp(),
-    }
-    setSparkObsidianExporting(true)
-    try {
-      await exportSnippetToObsidian(bookId, snippet)
-      pushNotice("已存到 Obsidian")
-    } catch (error) {
-      pushNotice(`存到 Obsidian 失败；${normalizeCommandError(error).message}`)
-    } finally {
-      setSparkObsidianExporting(false)
-    }
-  }
-
-  async function handleExportHighlightToObsidian() {
-    const quote = sparkSelectionText.trim()
-    if (!bookId) {
-      pushNotice("请先打开一本书")
-      return
-    }
-    if (!quote) {
-      pushNotice("请先框选一段文字")
-      return
-    }
-    if (!obsidianConfigured) {
-      pushNotice("请先配置 Obsidian vault")
-      setPanelOpen("obsidianSettingsOpen", true)
-      return
-    }
-    const pageIndex = sparkSelectionRects[0]?.pageIndex ?? null
-    const snippet: ObsidianSnippet = {
-      kind: "highlight",
-      pageNumber: pageIndex === null ? null : pageIndex + 1,
-      quote,
-      content: quote,
-      chunkIds: [],
-      timestamp: obsidianTimestamp(),
-    }
-    setSparkObsidianExporting(true)
-    try {
-      await exportSnippetToObsidian(bookId, snippet)
-      pushNotice("高亮已存到 Obsidian")
-    } catch (error) {
-      pushNotice(`存到 Obsidian 失败；${normalizeCommandError(error).message}`)
-    } finally {
-      setSparkObsidianExporting(false)
-    }
-  }
-
-  async function handleExportKnowledgeToObsidian() {
-    if (!bookId) {
-      pushNotice("请先打开一本书")
-      return
-    }
-    if (!obsidianConfigured) {
-      pushNotice("请先配置 Obsidian vault")
-      setPanelOpen("obsidianSettingsOpen", true)
-      return
-    }
-    setKnowledgeObsidianExporting(true)
-    try {
-      await exportBookKnowledgeToObsidian(bookId)
-      pushNotice("知识册已导出到 Obsidian")
-    } catch (error) {
-      pushNotice(`导出到 Obsidian 失败；${normalizeCommandError(error).message}`)
-    } finally {
-      setKnowledgeObsidianExporting(false)
-    }
-  }
 
   // Shared "render this opened book asset into the reader" tail. Every import /
   // open path produced the same onParsedDocument(asset, {...metadata}) call; this
@@ -917,29 +739,16 @@ export function ReaderShell({
     onComment()
   }
 
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (isEditableTarget(event.target)) {
-        return
-      }
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "e") {
-        if (selectionText.trim()) {
-          event.preventDefault()
-          runDeepInterpretation()
-        }
-        return
-      }
-      if (event.key === "Escape") {
-        if (selectionText.trim()) {
-          event.preventDefault()
-          setQuestion("")
-          onClearSelection()
-        }
-      }
-    }
-    window.addEventListener("keydown", handleKeyDown)
-    return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [selectionText, onClearSelection, onDeepInterpret, onPlainExplain, onWorkbenchTabChange, onCurrentThreadLightweightChange])
+  useReaderShortcuts({
+    selectionText,
+    runDeepInterpretation,
+    setQuestion,
+    onClearSelection,
+    onDeepInterpret,
+    onPlainExplain,
+    onWorkbenchTabChange,
+    onCurrentThreadLightweightChange,
+  })
 
   function handleReaderDisplayThemeChange(themeId: ReaderDisplayThemeId) {
     const normalizedThemeId = normalizeReaderDisplayThemeId(themeId)
@@ -1412,19 +1221,6 @@ function coordinateModeIsApproximate(coordinateMode: string) {
   return coordinateMode
     .split(/[-_\s]+/)
     .some((part) => part.toLowerCase() === "approx" || part.toLowerCase() === "approximate")
-}
-
-function isEditableTarget(target: EventTarget | null) {
-  if (!(target instanceof HTMLElement)) {
-    return false
-  }
-  const tagName = target.tagName.toLowerCase()
-  return (
-    target.isContentEditable ||
-    tagName === "input" ||
-    tagName === "textarea" ||
-    tagName === "select"
-  )
 }
 
 type PdfUnavailablePanelProps = {
