@@ -1,6 +1,9 @@
 import type { Meta, StoryObj } from "@storybook/react"
 import { KnowledgePanel } from "./KnowledgePanel"
+import type { KnowledgeSearchHit } from "@/core/library-api"
 import type { KnowledgeCard, KnowledgeGraph } from "@/stores/reader-store"
+
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
 const cards: KnowledgeCard[] = [
   {
@@ -188,6 +191,63 @@ export const BuildingGraph: Story = {
     cards,
     graph,
     building: true,
+  },
+}
+
+export const WithSearch: Story = {
+  args: {
+    cards,
+    graph,
+    desktopAvailable: true,
+    onSearchKnowledge: async (query: string): Promise<KnowledgeSearchHit[]> => {
+      await delay(120)
+      return cards
+        .filter((card) => card.title.includes(query) || card.summary.includes(query))
+        .map((card) => ({
+          cardId: card.cardId,
+          title: card.title,
+          cardType: card.cardType,
+          status: card.status,
+          source: card.source,
+          confidence: card.confidence,
+          score: 1,
+          evidenceChunkIds: card.evidence.map((item) => item.chunkId),
+        }))
+    },
+  },
+}
+
+const lazyCards: KnowledgeCard[] = [
+  {
+    cardId: "kb-lazy-1",
+    bookId: "book-story",
+    cardType: "concept",
+    title: "复利（待补摘要与笔记）",
+    summary: "",
+    bodyMarkdown: "",
+    payloadJson: "{}",
+    status: "candidate",
+    source: "auto",
+    confidence: 0.7,
+    sourceVersion: 1,
+    userLocked: false,
+    createdAt: "2026-06-07T10:00:00Z",
+    updatedAt: "2026-06-07T10:00:00Z",
+    evidence: [],
+  },
+]
+
+export const LazyGeneration: Story = {
+  args: {
+    cards: lazyCards,
+    graph: null,
+    desktopAvailable: true,
+    onGenerateCardSummary: async () => {
+      await delay(600)
+    },
+    onGenerateHighlightNote: async () => {
+      await delay(600)
+    },
   },
 }
 

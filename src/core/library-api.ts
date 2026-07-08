@@ -509,6 +509,17 @@ export type ExportBookKnowledgeJsonResponse = {
   edges: KnowledgeGraph["edges"]
 }
 
+export type KnowledgeSearchHit = {
+  cardId: string
+  title: string
+  cardType: string
+  status: string
+  source: string
+  confidence: number
+  score: number
+  evidenceChunkIds: string[]
+}
+
 export type UpsertKnowledgeCardRequest = {
   cardId?: string | null
   bookId: string
@@ -831,6 +842,18 @@ export async function listKnowledgeCards(bookId: string) {
 
 export async function getKnowledgeCard(bookId: string, cardId: string) {
   return invokeCommand<KnowledgeCard | null>("get_knowledge_card", { bookId, cardId })
+}
+
+export async function getOrGenerateHighlightNote(bookId: string, cardId: string, force = false) {
+  return invokeCommand<KnowledgeCard>("get_or_generate_highlight_note", { bookId, cardId, force })
+}
+
+export async function getOrGenerateCardSummary(bookId: string, cardId: string, force = false) {
+  return invokeCommand<KnowledgeCard>("get_or_generate_card_summary", { bookId, cardId, force })
+}
+
+export async function searchKnowledge(bookId: string, query: string, limit = 8) {
+  return invokeCommand<KnowledgeSearchHit[]>("search_knowledge", { bookId, query, limit })
 }
 
 export async function upsertKnowledgeCard(request: UpsertKnowledgeCardRequest) {

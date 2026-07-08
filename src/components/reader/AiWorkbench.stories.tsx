@@ -1,8 +1,54 @@
 import type { Meta, StoryObj } from "@storybook/react"
 import { AiWorkbench } from "./AiWorkbench"
 import type { AgentTask } from "@/core/agent-task"
+import type { KnowledgeCard, SavedHighlight } from "@/stores/reader-store"
 
 const chunkId = "b12345678-p8-c1-abcdef12"
+
+const highlightSamples: SavedHighlight[] = [
+  {
+    id: "hl-1",
+    bookId: "book-1",
+    selectionText: "复利的力量并不来自某一次惊人的收益，而来自足够长的时间里持续保持正确方向。",
+    prefix: "",
+    suffix: "",
+    pageIndex: 7,
+    positionStart: 0,
+    positionEnd: 40,
+    rects: [],
+    createdAt: "2026-06-08T08:00:00.000Z",
+  },
+  {
+    id: "hl-2",
+    bookId: "book-1",
+    selectionText: "风险控制保证长期计划不中断。",
+    prefix: "",
+    suffix: "",
+    pageIndex: 8,
+    positionStart: 0,
+    positionEnd: 14,
+    rects: [],
+    createdAt: "2026-06-08T07:20:00.000Z",
+  },
+]
+
+const highlightCards: KnowledgeCard[] = highlightSamples.map((highlight, index) => ({
+  cardId: `kb-highlight-${index + 1}`,
+  bookId: highlight.bookId,
+  cardType: "highlight",
+  title: highlight.selectionText.slice(0, 12),
+  summary: highlight.selectionText,
+  bodyMarkdown: highlight.selectionText,
+  payloadJson: JSON.stringify({ sourceTable: "highlights", sourceId: highlight.id }),
+  status: "confirmed",
+  source: "highlight",
+  confidence: 1,
+  sourceVersion: 1,
+  userLocked: false,
+  createdAt: highlight.createdAt,
+  updatedAt: highlight.createdAt,
+  evidence: [],
+}))
 
 const tasks: AgentTask[] = [
   {
@@ -204,5 +250,27 @@ export const TasksEmpty: Story = {
     tab: "tasks",
     tasks: [],
     runningTaskCount: 0,
+  },
+}
+
+export const Highlights: Story = {
+  args: {
+    tab: "highlights",
+    highlights: highlightSamples,
+    knowledgeCards: highlightCards,
+    desktopAvailable: true,
+    onGenerateHighlightNote: async (cardId: string): Promise<KnowledgeCard | null> => {
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      const card = highlightCards.find((item) => item.cardId === cardId)
+      return card ? { ...card, bodyMarkdown: "这条高亮强调长期复利依赖持续的方向与纪律。" } : null
+    },
+  },
+}
+
+export const HighlightsEmpty: Story = {
+  args: {
+    tab: "highlights",
+    highlights: [],
+    knowledgeCards: [],
   },
 }

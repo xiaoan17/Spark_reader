@@ -1,4 +1,4 @@
-import { Sparkles, WandSparkles } from "lucide-react"
+import { Highlighter, Sparkles, WandSparkles } from "lucide-react"
 import type React from "react"
 import { AnimatedValue } from "@/components/ui/animated-value"
 import { Badge } from "@/components/ui/badge"
@@ -8,13 +8,16 @@ import type {
   AnswerSource,
   EvidencePreview,
   FollowUpTurn,
+  KnowledgeCard,
   ReaderPhase,
+  SavedHighlight,
   SavedInterpretation,
   WorkbenchTab,
 } from "@/stores/reader-store"
 import type { NormalizedPageRect } from "@/core/coordinates"
 import type { AgentTask, AgentTaskKind } from "@/core/agent-task"
 import { CurrentThread } from "./CurrentThread"
+import { HighlightsList } from "./HighlightsList"
 import { TasksPanel } from "./TasksPanel"
 
 type AiWorkbenchProps = {
@@ -40,6 +43,12 @@ type AiWorkbenchProps = {
   tasks: AgentTask[]
   tasksDisabled?: boolean
   interpretationHistory?: SavedInterpretation[]
+  highlights?: SavedHighlight[]
+  knowledgeCards?: KnowledgeCard[]
+  desktopAvailable?: boolean
+  onOpenHighlight?: (highlight: SavedHighlight) => void
+  onGenerateHighlightNote?: (cardId: string) => Promise<KnowledgeCard | null>
+  onNotice?: (message: string) => void
   onTabChange: (tab: WorkbenchTab) => void
   onNoteChange: (note: string) => void
   onSaveNote: () => void
@@ -80,6 +89,12 @@ export function AiWorkbench({
   tasks,
   tasksDisabled = false,
   interpretationHistory = [],
+  highlights = [],
+  knowledgeCards = [],
+  desktopAvailable = true,
+  onOpenHighlight = () => undefined,
+  onGenerateHighlightNote,
+  onNotice = () => undefined,
   onTabChange,
   onNoteChange,
   onSaveNote,
@@ -105,6 +120,13 @@ export function AiWorkbench({
           icon={<Sparkles className="h-3.5 w-3.5" />}
           label="Spark"
           onClick={() => onTabChange("spark")}
+        />
+        <WorkbenchTabButton
+          active={tab === "highlights"}
+          icon={<Highlighter className="h-3.5 w-3.5" />}
+          label="高亮"
+          badge={highlights.length}
+          onClick={() => onTabChange("highlights")}
         />
         <WorkbenchTabButton
           active={tab === "tasks"}
@@ -156,6 +178,15 @@ export function AiWorkbench({
             onExportToObsidian={onExportSparkToObsidian}
             obsidianExporting={sparkObsidianExporting}
             onOpenHistoryItem={onOpenSparkItem}
+          />
+        ) : tab === "highlights" ? (
+          <HighlightsList
+            highlights={highlights}
+            knowledgeCards={knowledgeCards}
+            desktopAvailable={desktopAvailable}
+            onOpenHighlight={onOpenHighlight}
+            onGenerateNote={onGenerateHighlightNote}
+            onNotice={onNotice}
           />
         ) : (
           <div className="h-full min-h-0 overflow-y-auto px-3 py-3">

@@ -275,6 +275,12 @@ export function App() {
       onRejectKnowledgeCard={(cardId) => void knowledge.handleRejectKnowledgeCard(cardId)}
       onDeleteKnowledgeCard={(cardId) => void knowledge.handleDeleteKnowledgeCard(cardId)}
       onSaveKnowledgeCard={(request) => void knowledge.handleSaveKnowledgeCard(request)}
+      onGenerateCardSummary={(cardId) => knowledge.generateCardSummary(cardId)}
+      onGenerateHighlightNote={async (cardId) => {
+        await knowledge.generateHighlightNote(cardId)
+      }}
+      onGenerateHighlightAiNote={(cardId) => knowledge.generateHighlightNote(cardId, true)}
+      onSearchKnowledge={(query) => knowledge.searchKnowledgeCards(query)}
       onRegenerate={() =>
         interpretationHandlers.runLocalInterpretation(
           currentThreadLightweight ? "plain" : "deep",

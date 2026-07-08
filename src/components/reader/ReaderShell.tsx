@@ -76,6 +76,7 @@ import {
 import {
   isTauriRuntime,
   type ConvertedBookAsset,
+  type KnowledgeSearchHit,
   type LlmProviderKind,
   type UpsertKnowledgeCardRequest,
 } from "@/core/library-api"
@@ -238,6 +239,10 @@ type ReaderShellProps = {
   onRejectKnowledgeCard?: (cardId: string) => void
   onDeleteKnowledgeCard?: (cardId: string) => void
   onSaveKnowledgeCard?: (request: Omit<UpsertKnowledgeCardRequest, "bookId">) => void
+  onGenerateCardSummary?: (cardId: string) => Promise<void>
+  onGenerateHighlightNote?: (cardId: string) => Promise<void>
+  onGenerateHighlightAiNote?: (cardId: string) => Promise<KnowledgeCard | null>
+  onSearchKnowledge?: (query: string) => Promise<KnowledgeSearchHit[]>
   onRegenerate: () => void
   onStop: () => void
   onOpenSampleBook?: () => void
@@ -318,7 +323,7 @@ export function ReaderShell({
   onGenerateTldr = () => undefined,
   onRegenerateTldr = () => undefined,
   onSaveHighlight,
-  onOpenHighlight: _onOpenHighlight,
+  onOpenHighlight,
   onDeleteHighlight: _onDeleteHighlight,
   onOpenInterpretation: _onOpenInterpretation,
   onOpenSparkInterpretation = () => undefined,
@@ -332,6 +337,10 @@ export function ReaderShell({
   onRejectKnowledgeCard = () => undefined,
   onDeleteKnowledgeCard = () => undefined,
   onSaveKnowledgeCard = () => undefined,
+  onGenerateCardSummary,
+  onGenerateHighlightNote,
+  onGenerateHighlightAiNote,
+  onSearchKnowledge,
   onRegenerate,
   onStop,
   onOpenSampleBook,
@@ -1049,6 +1058,11 @@ export function ReaderShell({
                 onDeleteCard={onDeleteKnowledgeCard}
                 onSaveCard={onSaveKnowledgeCard}
                 onEvidenceClick={handleEvidenceJump}
+                onSearchKnowledge={onSearchKnowledge}
+                onGenerateCardSummary={onGenerateCardSummary}
+                onGenerateHighlightNote={onGenerateHighlightNote}
+                onNotice={pushNotice}
+                desktopAvailable={isTauriRuntime()}
                 fullHeight
               />
             </div>
@@ -1169,6 +1183,12 @@ export function ReaderShell({
             tasks={agentTasks}
             tasksDisabled={!bookId}
             interpretationHistory={interpretationHistory}
+            highlights={highlights}
+            knowledgeCards={knowledgeCards}
+            desktopAvailable={isTauriRuntime()}
+            onOpenHighlight={onOpenHighlight}
+            onGenerateHighlightNote={onGenerateHighlightAiNote}
+            onNotice={pushNotice}
             onTabChange={onWorkbenchTabChange}
             onNoteChange={onCurrentNoteChange}
             onSaveNote={onCurrentNoteSave}

@@ -2,9 +2,37 @@ import { act } from "react"
 import { createRoot } from "react-dom/client"
 import { describe, expect, it, vi } from "vitest"
 import { KnowledgePanel } from "./KnowledgePanel"
+import type { KnowledgeSearchHit } from "@/core/library-api"
 import type { KnowledgeCard, KnowledgeGraph } from "@/stores/reader-store"
 
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
+function setInputValue(input: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(
+    window.HTMLInputElement.prototype,
+    "value",
+  )?.set
+  setter?.call(input, value)
+  input.dispatchEvent(new Event("input", { bubbles: true }))
+}
+
+const emptyCard: KnowledgeCard = {
+  cardId: "kb-empty-1",
+  bookId: "book-test",
+  cardType: "concept",
+  title: "复利（待补）",
+  summary: "",
+  bodyMarkdown: "",
+  payloadJson: "{}",
+  status: "candidate",
+  source: "auto",
+  confidence: 0.7,
+  sourceVersion: 1,
+  userLocked: false,
+  createdAt: "2026-06-07T10:00:00Z",
+  updatedAt: "2026-06-07T10:00:00Z",
+  evidence: [],
+}
+
+;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true
 
 const card: KnowledgeCard = {
@@ -271,6 +299,174 @@ describe("KnowledgePanel", () => {
       await Promise.resolve()
     })
     expect(container.textContent).toContain("第 1 页")
+
+    root.unmount()
+    container.remove()
+  })
+
+  it("filters cards to search hits and calls the search command with the query", async () => {
+    vi.useFakeTimers()
+    const container = document.createElement("div")
+    document.body.append(container)
+    const root = createRoot(container)
+    const other: KnowledgeCard = { ...card, cardId: "kb-card-2", title: "风险控制" }
+    const onSearchKnowledge = vi.fn(
+      async (): Promise<KnowledgeSearchHit[]> => [
+        {
+          cardId: other.cardId,
+          title: other.title,
+          cardType: other.cardType,
+          status: other.status,
+          source: other.source,
+          confidence: other.confidence,
+          score: 1,
+          evidenceChunkIds: [],
+        },
+      ],
+    )
+
+    await act(async () => {
+      root.render(
+        <KnowledgePanel
+          cards={[card, other]}
+          desktopAvailable
+          onSearchKnowledge={onSearchKnowledge}
+        />,
+      )
+      await Promise.resolve()
+    })
+
+    const input = container.querySelector<HTMLInputElement>('input[aria-label="搜索知识卡片"]')
+    expect(input).toBeTruthy()
+
+    await act(async () => {
+      setInputValue(input!, "风险")
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300)
+    })
+
+    expect(onSearchKnowledge).toHaveBeenCalledWith("风险")
+    // Only the hit card remains; the non-matching card is filtered out of the list.
+    const titles = Array.from(container.querySelectorAll("h3")).map((node) => node.textContent)
+    expect(titles).toContain("风险控制")
+    expect(titles).not.toContain("复利来自时间")
+
+    vi.useRealTimers()
+    root.unmount()
+    container.remove()
+  })
+
+  it("shows an empty state when the search returns no hits", async () => {
+    vi.useFakeTimers()
+    const container = document.createElement("div")
+    document.body.append(container)
+    const root = createRoot(container)
+    const onSearchKnowledge = vi.fn(async (): Promise<KnowledgeSearchHit[]> => [])
+
+    await act(async () => {
+      root.render(
+        <KnowledgePanel cards={[card]} desktopAvailable onSearchKnowledge={onSearchKnowledge} />,
+      )
+      await Promise.resolve()
+    })
+
+    const input = container.querySelector<HTMLInputElement>('input[aria-label="搜索知识卡片"]')
+    await act(async () => {
+      setInputValue(input!, "不存在的词")
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300)
+    })
+
+    expect(container.textContent).toContain("未找到")
+
+    vi.useRealTimers()
+    root.unmount()
+    container.remove()
+  })
+
+  it("generates a card summary and shows a loading state", async () => {
+    const container = document.createElement("div")
+    document.body.append(container)
+    const root = createRoot(container)
+    let resolveGenerate: () => void = () => undefined
+    const onGenerateCardSummary = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveGenerate = resolve
+        }),
+    )
+
+    await act(async () => {
+      root.render(
+        <KnowledgePanel
+          cards={[emptyCard]}
+          desktopAvailable
+          onGenerateCardSummary={onGenerateCardSummary}
+        />,
+      )
+      await Promise.resolve()
+    })
+
+    const button = Array.from(container.querySelectorAll("button")).find((node) =>
+      node.textContent?.includes("生成摘要"),
+    )
+    expect(button).toBeTruthy()
+
+    await act(async () => {
+      button?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+      await Promise.resolve()
+    })
+
+    expect(onGenerateCardSummary).toHaveBeenCalledWith(emptyCard.cardId)
+    expect(container.textContent).toContain("生成摘要中…")
+
+    await act(async () => {
+      resolveGenerate()
+      await Promise.resolve()
+    })
+    expect(container.textContent).not.toContain("生成摘要中…")
+
+    root.unmount()
+    container.remove()
+  })
+
+  it("generates a highlight note and surfaces failures through onNotice", async () => {
+    const container = document.createElement("div")
+    document.body.append(container)
+    const root = createRoot(container)
+    const onNotice = vi.fn()
+    const onGenerateHighlightNote = vi.fn(async () => {
+      throw new Error("LLM 未配置")
+    })
+
+    await act(async () => {
+      root.render(
+        <KnowledgePanel
+          cards={[emptyCard]}
+          desktopAvailable
+          onGenerateHighlightNote={onGenerateHighlightNote}
+          onNotice={onNotice}
+        />,
+      )
+      await Promise.resolve()
+    })
+
+    const button = Array.from(container.querySelectorAll("button")).find((node) =>
+      node.textContent?.includes("生成笔记"),
+    )
+    expect(button).toBeTruthy()
+
+    await act(async () => {
+      button?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(onGenerateHighlightNote).toHaveBeenCalledWith(emptyCard.cardId)
+    expect(onNotice).toHaveBeenCalledWith(expect.stringContaining("生成笔记失败"))
+    expect(onNotice).toHaveBeenCalledWith(expect.stringContaining("LLM 未配置"))
 
     root.unmount()
     container.remove()

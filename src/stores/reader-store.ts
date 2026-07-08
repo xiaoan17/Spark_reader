@@ -52,7 +52,7 @@ export type AnswerSource = "llm" | "local_fallback"
 export type InterpretationKind = "interpretation" | "spark" | "note"
 
 export type InterpretMode = "deep" | "plain" | "apply"
-export type WorkbenchTab = "spark" | "tasks"
+export type WorkbenchTab = "spark" | "tasks" | "highlights"
 
 export type DocumentTldrState = {
   text: string

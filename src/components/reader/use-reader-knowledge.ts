@@ -7,17 +7,21 @@ import {
   getBookKnowledgeMap,
   getKnowledgeGraph,
   getKnowledgeHealth,
+  getOrGenerateCardSummary,
+  getOrGenerateHighlightNote,
   isTauriRuntime,
   listKnowledgeCards,
   listKnowledgeDrift,
   normalizeCommandError,
   rejectKnowledgeCard,
+  searchKnowledge,
   upsertKnowledgeCard,
+  type KnowledgeSearchHit,
   type UpsertKnowledgeCardRequest,
 } from "@/core/library-api"
 import { downloadMarkdownFile, downloadTextFile } from "@/core/download-file"
 import { knowledgeExportFilename } from "@/core/knowledge-export"
-import { useReaderStore } from "@/stores/reader-store"
+import { useReaderStore, type KnowledgeCard } from "@/stores/reader-store"
 
 /**
  * 单书知识层：卡片 / 图谱 / 健康 / 漂移 / 地图的加载与刷新，构建、导出
@@ -198,6 +202,44 @@ export function useReaderKnowledge() {
     }
   }
 
+  /**
+   * 卡片摘要懒生成（P1-5）。命令 get_or_generate 幂等：摘要已存在即命中缓存。
+   * 失败向上抛出，由调用方（KnowledgePanel）走 pushNotice 提示。
+   */
+  async function generateCardSummary(cardId: string) {
+    if (!bookId || !isTauriRuntime()) {
+      return
+    }
+    await getOrGenerateCardSummary(bookId, cardId)
+    refreshKnowledge(bookId)
+  }
+
+  /**
+   * 高亮/卡片转笔记懒生成（P1-3）。命令写入卡片 body_markdown；生成后刷新知识层，
+   * 并返回刷新前的卡片供调用方就地展示（高亮清单显式点击传 force=true 重生成，
+   * user-locked 卡由后端铁律守卫不会被覆盖）。失败向上抛出交给调用方提示。
+   */
+  async function generateHighlightNote(
+    cardId: string,
+    force = false,
+  ): Promise<KnowledgeCard | null> {
+    if (!bookId || !isTauriRuntime()) {
+      return null
+    }
+    const card = await getOrGenerateHighlightNote(bookId, cardId, force)
+    refreshKnowledge(bookId)
+    return card
+  }
+
+  /** 知识卡片搜索（P1-4）。浏览器态或空查询返回空集，交给面板显示全量/空态。 */
+  async function searchKnowledgeCards(query: string): Promise<KnowledgeSearchHit[]> {
+    const trimmed = query.trim()
+    if (!bookId || !isTauriRuntime() || !trimmed) {
+      return []
+    }
+    return searchKnowledge(bookId, trimmed)
+  }
+
   async function persistAgentTaskCards(
     targetBookId: string,
     taskId: string,
@@ -233,6 +275,9 @@ export function useReaderKnowledge() {
     handleRejectKnowledgeCard,
     handleDeleteKnowledgeCard,
     handleSaveKnowledgeCard,
+    generateCardSummary,
+    generateHighlightNote,
+    searchKnowledgeCards,
     persistAgentTaskCards,
   }
 }
