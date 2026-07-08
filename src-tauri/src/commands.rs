@@ -3,7 +3,7 @@ use tauri::{command, AppHandle, Emitter, Manager};
 
 use crate::{
     coordinates::COORDINATE_VERSION, embeddings, interpretation, knowledge, llm, mineru,
-    mineru_parser, plain_book_parser, product_self_check, storage, translation, zotero,
+    mineru_parser, obsidian, plain_book_parser, product_self_check, storage, translation, zotero,
 };
 
 pub const SEARCH_INDEX_PROGRESS_EVENT: &str = "search-index://progress";
@@ -1006,6 +1006,77 @@ pub fn export_book_knowledge_markdown(
     knowledge::export_book_knowledge_markdown(&db_path, &book_id).map_err(command_error)
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ObsidianExportResponse {
+    pub path: String,
+}
+
+#[command]
+pub fn get_obsidian_settings() -> CommandResult<crate::config::ObsidianSettingsResponse> {
+    crate::config::get_obsidian_settings().map_err(command_error)
+}
+
+#[command]
+pub fn save_obsidian_settings(
+    request: crate::config::SaveObsidianSettingsRequest,
+) -> CommandResult<crate::config::ObsidianSettingsResponse> {
+    crate::config::save_obsidian_settings(request).map_err(command_error)
+}
+
+#[command]
+pub fn export_snippet_to_obsidian(
+    app: AppHandle,
+    book_id: String,
+    snippet: obsidian::ObsidianSnippet,
+) -> CommandResult<ObsidianExportResponse> {
+    let target = require_obsidian_config()?;
+    let db_path = library_db_path(&app)?;
+    let book = storage::get_converted_book_manifest(&db_path, &book_id).map_err(command_error)?;
+    let path = obsidian::export_snippet(
+        &target.vault_path,
+        &target.subdir,
+        &book_id,
+        &book.title,
+        &snippet,
+    )
+    .map_err(command_error)?;
+    Ok(ObsidianExportResponse {
+        path: path.to_string_lossy().to_string(),
+    })
+}
+
+#[command]
+pub fn export_book_knowledge_to_obsidian(
+    app: AppHandle,
+    book_id: String,
+) -> CommandResult<ObsidianExportResponse> {
+    let target = require_obsidian_config()?;
+    let db_path = library_db_path(&app)?;
+    let book = storage::get_converted_book_manifest(&db_path, &book_id).map_err(command_error)?;
+    let export =
+        knowledge::export_book_knowledge_markdown(&db_path, &book_id).map_err(command_error)?;
+    let path = obsidian::export_generated_document(
+        &target.vault_path,
+        &target.subdir,
+        &book.title,
+        "知识图谱",
+        &export.markdown,
+    )
+    .map_err(command_error)?;
+    Ok(ObsidianExportResponse {
+        path: path.to_string_lossy().to_string(),
+    })
+}
+
+fn require_obsidian_config() -> Result<crate::config::ObsidianConfig, CommandError> {
+    crate::config::obsidian_config()
+        .map_err(command_error)?
+        .ok_or_else(|| {
+            CommandError::from_message("Obsidian vault 未配置,请先在设置中填写 vault 路径")
+        })
+}
+
 #[command]
 pub fn export_book_knowledge_json(
     app: AppHandle,
@@ -1107,8 +1178,9 @@ pub fn cancel_translation(book_id: String) -> bool {
     translation::cancel_translation(&book_id)
 }
 
-/// Expose the resolved OpenCode sidecar URL (and readiness) to the frontend so
-/// it can route agent tasks through the real runner when available.
+/// Expose agent-engine status to the frontend. `hostUrl` is always null since
+/// the Codex engine runs per-request (no long-lived server); the AI workbench
+/// falls back to its built-in runner until it gets a codex bridge command.
 #[command]
 pub fn get_agent_host_url() -> crate::agent_host::AgentHostStatus {
     crate::agent_host::status()

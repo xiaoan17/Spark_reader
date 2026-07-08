@@ -40,6 +40,8 @@ export type CurrentThreadProps = {
   onRegenerate: () => void
   onStop: () => void
   onOpenSettings: () => void
+  onExportToObsidian?: () => void
+  obsidianExporting?: boolean
   onOpenHistoryItem?: (item: SavedInterpretation) => void
 }
 
@@ -71,6 +73,8 @@ export function CurrentThread({
   onRegenerate,
   onStop,
   onOpenSettings,
+  onExportToObsidian,
+  obsidianExporting = false,
   onOpenHistoryItem = () => undefined,
 }: CurrentThreadProps) {
   const hasSelection = selectionText.trim().length > 0
@@ -114,6 +118,8 @@ export function CurrentThread({
       onSave={onSaveNote}
       onStop={onStop}
       onOpenSettings={onOpenSettings}
+      onExportToObsidian={onExportToObsidian}
+      obsidianExporting={obsidianExporting}
       runtimeHint={runtimeHint}
     />
   )

@@ -19,6 +19,10 @@ import { Button } from "@/components/ui/button"
 import { KnowledgePanel } from "@/components/knowledge/KnowledgePanel"
 import { TldrReader } from "@/components/reader/TldrReader"
 import { LlmSettingsPanel } from "@/components/settings/LlmSettingsPanel"
+import {
+  ObsidianSettingsPanel,
+  type ObsidianSettingsStatus,
+} from "@/components/settings/ObsidianSettingsPanel"
 import { pageTextByIndex } from "@/core/page-lookup"
 import { replaceInternalCitationsWithReadableLabels } from "@/core/citation-display"
 import { PdfDocumentViewer } from "./PdfCanvasPage"
@@ -75,11 +79,19 @@ import {
 import {
   isTauriRuntime,
   getLlmSettings,
+  getObsidianSettings,
+  saveObsidianSettings,
+  exportSnippetToObsidian,
+  exportBookKnowledgeToObsidian,
+  listenAppMenuAction,
+  normalizeCommandError,
   type ConvertedBookAsset,
   type LlmSettings,
   type LlmProviderKind,
+  type ObsidianSnippet,
   type UpsertKnowledgeCardRequest,
 } from "@/core/library-api"
+import { dispatchAppMenuAction, type AppMenuHandlers } from "./app-menu-actions"
 import { readerChunkSearchResults } from "./search-results"
 import { bookHasPdfParser, tldrMetadataFromAsset } from "./stored-book-asset"
 import { useReaderPageNavigation } from "./page-navigation"
@@ -94,6 +106,7 @@ import { friendlyImportErrorMessage } from "./import-errors"
 import {
   readerLayoutColumns,
   readerViewConfigs,
+  type ReaderViewConfig,
 } from "./reader-view-config"
 import {
   READER_DISPLAY_THEME_STORAGE_KEY,
@@ -336,10 +349,35 @@ export function ReaderShell({
   const [question, setQuestion] = useState("")
   const [notice, setNotice] = useState("")
   const { panels, setPanelOpen, togglePanel } = useReaderPanels()
+
+  // macOS 原生菜单:订阅一次,动作经 ref 分发到与顶栏相同的 handler
+  // (ref 在每次渲染时刷新为最新闭包,见 return 前的赋值)。
+  const appMenuHandlersRef = useRef<AppMenuHandlers | null>(null)
+  useEffect(() => {
+    let disposed = false
+    let unlisten: (() => void) | null = null
+    void listenAppMenuAction((actionId) => {
+      const handlers = appMenuHandlersRef.current
+      if (handlers) {
+        dispatchAppMenuAction(actionId, handlers)
+      }
+    }).then((fn) => {
+      if (disposed) {
+        fn?.()
+      } else {
+        unlisten = fn
+      }
+    })
+    return () => {
+      disposed = true
+      unlisten?.()
+    }
+  }, [])
   const {
     sidebarOpen,
     searchOpen,
     settingsOpen,
+    obsidianSettingsOpen,
     libraryOpen,
     importMenuOpen,
     onboardingOpen,
@@ -351,6 +389,13 @@ export function ReaderShell({
   const [outlineTarget, setOutlineTarget] = useState<ConvertedTextOutlineTarget | null>(null)
   const [llmSettings, setLlmSettings] = useState<LlmSettings | null>(null)
   const [llmSettingsError, setLlmSettingsError] = useState("")
+  const [obsidianVaultPath, setObsidianVaultPath] = useState("")
+  const [obsidianSubdir, setObsidianSubdir] = useState("")
+  const [obsidianConfigured, setObsidianConfigured] = useState(false)
+  const [obsidianStatus, setObsidianStatus] = useState<ObsidianSettingsStatus>("idle")
+  const [obsidianMessage, setObsidianMessage] = useState("")
+  const [sparkObsidianExporting, setSparkObsidianExporting] = useState(false)
+  const [knowledgeObsidianExporting, setKnowledgeObsidianExporting] = useState(false)
   const canUseLibrary = isTauriRuntime() || browserLibraryAvailable()
   const hasCurrentThreadSelection = (currentThreadSelectionText ?? "").trim().length > 0
   const sparkSelectionText = hasCurrentThreadSelection ? (currentThreadSelectionText ?? "") : selectionText
@@ -378,6 +423,7 @@ export function ReaderShell({
 
   useEffect(() => {
     void refreshLlmSettings()
+    void refreshObsidianSettings()
   }, [])
 
   async function refreshLlmSettings() {
@@ -396,6 +442,147 @@ export function ReaderShell({
       setLlmSettings(null)
       setLlmSettingsError(error instanceof Error ? error.message : "AI provider 读取失败")
       return null
+    }
+  }
+
+  async function refreshObsidianSettings() {
+    if (!isTauriRuntime()) {
+      return
+    }
+    setObsidianStatus("loading")
+    try {
+      const settings = await getObsidianSettings()
+      setObsidianVaultPath(settings.vaultPath)
+      setObsidianSubdir(settings.subdir)
+      setObsidianConfigured(settings.configured)
+      setObsidianStatus("idle")
+      setObsidianMessage("")
+    } catch (error) {
+      setObsidianStatus("error")
+      setObsidianMessage(normalizeCommandError(error).message)
+    }
+  }
+
+  async function handleSaveObsidianSettings() {
+    if (!isTauriRuntime()) {
+      setObsidianStatus("error")
+      setObsidianMessage("Obsidian 导出需要桌面版。")
+      return
+    }
+    setObsidianStatus("saving")
+    setObsidianMessage("")
+    try {
+      const settings = await saveObsidianSettings({
+        vaultPath: obsidianVaultPath.trim(),
+        subdir: obsidianSubdir.trim() || null,
+      })
+      setObsidianVaultPath(settings.vaultPath)
+      setObsidianSubdir(settings.subdir)
+      setObsidianConfigured(settings.configured)
+      setObsidianStatus("ok")
+      setObsidianMessage(settings.configured ? "Obsidian 设置已保存" : "已清除 Obsidian 配置")
+    } catch (error) {
+      setObsidianStatus("error")
+      setObsidianMessage(normalizeCommandError(error).message)
+    }
+  }
+
+  function obsidianTimestamp() {
+    const now = new Date()
+    const pad = (value: number) => String(value).padStart(2, "0")
+    return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`
+  }
+
+  async function handleExportSparkToObsidian() {
+    if (!bookId) {
+      pushNotice("请先打开一本书")
+      return
+    }
+    if (!interpretation.trim()) {
+      pushNotice("还没有可导出的解读内容")
+      return
+    }
+    if (!obsidianConfigured) {
+      pushNotice("请先配置 Obsidian vault")
+      setPanelOpen("obsidianSettingsOpen", true)
+      return
+    }
+    const pageIndex = sparkSelectionRects[0]?.pageIndex ?? null
+    const snippet: ObsidianSnippet = {
+      kind: "spark",
+      pageNumber: pageIndex === null ? null : pageIndex + 1,
+      quote: sparkSelectionText.trim() || null,
+      content: interpretation,
+      chunkIds:
+        citationChunkIds && citationChunkIds.length > 0
+          ? citationChunkIds
+          : evidence.map((item) => item.chunkId),
+      timestamp: obsidianTimestamp(),
+    }
+    setSparkObsidianExporting(true)
+    try {
+      await exportSnippetToObsidian(bookId, snippet)
+      pushNotice("已存到 Obsidian")
+    } catch (error) {
+      pushNotice(`存到 Obsidian 失败；${normalizeCommandError(error).message}`)
+    } finally {
+      setSparkObsidianExporting(false)
+    }
+  }
+
+  async function handleExportHighlightToObsidian() {
+    const quote = sparkSelectionText.trim()
+    if (!bookId) {
+      pushNotice("请先打开一本书")
+      return
+    }
+    if (!quote) {
+      pushNotice("请先框选一段文字")
+      return
+    }
+    if (!obsidianConfigured) {
+      pushNotice("请先配置 Obsidian vault")
+      setPanelOpen("obsidianSettingsOpen", true)
+      return
+    }
+    const pageIndex = sparkSelectionRects[0]?.pageIndex ?? null
+    const snippet: ObsidianSnippet = {
+      kind: "highlight",
+      pageNumber: pageIndex === null ? null : pageIndex + 1,
+      quote,
+      content: quote,
+      chunkIds: [],
+      timestamp: obsidianTimestamp(),
+    }
+    setSparkObsidianExporting(true)
+    try {
+      await exportSnippetToObsidian(bookId, snippet)
+      pushNotice("高亮已存到 Obsidian")
+    } catch (error) {
+      pushNotice(`存到 Obsidian 失败；${normalizeCommandError(error).message}`)
+    } finally {
+      setSparkObsidianExporting(false)
+    }
+  }
+
+  async function handleExportKnowledgeToObsidian() {
+    if (!bookId) {
+      pushNotice("请先打开一本书")
+      return
+    }
+    if (!obsidianConfigured) {
+      pushNotice("请先配置 Obsidian vault")
+      setPanelOpen("obsidianSettingsOpen", true)
+      return
+    }
+    setKnowledgeObsidianExporting(true)
+    try {
+      await exportBookKnowledgeToObsidian(bookId)
+      pushNotice("知识册已导出到 Obsidian")
+    } catch (error) {
+      pushNotice(`导出到 Obsidian 失败；${normalizeCommandError(error).message}`)
+    } finally {
+      setKnowledgeObsidianExporting(false)
     }
   }
 
@@ -765,6 +952,46 @@ export function ReaderShell({
     pushNotice(`阅读外观：${readerDisplayThemeById(normalizedThemeId).label}`)
   }
 
+  // 顶栏和原生菜单共用同一个视图切换入口,保证两处行为永不分叉。
+  function handleSelectReaderView(item: ReaderViewConfig) {
+    if (item.disabled) {
+      return
+    }
+    if (item.view === "pdf") {
+      void handlePdfViewClick()
+      return
+    }
+    if (item.view === "translation") {
+      void handleStartTranslation(false)
+      return
+    }
+    switchReaderView(item.view)
+  }
+
+  // macOS 原生菜单动作 → 与顶栏相同的 handler。ref 每次渲染刷新,
+  // 事件订阅只建立一次(卸载时解除)。
+  appMenuHandlersRef.current = {
+    onImport: handleImportMenuOpen,
+    onToggleLibrary: () => {
+      togglePanel("libraryOpen")
+      void refreshStoredBooks()
+    },
+    onToggleSearch: () => {
+      togglePanel("searchOpen")
+      pushNotice(parsedPages.length > 0 ? "搜索面板已切换" : "导入书籍并生成转换稿后才能搜索")
+    },
+    onToggleSettings: () => togglePanel("settingsOpen"),
+    onOpenObsidianSettings: () => setPanelOpen("obsidianSettingsOpen", true),
+    onToggleSidebar: () => togglePanel("sidebarOpen"),
+    onToggleAppearance: () => togglePanel("themeMenuOpen"),
+    onSelectView: (view) => {
+      const item = readerViewItems.find((candidate) => candidate.view === view)
+      if (item) {
+        handleSelectReaderView(item)
+      }
+    },
+  }
+
   return (
     <div
       className="reader-display-theme reader-workspace-theme flex h-screen min-h-0 flex-col overflow-hidden"
@@ -778,6 +1005,7 @@ export function ReaderShell({
         llmProviderText={llmProviderText}
         llmProviderTitle={llmProviderTitle}
         importButtonLabel={importButtonLabel}
+        hasBook={Boolean(bookId) || parsedPages.length > 0}
         isExtracting={isExtracting}
         importMenuOpen={importMenuOpen}
         libraryOpen={libraryOpen}
@@ -785,6 +1013,7 @@ export function ReaderShell({
         readerViewItems={readerViewItems}
         readerDisplayThemeId={readerDisplayThemeId}
         readerDisplayThemeItems={readerDisplayThemeOptions}
+        themeMenuOpen={panels.themeMenuOpen}
         fileInputRef={inputRef}
         onToggleSidebar={() => togglePanel("sidebarOpen")}
         onFileSelected={(file) => void handleFile(file)}
@@ -793,23 +1022,14 @@ export function ReaderShell({
           togglePanel("libraryOpen")
           void refreshStoredBooks()
         }}
-        onSelectView={(item) => {
-          if (item.view === "pdf") {
-            void handlePdfViewClick()
-            return
-          }
-          if (item.view === "translation") {
-            void handleStartTranslation(false)
-            return
-          }
-          switchReaderView(item.view)
-        }}
+        onSelectView={handleSelectReaderView}
         onToggleSearch={() => {
           togglePanel("searchOpen")
           pushNotice(parsedPages.length > 0 ? "搜索面板已切换" : "导入书籍并生成转换稿后才能搜索")
         }}
         onOpenGuide={() => setPanelOpen("onboardingOpen", true)}
         onReaderDisplayThemeChange={handleReaderDisplayThemeChange}
+        onThemeMenuOpenChange={(open) => setPanelOpen("themeMenuOpen", open)}
         onToggleSettings={() => togglePanel("settingsOpen")}
       />
       <LlmSettingsPanel
@@ -820,6 +1040,23 @@ export function ReaderShell({
           setLlmSettingsError("")
         }}
         onEmbeddingSettingsSaved={() => void handleEmbeddingSettingsSaved()}
+        onOpenObsidian={() => {
+          setPanelOpen("settingsOpen", false)
+          setPanelOpen("obsidianSettingsOpen", true)
+        }}
+      />
+      <ObsidianSettingsPanel
+        open={obsidianSettingsOpen}
+        vaultPath={obsidianVaultPath}
+        subdir={obsidianSubdir}
+        configured={obsidianConfigured}
+        status={obsidianStatus}
+        message={obsidianMessage}
+        desktopAvailable={isTauriRuntime()}
+        onVaultPathChange={setObsidianVaultPath}
+        onSubdirChange={setObsidianSubdir}
+        onSave={() => void handleSaveObsidianSettings()}
+        onClose={() => setPanelOpen("obsidianSettingsOpen", false)}
       />
       <OnboardingFlow
         open={onboardingOpen}
@@ -935,6 +1172,7 @@ export function ReaderShell({
               onComment={startComment}
               onOpenSparkItem={(item) => onOpenSparkInterpretation(item, "text")}
               onHighlight={handleHighlight}
+              onSaveToObsidian={() => void handleExportHighlightToObsidian()}
               onTextSelection={handleTextSelection}
               onClearSelection={onClearSelection}
               onCurrentPageChange={onVisiblePageChange}
@@ -974,6 +1212,7 @@ export function ReaderShell({
               onComment={startComment}
               onOpenSparkItem={(item) => onOpenSparkInterpretation(item, "translation")}
               onHighlight={handleHighlight}
+              onSaveToObsidian={() => void handleExportHighlightToObsidian()}
               onTextSelection={handleTextSelection}
               onClearSelection={onClearSelection}
               onPageWindowRequest={requestStoredPageWindow}
@@ -994,6 +1233,8 @@ export function ReaderShell({
                 onBuildKnowledge={onBuildKnowledge}
                 onExport={onExportKnowledge}
                 onExportJson={onExportKnowledgeJson}
+                onExportObsidian={() => void handleExportKnowledgeToObsidian()}
+                obsidianExporting={knowledgeObsidianExporting}
                 onConfirmCard={onConfirmKnowledgeCard}
                 onRejectCard={onRejectKnowledgeCard}
                 onDeleteCard={onDeleteKnowledgeCard}
@@ -1129,6 +1370,8 @@ export function ReaderShell({
             onRegenerate={onRegenerate}
             onStop={onStop}
             onOpenSettings={() => setPanelOpen("settingsOpen", true)}
+            onExportSparkToObsidian={() => void handleExportSparkToObsidian()}
+            sparkObsidianExporting={sparkObsidianExporting}
             onRunTask={onRunAgentTask}
             onStopTask={onStopAgentTask}
             onOpenSparkItem={(item) => onOpenSparkInterpretation(item)}

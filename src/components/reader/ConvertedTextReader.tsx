@@ -73,6 +73,7 @@ export type ConvertedTextReaderProps = {
   onComment?: () => void
   onOpenSparkItem?: (item: SavedInterpretation) => void
   onHighlight: () => void
+  onSaveToObsidian?: () => void
   onTextSelection: (
     text: string,
     pageNumber: number,
@@ -110,6 +111,7 @@ export function ConvertedTextReader({
   onComment,
   onOpenSparkItem,
   onHighlight,
+  onSaveToObsidian,
   onTextSelection,
   onClearSelection,
   onCurrentPageChange,
@@ -621,6 +623,7 @@ export function ConvertedTextReader({
                 onHighlight={onHighlight}
                 onPlainExplain={onPlainExplain}
                 onComment={onComment}
+                onSaveToObsidian={onSaveToObsidian}
               />
             </article>
           )

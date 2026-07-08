@@ -203,6 +203,47 @@ describe("KnowledgePanel", () => {
     container.remove()
   })
 
+  it("exports the knowledge book to Obsidian from the header action", async () => {
+    const container = document.createElement("div")
+    document.body.append(container)
+    const root = createRoot(container)
+    const onExportObsidian = vi.fn()
+
+    await act(async () => {
+      root.render(
+        <KnowledgePanel cards={[card]} graph={graph} onExportObsidian={onExportObsidian} />,
+      )
+      await Promise.resolve()
+    })
+
+    const obsidianButton = container.querySelector('button[aria-label="导出到 Obsidian"]')
+    expect(obsidianButton).toBeTruthy()
+
+    await act(async () => {
+      obsidianButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+      await Promise.resolve()
+    })
+
+    expect(onExportObsidian).toHaveBeenCalledTimes(1)
+    root.unmount()
+    container.remove()
+  })
+
+  it("omits the Obsidian action when no handler is provided", async () => {
+    const container = document.createElement("div")
+    document.body.append(container)
+    const root = createRoot(container)
+
+    await act(async () => {
+      root.render(<KnowledgePanel cards={[card]} graph={graph} />)
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('button[aria-label="导出到 Obsidian"]')).toBeNull()
+    root.unmount()
+    container.remove()
+  })
+
   it("renders backlinks and chapter map views", async () => {
     const container = document.createElement("div")
     document.body.append(container)

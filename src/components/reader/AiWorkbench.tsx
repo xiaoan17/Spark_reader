@@ -49,6 +49,8 @@ type AiWorkbenchProps = {
   onRegenerate: () => void
   onStop: () => void
   onOpenSettings: () => void
+  onExportSparkToObsidian?: () => void
+  sparkObsidianExporting?: boolean
   onRunTask: (kind: AgentTaskKind, prompt?: string) => void
   onStopTask: (taskId: string) => void
   onOpenSparkItem?: (item: SavedInterpretation) => void
@@ -87,6 +89,8 @@ export function AiWorkbench({
   onRegenerate,
   onStop,
   onOpenSettings,
+  onExportSparkToObsidian,
+  sparkObsidianExporting = false,
   onRunTask,
   onStopTask,
   onOpenSparkItem = () => undefined,
@@ -140,6 +144,8 @@ export function AiWorkbench({
             onRegenerate={onRegenerate}
             onStop={onStop}
             onOpenSettings={onOpenSettings}
+            onExportToObsidian={onExportSparkToObsidian}
+            obsidianExporting={sparkObsidianExporting}
             onOpenHistoryItem={onOpenSparkItem}
           />
         ) : (

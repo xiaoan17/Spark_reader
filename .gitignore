@@ -31,8 +31,6 @@ __pycache__/
 data/
 cache/
 **/llm-settings.json
-agent-host/.state/
-agent-host/dist/
 
 # 本地测试书籍/版权材料
 0_book/

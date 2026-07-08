@@ -11,7 +11,10 @@ matches="$(mktemp)"
 trap 'rm -f "$files" "$matches"' EXIT
 
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  git ls-files -co --exclude-standard >"$files"
+  # quotePath off so non-ASCII filenames arrive raw (quoted paths made rg skip
+  # them entirely); drop tracked-but-deleted entries so rg has real files.
+  git -c core.quotePath=false ls-files -co --exclude-standard \
+    | while IFS= read -r file; do [ -f "$file" ] && printf '%s\n' "$file"; done >"$files"
 else
   tmp_git="$(mktemp -d)"
   git --git-dir="$tmp_git/gitdir" --work-tree=. init -q

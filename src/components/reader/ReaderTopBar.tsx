@@ -13,7 +13,7 @@ import {
   Upload,
   Check,
 } from "lucide-react"
-import { useEffect, useRef, useState, type RefObject } from "react"
+import { useEffect, useRef, type RefObject } from "react"
 import { Button } from "@/components/ui/button"
 import { isTauriRuntime } from "@/core/library-api"
 import { cn } from "@/lib/utils"
@@ -30,6 +30,8 @@ type ReaderTopBarProps = {
   llmProviderText: string
   llmProviderTitle: string
   importButtonLabel: string
+  /** 已有书打开时导入降为安静图标;空书架时导入才是实心主按钮 */
+  hasBook: boolean
   isExtracting: boolean
   importMenuOpen: boolean
   libraryOpen: boolean
@@ -37,6 +39,8 @@ type ReaderTopBarProps = {
   readerViewItems: ReaderViewConfig[]
   readerDisplayThemeId: ReaderDisplayThemeId
   readerDisplayThemeItems: ReaderDisplayTheme[]
+  /** 外观下拉受控:状态提升到 ReaderShell,原生菜单"阅读外观…"也能打开它 */
+  themeMenuOpen: boolean
   fileInputRef: RefObject<HTMLInputElement | null>
   onToggleSidebar: () => void
   onFileSelected: (file: File) => void
@@ -46,13 +50,14 @@ type ReaderTopBarProps = {
   onToggleSearch: () => void
   onOpenGuide: () => void
   onReaderDisplayThemeChange: (themeId: ReaderDisplayThemeId) => void
+  onThemeMenuOpenChange: (open: boolean) => void
   onToggleSettings: () => void
 }
 
 /**
- * Reader top bar: title/runtime status on the left, import / library / view-switch
- * / search / theme / settings on the right. Pure presentation — all state lives in
- * ReaderShell and flows in via props (UI-UX §7 端无关展示组件).
+ * Reader top bar. Pure presentation — all state lives in ReaderShell and flows
+ * in via props (UI-UX §7 端无关展示组件). 右侧按语义分四组:
+ * 视图切换(带组底色) | 搜索 | 书库(导入+书架) | 偏好(外观+设置)。
  */
 export function ReaderTopBar({
   bookTitle,
@@ -62,6 +67,7 @@ export function ReaderTopBar({
   llmProviderText: _llmProviderText,
   llmProviderTitle,
   importButtonLabel,
+  hasBook,
   isExtracting,
   importMenuOpen,
   libraryOpen: _libraryOpen,
@@ -69,6 +75,7 @@ export function ReaderTopBar({
   readerViewItems,
   readerDisplayThemeId,
   readerDisplayThemeItems,
+  themeMenuOpen,
   fileInputRef,
   onToggleSidebar,
   onFileSelected,
@@ -78,9 +85,9 @@ export function ReaderTopBar({
   onToggleSearch,
   onOpenGuide: _onOpenGuide,
   onReaderDisplayThemeChange,
+  onThemeMenuOpenChange,
   onToggleSettings,
 }: ReaderTopBarProps) {
-  const [themeMenuOpen, setThemeMenuOpen] = useState(false)
   const themeMenuRef = useRef<HTMLDivElement | null>(null)
   const llmReady = _llmProviderText && _llmProviderText !== "provider 未读取" && _llmProviderText !== "本地兜底"
   const readerDisplayTheme = readerDisplayThemeItems.find((item) => item.id === readerDisplayThemeId)
@@ -94,11 +101,11 @@ export function ReaderTopBar({
       if (target instanceof Node && themeMenuRef.current?.contains(target)) {
         return
       }
-      setThemeMenuOpen(false)
+      onThemeMenuOpenChange(false)
     }
     document.addEventListener("pointerdown", handlePointerDown)
     return () => document.removeEventListener("pointerdown", handlePointerDown)
-  }, [themeMenuOpen])
+  }, [themeMenuOpen, onThemeMenuOpenChange])
 
   return (
     <header className="reader-chrome-bar flex h-11 shrink-0 items-center justify-between gap-2 border-b px-3">
@@ -144,14 +151,18 @@ export function ReaderTopBar({
           }}
         />
 
-        {/* 视图切换：纯图标 pill，无外层 border 容器 */}
-        <div className="flex items-center" role="group" aria-label="切换视图">
+        {/* 组一:视图切换（模式），带组底色与动作按钮区分 */}
+        <div
+          className="reader-chrome-view-group flex items-center"
+          role="group"
+          aria-label="切换视图"
+        >
           {readerViewItems.map((item) => (
             <button
               key={item.view}
               disabled={item.disabled}
               className={cn(
-                "reader-chrome-view-button flex h-7 w-7 items-center justify-center rounded-md border-none transition-colors duration-100 focus:outline-none focus:ring-2 focus:ring-ring",
+                "reader-chrome-view-button flex h-[26px] w-7 items-center justify-center rounded-md border-none transition-colors duration-100 focus:outline-none focus:ring-2 focus:ring-ring",
                 readerView === item.view && "reader-chrome-view-active",
                 item.disabled && "cursor-not-allowed opacity-40",
               )}
@@ -166,41 +177,72 @@ export function ReaderTopBar({
 
         <div className="reader-chrome-divider mx-1 h-4 w-px shrink-0" />
 
-        <Button
-          size="sm"
-          disabled={isExtracting}
-          className="h-7 px-2.5 text-xs"
-          aria-expanded={importMenuOpen}
-          onClick={onImportMenuOpen}
+        {/* 组二:当前书工具 */}
+        <button
+          type="button"
+          className="reader-chrome-icon-button inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors duration-100 focus:outline-none focus:ring-2 focus:ring-ring"
+          aria-label="搜索"
+          title="书内搜索 (⌘F)"
+          onClick={onToggleSearch}
         >
-          {isExtracting ? (
-            <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <Upload className="mr-1 h-3.5 w-3.5" />
-          )}
-          {importButtonLabel}
-        </Button>
+          <Search className="h-4 w-4" />
+        </button>
+
+        <div className="reader-chrome-divider mx-1 h-4 w-px shrink-0" />
+
+        {/* 组三:书库管理（导入 + 书架）。空书架时导入是主按钮,有书后降为图标 */}
+        {hasBook ? (
+          <button
+            type="button"
+            disabled={isExtracting}
+            className={cn(
+              "reader-chrome-icon-button inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors duration-100 focus:outline-none focus:ring-2 focus:ring-ring",
+              isExtracting && "cursor-not-allowed opacity-60",
+            )}
+            aria-label={importButtonLabel}
+            aria-expanded={importMenuOpen}
+            title={`${importButtonLabel} (⌘O)`}
+            data-testid="import-button"
+            onClick={onImportMenuOpen}
+          >
+            {isExtracting ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Upload className="h-4 w-4" />
+            )}
+          </button>
+        ) : (
+          <Button
+            size="sm"
+            disabled={isExtracting}
+            className="h-7 px-2.5 text-xs"
+            aria-expanded={importMenuOpen}
+            data-testid="import-button"
+            onClick={onImportMenuOpen}
+          >
+            {isExtracting ? (
+              <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Upload className="mr-1 h-3.5 w-3.5" />
+            )}
+            {importButtonLabel}
+          </Button>
+        )}
 
         <button
           type="button"
           className="reader-chrome-icon-button inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors duration-100 focus:outline-none focus:ring-2 focus:ring-ring"
           aria-label="打开书架"
-          title="打开书架"
+          title="打开书架 (⌘L)"
           onClick={onToggleLibrary}
         >
           <Library className="h-4 w-4" />
           <span className="sr-only">书架</span>
         </button>
 
-        <button
-          type="button"
-          className="reader-chrome-icon-button inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors duration-100 focus:outline-none focus:ring-2 focus:ring-ring"
-          aria-label="搜索"
-          onClick={onToggleSearch}
-        >
-          <Search className="h-4 w-4" />
-        </button>
+        <div className="reader-chrome-divider mx-1 h-4 w-px shrink-0" />
 
+        {/* 组四:偏好（外观 + 设置） */}
         <div ref={themeMenuRef} className="relative">
           <button
             type="button"
@@ -210,7 +252,7 @@ export function ReaderTopBar({
             aria-expanded={themeMenuOpen}
             title={readerDisplayTheme ? `阅读外观：${readerDisplayTheme.label}` : "阅读外观"}
             data-testid="reader-display-theme-button"
-            onClick={() => setThemeMenuOpen((open) => !open)}
+            onClick={() => onThemeMenuOpenChange(!themeMenuOpen)}
           >
             <Palette className="h-4 w-4" />
           </button>
@@ -235,7 +277,7 @@ export function ReaderTopBar({
                     )}
                     onClick={() => {
                       onReaderDisplayThemeChange(item.id)
-                      setThemeMenuOpen(false)
+                      onThemeMenuOpenChange(false)
                     }}
                   >
                     <span className="reader-panel-accent mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center">

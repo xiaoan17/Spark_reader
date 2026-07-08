@@ -4,10 +4,12 @@ export type ReaderPanelState = {
   sidebarOpen: boolean
   searchOpen: boolean
   settingsOpen: boolean
+  obsidianSettingsOpen: boolean
   libraryOpen: boolean
   importMenuOpen: boolean
   onboardingOpen: boolean
   zoteroOpen: boolean
+  themeMenuOpen: boolean
 }
 
 export type ReaderPanelName = keyof ReaderPanelState
@@ -21,10 +23,12 @@ export const initialReaderPanelState: ReaderPanelState = {
   sidebarOpen: true,
   searchOpen: false,
   settingsOpen: false,
+  obsidianSettingsOpen: false,
   libraryOpen: false,
   importMenuOpen: false,
   onboardingOpen: false,
   zoteroOpen: false,
+  themeMenuOpen: false,
 }
 
 export function readerPanelReducer(

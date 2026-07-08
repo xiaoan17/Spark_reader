@@ -1,4 +1,5 @@
 import {
+  BookMarked,
   Check,
   Download,
   FileJson,
@@ -51,6 +52,8 @@ type KnowledgePanelProps = {
   onBuildKnowledge?: () => void
   onExport?: () => void
   onExportJson?: () => void
+  onExportObsidian?: () => void
+  obsidianExporting?: boolean
   onConfirmCard?: (cardId: string) => void
   onRejectCard?: (cardId: string) => void
   onDeleteCard?: (cardId: string) => void
@@ -75,6 +78,8 @@ export function KnowledgePanel({
   onBuildKnowledge = () => undefined,
   onExport = () => undefined,
   onExportJson = () => undefined,
+  onExportObsidian,
+  obsidianExporting = false,
   onConfirmCard = () => undefined,
   onRejectCard = () => undefined,
   onDeleteCard = () => undefined,
@@ -185,6 +190,23 @@ export function KnowledgePanel({
           >
             <FileJson className="h-4 w-4" />
           </Button>
+          {onExportObsidian ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="导出到 Obsidian"
+              title="导出到 Obsidian"
+              onClick={onExportObsidian}
+              disabled={busy || obsidianExporting || cards.length === 0}
+            >
+              {obsidianExporting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <BookMarked className="h-4 w-4" />
+              )}
+            </Button>
+          ) : null}
         </div>
       </header>
 

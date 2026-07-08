@@ -150,6 +150,7 @@ const meta = {
     onRefresh: () => undefined,
     onBuildKnowledge: () => undefined,
     onExport: () => undefined,
+    onExportObsidian: () => undefined,
     onEvidenceClick: () => undefined,
   },
 } satisfies Meta<typeof KnowledgePanel>

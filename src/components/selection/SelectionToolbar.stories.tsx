@@ -16,6 +16,13 @@ type Story = StoryObj<typeof meta>
 
 export const SparkPrimary: Story = {}
 
+export const WithObsidianExport: Story = {
+  args: {
+    onComment: () => undefined,
+    onSaveToObsidian: () => undefined,
+  },
+}
+
 export const OcrApproximate: Story = {
   args: {
     approximate: true,

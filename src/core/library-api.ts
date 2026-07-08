@@ -521,6 +521,35 @@ export type UpsertKnowledgeCardRequest = {
   evidenceChunkIds?: string[]
 }
 
+export type ObsidianSettings = {
+  vaultPath: string
+  subdir: string
+  configured: boolean
+}
+
+export type SaveObsidianSettingsRequest = {
+  vaultPath: string
+  subdir?: string | null
+}
+
+export type ObsidianSnippetKind = "highlight" | "spark" | "note"
+
+export type ObsidianSnippet = {
+  kind: ObsidianSnippetKind
+  pageNumber?: number | null
+  quote?: string | null
+  content: string
+  chunkIds: string[]
+  /** Local time label rendered by the frontend, e.g. "2026-07-07 21:30". */
+  timestamp: string
+}
+
+export type ExportObsidianResponse = {
+  path: string
+}
+
+const OBSIDIAN_BROWSER_MESSAGE = "Obsidian 导出需要桌面版。"
+
 export function isTauriRuntime() {
   return "__TAURI_INTERNALS__" in window
 }
@@ -571,6 +600,18 @@ export async function listenSearchIndexProgress(
     return null
   }
   return listen<SearchIndexProgressEvent>("search-index://progress", (event) => {
+    handler(event.payload)
+  })
+}
+
+/** macOS 原生菜单动作(payload 为菜单项 id,如 "menu:import")。 */
+export async function listenAppMenuAction(
+  handler: (actionId: string) => void,
+): Promise<UnlistenFn | null> {
+  if (!isTauriRuntime()) {
+    return null
+  }
+  return listen<string>("app-menu://action", (event) => {
     handler(event.payload)
   })
 }
@@ -842,6 +883,34 @@ export async function exportBookKnowledgeJson(bookId: string) {
   return invokeCommand<ExportBookKnowledgeJsonResponse>("export_book_knowledge_json", {
     bookId,
   })
+}
+
+export async function getObsidianSettings() {
+  if (!isTauriRuntime()) {
+    return { vaultPath: "", subdir: "", configured: false } satisfies ObsidianSettings
+  }
+  return invokeCommand<ObsidianSettings>("get_obsidian_settings")
+}
+
+export async function saveObsidianSettings(request: SaveObsidianSettingsRequest) {
+  if (!isTauriRuntime()) {
+    throw new CommandError({ code: "browser_mode", message: OBSIDIAN_BROWSER_MESSAGE })
+  }
+  return invokeCommand<ObsidianSettings>("save_obsidian_settings", { request })
+}
+
+export async function exportSnippetToObsidian(bookId: string, snippet: ObsidianSnippet) {
+  if (!isTauriRuntime()) {
+    throw new CommandError({ code: "browser_mode", message: OBSIDIAN_BROWSER_MESSAGE })
+  }
+  return invokeCommand<ExportObsidianResponse>("export_snippet_to_obsidian", { bookId, snippet })
+}
+
+export async function exportBookKnowledgeToObsidian(bookId: string) {
+  if (!isTauriRuntime()) {
+    throw new CommandError({ code: "browser_mode", message: OBSIDIAN_BROWSER_MESSAGE })
+  }
+  return invokeCommand<ExportObsidianResponse>("export_book_knowledge_to_obsidian", { bookId })
 }
 
 export function searchHitToChunk(hit: SearchBookHit): ParsedChunk {

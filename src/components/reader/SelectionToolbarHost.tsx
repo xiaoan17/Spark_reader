@@ -13,6 +13,7 @@ export type SelectionToolbarHostProps = {
   onHighlight: () => void
   onPlainExplain: () => void
   onComment?: () => void
+  onSaveToObsidian?: () => void
 }
 
 export function SelectionToolbarHost({
@@ -27,6 +28,7 @@ export function SelectionToolbarHost({
   onHighlight,
   onPlainExplain,
   onComment,
+  onSaveToObsidian,
 }: SelectionToolbarHostProps) {
   const shouldRender = useDelayedPresence(present, 80)
   const toolbarRef = useMeasuredToolbarSize(onSizeChange)
@@ -46,6 +48,7 @@ export function SelectionToolbarHost({
       onHighlight={onHighlight}
       onPlainExplain={onPlainExplain}
       onComment={onComment}
+      onSaveToObsidian={onSaveToObsidian}
     />
   )
 }

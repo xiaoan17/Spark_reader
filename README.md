@@ -37,7 +37,7 @@ xattr -cr /Applications/Spark.app
 
 然后再正常双击打开 **Spark**。
 
-更完整的 macOS 安装说明见 [docs/20260603_INSTALL-macos.md](docs/20260603_INSTALL-macos.md)。
+更完整的 macOS 安装说明见 [docs/[finish]20260603_INSTALL-macos.md](docs/[finish]20260603_INSTALL-macos.md)。
 
 ## 配置 API
 
@@ -99,8 +99,9 @@ pnpm release:dmg  # 本机打 macOS DMG
 
 ## 更多文档
 
-- [docs/20260603_INSTALL-macos.md](docs/20260603_INSTALL-macos.md)：macOS 安装和首次打开
-- [docs/20260603_architecture.md](docs/20260603_architecture.md)：架构设计
-- [docs/20260531_tech-stack.md](docs/20260531_tech-stack.md)：技术栈
-- [docs/20260531_mineru-integration.md](docs/20260531_mineru-integration.md)：MinerU 集成
-- [docs/20260531_llm-provider.md](docs/20260531_llm-provider.md)：LLM provider 配置
+- [finish] [docs/[finish]20260603_INSTALL-macos.md](docs/[finish]20260603_INSTALL-macos.md)：macOS 安装和首次打开
+- [todo] [[todo]20260531_ROADMAP.md]([todo]20260531_ROADMAP.md)：路线图和剩余缺口
+- [todo] [docs/[todo]20260603_architecture.md](docs/[todo]20260603_architecture.md)：架构设计
+- [todo] [docs/[todo]20260531_tech-stack.md](docs/[todo]20260531_tech-stack.md)：技术栈
+- [todo] [docs/[todo]20260531_mineru-integration.md](docs/[todo]20260531_mineru-integration.md)：MinerU 集成
+- [todo] [docs/[todo]20260531_llm-provider.md](docs/[todo]20260531_llm-provider.md)：LLM provider 配置

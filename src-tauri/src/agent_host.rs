@@ -1,41 +1,29 @@
-//! Agent-host supervisor: owns the lifecycle of the out-of-process OpenCode
-//! sidecar plus the in-process book-tool HTTP server it depends on.
+//! Agent-engine supervisor: owns the book-tool HTTP/MCP server lifecycle and
+//! probes Codex availability.
 //!
-//! On app startup (`init`) we:
+//! Since the 2026-07 engine replacement (OpenCode sidecar -> per-request
+//! `codex exec`, see `codex_exec`), there is no long-running agent process to
+//! supervise. On app startup (`init`) we:
 //!   1. mint a per-run book-tool bearer token,
-//!   2. start the book-tool HTTP server (see `book_tool_server`),
-//!   3. spawn the `agent-host` Node sidecar, injecting provider creds + the
-//!      book-tool base url/token via env,
-//!   4. parse the sidecar's `agent_host_ready` stdout line to learn its
-//!      OpenCode server URL.
+//!   2. start the book-tool HTTP server (see `book_tool_server`), which also
+//!      exposes the MCP streamable-HTTP endpoint codex connects to,
+//!   3. probe the codex binary in the background to decide engine readiness.
 //!
-//! The resolved URL + token are kept in a global so Tauri commands
-//! (`get_agent_host_url`) and the Spark/translation OpenCode paths can read
-//! them. Provider keys only ever travel Rust -> sidecar env; they never reach
-//! the frontend.
-//!
-//! Failure is non-fatal: if the sidecar can't start (no node, no provider key,
-//! port busy) we simply leave the host URL `None` and callers fall back to the
-//! in-process Rust pipelines.
+//! Failure is non-fatal: when codex is missing or disabled, Spark and
+//! translation fall back to the in-process Rust pipelines exactly as before.
 
-use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 
 use serde::Serialize;
 
 use crate::book_tool_server::{self, BookToolServerConfig};
-use crate::config::{self, LlmProviderKind};
+use crate::codex_exec;
 
-/// Global host state, populated by `init`. `None` host_url means the OpenCode
-/// path is unavailable and callers should use the Rust fallback.
 struct AgentHostState {
-    host_url: Option<String>,
     book_tool_token: String,
     book_tool_port: u16,
-    /// Kept alive so the child is not reaped while the app runs; killed on exit.
-    child: Option<Child>,
+    codex_available: bool,
 }
 
 static STATE: OnceLock<Mutex<AgentHostState>> = OnceLock::new();
@@ -43,26 +31,31 @@ static STATE: OnceLock<Mutex<AgentHostState>> = OnceLock::new();
 fn state() -> &'static Mutex<AgentHostState> {
     STATE.get_or_init(|| {
         Mutex::new(AgentHostState {
-            host_url: None,
             book_tool_token: String::new(),
             book_tool_port: 0,
-            child: None,
+            codex_available: false,
         })
     })
 }
 
+/// Kept shape-compatible with the frontend's AgentHostStatus consumer.
+/// `host_url` is always `None` now (there is no long-running engine server);
+/// the AI workbench keeps using its built-in fallback until it gets its own
+/// codex bridge command.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentHostStatus {
     pub host_url: Option<String>,
     pub book_tool_port: u16,
     pub ready: bool,
+    pub engine: &'static str,
 }
 
-/// Whether the OpenCode path is enabled. Defaults OFF; opt in via env so the
-/// migration can be rolled out behind a flag and instantly reverted.
-pub fn opencode_enabled() -> bool {
-    std::env::var("FOCUSED_READING_OPENCODE_ENABLED")
+/// Whether the Codex engine path is enabled. Defaults ON (codex IS the
+/// scaffold); set `FOCUSED_READING_CODEX_DISABLED=1` to force the Rust
+/// in-process pipelines.
+pub fn codex_enabled() -> bool {
+    !std::env::var("FOCUSED_READING_CODEX_DISABLED")
         .ok()
         .map(|value| {
             let v = value.trim().to_ascii_lowercase();
@@ -71,29 +64,39 @@ pub fn opencode_enabled() -> bool {
         .unwrap_or(false)
 }
 
-/// The resolved OpenCode server URL, if the sidecar is up.
-pub fn host_url() -> Option<String> {
-    state().lock().ok().and_then(|s| s.host_url.clone())
+/// True when the Codex path is enabled and the binary was found.
+pub fn ready() -> bool {
+    codex_enabled()
+        && state()
+            .lock()
+            .ok()
+            .map(|s| s.codex_available)
+            .unwrap_or(false)
 }
 
-/// True when the OpenCode path is both enabled and the sidecar is ready.
-pub fn ready() -> bool {
-    opencode_enabled() && host_url().is_some()
+/// Book-tool MCP endpoint + token for `codex_exec` invocations.
+pub fn book_tools_mcp() -> Option<codex_exec::BookToolsMcp> {
+    let guard = state().lock().ok()?;
+    if guard.book_tool_token.is_empty() || guard.book_tool_port == 0 {
+        return None;
+    }
+    Some(codex_exec::BookToolsMcp {
+        mcp_url: format!("http://127.0.0.1:{}/mcp", guard.book_tool_port),
+        token: guard.book_tool_token.clone(),
+    })
 }
 
 pub fn status() -> AgentHostStatus {
-    let guard = state().lock().ok();
-    match guard {
-        Some(s) => AgentHostStatus {
-            host_url: s.host_url.clone(),
-            book_tool_port: s.book_tool_port,
-            ready: s.host_url.is_some(),
-        },
-        None => AgentHostStatus {
-            host_url: None,
-            book_tool_port: 0,
-            ready: false,
-        },
+    let (port, available) = state()
+        .lock()
+        .ok()
+        .map(|s| (s.book_tool_port, s.codex_available))
+        .unwrap_or((0, false));
+    AgentHostStatus {
+        host_url: None,
+        book_tool_port: port,
+        ready: codex_enabled() && available,
+        engine: "codex",
     }
 }
 
@@ -112,41 +115,7 @@ fn mint_token() -> String {
     out
 }
 
-fn provider_env_prefix(kind: LlmProviderKind) -> &'static str {
-    match kind {
-        LlmProviderKind::DeepSeek => "DEEPSEEK",
-        LlmProviderKind::OpenAi => "OPENAI",
-        LlmProviderKind::Anthropic => "ANTHROPIC",
-    }
-}
-
-fn provider_label(kind: LlmProviderKind) -> &'static str {
-    match kind {
-        LlmProviderKind::DeepSeek => "deepseek",
-        LlmProviderKind::OpenAi => "openai",
-        LlmProviderKind::Anthropic => "anthropic",
-    }
-}
-
-/// Resolve the agent-host package directory relative to the repo / bundle.
-/// Dev: `<repo>/agent-host`. We resolve from the manifest dir at build time.
-fn agent_host_dir() -> Option<PathBuf> {
-    // Allow explicit override (useful for bundled installs).
-    if let Ok(dir) = std::env::var("FOCUSED_READING_AGENT_HOST_DIR") {
-        let path = PathBuf::from(dir);
-        if path.exists() {
-            return Some(path);
-        }
-    }
-    // Dev layout: src-tauri/ is one level under the repo root; agent-host is a sibling.
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let candidate = manifest_dir.parent().map(|p| p.join("agent-host"));
-    candidate.filter(|p| p.exists())
-}
-
-/// Initialize the book-tool server and (best-effort) the OpenCode sidecar.
-/// Always starts the book-tool server (cheap, in-process). Only spawns the
-/// sidecar when `opencode_enabled()` and a provider key is configured.
+/// Initialize the book-tool server and probe codex availability.
 pub fn init(db_path: PathBuf) {
     let token = mint_token();
     let port = book_tool_server::resolve_port();
@@ -157,16 +126,16 @@ pub fn init(db_path: PathBuf) {
         guard.book_tool_port = port;
     }
 
-    // Start the book-tool HTTP server on the existing tokio runtime.
+    // Start the book-tool HTTP/MCP server on the existing tokio runtime.
     let server_config = BookToolServerConfig {
         db_path,
-        token: token.clone(),
+        token,
         port,
     };
     tauri::async_runtime::spawn(async move {
         match book_tool_server::spawn(server_config).await {
             Ok(addr) => {
-                eprintln!("book-tool server listening on {addr}");
+                eprintln!("book-tool server listening on {addr} (MCP at /mcp)");
             }
             Err(err) => {
                 eprintln!("book-tool server failed to start: {err}");
@@ -174,122 +143,32 @@ pub fn init(db_path: PathBuf) {
         }
     });
 
-    if !opencode_enabled() {
-        eprintln!("OpenCode path disabled (FOCUSED_READING_OPENCODE_ENABLED not set); using Rust fallback.");
+    if !codex_enabled() {
+        eprintln!("Codex engine disabled (FOCUSED_READING_CODEX_DISABLED); using Rust fallback.");
         return;
     }
 
-    // Spawn the sidecar on a blocking thread so we can read its stdout line.
-    let book_tool_token = token;
-    let book_tool_port = port;
-    std::thread::spawn(move || {
-        if let Err(err) = spawn_sidecar(book_tool_token, book_tool_port) {
-            eprintln!("agent-host sidecar not started: {err}");
+    // Probe on a background thread so a slow filesystem never delays startup.
+    std::thread::spawn(|| {
+        let available = codex_exec::codex_binary().is_some();
+        if available {
+            eprintln!("codex binary found; Codex engine ready");
+        } else {
+            eprintln!("codex binary not found; Spark/translation will use the Rust fallback");
+        }
+        if let Ok(mut guard) = state().lock() {
+            guard.codex_available = available;
         }
     });
 }
 
-fn spawn_sidecar(book_tool_token: String, book_tool_port: u16) -> Result<(), String> {
-    let llm = config::llm_config().map_err(|err| format!("no llm config: {err}"))?;
-    if llm.api_key.trim().is_empty() {
-        return Err("provider api key not configured".to_string());
-    }
-    let host_dir = agent_host_dir().ok_or("agent-host directory not found")?;
-
-    let prefix = provider_env_prefix(llm.provider);
-    let provider = provider_label(llm.provider);
-
-    let mut command = Command::new("pnpm");
-    command
-        .current_dir(&host_dir)
-        .arg("--filter")
-        .arg("@focused-reading/agent-host")
-        // `dev` runs via tsx (no prior tsc build needed); `start` would require dist/.
-        .arg("dev")
-        .env("FOCUSED_READING_LLM_PROVIDER", provider)
-        .env(format!("FOCUSED_READING_{prefix}_API_KEY"), &llm.api_key)
-        .env(format!("FOCUSED_READING_{prefix}_BASE_URL"), &llm.base_url)
-        .env(format!("FOCUSED_READING_{prefix}_MODEL"), &llm.model)
-        .env(
-            "FOCUSED_READING_BOOK_TOOL_BASE_URL",
-            format!("http://127.0.0.1:{book_tool_port}"),
-        )
-        .env("FOCUSED_READING_BOOK_TOOL_TOKEN", &book_tool_token)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit());
-
-    let mut child = command
-        .spawn()
-        .map_err(|err| format!("failed to spawn agent-host: {err}"))?;
-
-    let stdout = child.stdout.take().ok_or("agent-host stdout unavailable")?;
-
-    // Read stdout looking for the ready JSON line. Keep reading afterwards so the
-    // pipe never fills and blocks the child.
-    let reader = BufReader::new(stdout);
-    {
-        let mut guard = state().lock().expect("agent host state poisoned");
-        guard.child = Some(child);
-    }
-
-    for line in reader.lines() {
-        let Ok(line) = line else { break };
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if let Some(url) = parse_ready_line(trimmed) {
-            eprintln!("agent-host ready at {url}");
-            if let Ok(mut guard) = state().lock() {
-                guard.host_url = Some(url);
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Parse the `{"type":"agent_host_ready","serverUrl":"..."}` stdout line.
-fn parse_ready_line(line: &str) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_str(line).ok()?;
-    if value.get("type")?.as_str()? != "agent_host_ready" {
-        return None;
-    }
-    value
-        .get("serverUrl")?
-        .as_str()
-        .map(|url| url.trim_end_matches('/').to_string())
-}
-
-/// Terminate the sidecar on app exit.
-pub fn shutdown() {
-    if let Ok(mut guard) = state().lock() {
-        if let Some(mut child) = guard.child.take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-        guard.host_url = None;
-    }
-}
+/// App-exit hook. Per-request codex children use `kill_on_drop`, so there is
+/// no persistent process to terminate here anymore.
+pub fn shutdown() {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn parses_ready_line() {
-        let line =
-            r#"{"type":"agent_host_ready","serverUrl":"http://127.0.0.1:48172/","worktree":"x"}"#;
-        assert_eq!(
-            parse_ready_line(line).as_deref(),
-            Some("http://127.0.0.1:48172")
-        );
-    }
-
-    #[test]
-    fn ignores_non_ready_lines() {
-        assert_eq!(parse_ready_line("plain log line"), None);
-        assert_eq!(parse_ready_line(r#"{"type":"other"}"#), None);
-    }
 
     #[test]
     fn mint_token_is_long_and_hex() {
@@ -301,8 +180,7 @@ mod tests {
     }
 
     #[test]
-    fn provider_mappings() {
-        assert_eq!(provider_env_prefix(LlmProviderKind::DeepSeek), "DEEPSEEK");
-        assert_eq!(provider_label(LlmProviderKind::Anthropic), "anthropic");
+    fn status_never_exposes_a_host_url() {
+        assert!(status().host_url.is_none());
     }
 }

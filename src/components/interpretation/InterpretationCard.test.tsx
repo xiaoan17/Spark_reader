@@ -412,6 +412,58 @@ describe("InterpretationCard citations", () => {
     expect(html).toContain("DeepSeek API key 未配置")
   })
 
+  it("exposes an Obsidian export action only when a completed answer exists", async () => {
+    const container = document.createElement("div")
+    document.body.append(container)
+    const root = createRoot(container)
+    const onExportToObsidian = vi.fn()
+
+    await act(async () => {
+      root.render(
+        <InterpretationCard
+          phase="reading"
+          selectionText="复利来自长期坚持"
+          selectionRects={[]}
+          evidence={[]}
+          interpretation="这是一段解读。"
+          followUps={[]}
+          onExportToObsidian={onExportToObsidian}
+        />,
+      )
+      await Promise.resolve()
+    })
+
+    const exportButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.getAttribute("aria-label") === "存到 Obsidian",
+    )
+    expect(exportButton).toBeTruthy()
+
+    await act(async () => {
+      exportButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+      await Promise.resolve()
+    })
+
+    expect(onExportToObsidian).toHaveBeenCalledTimes(1)
+    root.unmount()
+    container.remove()
+  })
+
+  it("hides the Obsidian export action before any answer is produced", () => {
+    const html = renderToStaticMarkup(
+      <InterpretationCard
+        phase="reading"
+        selectionText="复利来自长期坚持"
+        selectionRects={[]}
+        evidence={[]}
+        interpretation=""
+        followUps={[]}
+        onExportToObsidian={() => undefined}
+      />,
+    )
+
+    expect(html).not.toContain("存到 Obsidian")
+  })
+
   it("renders runtime availability guidance", () => {
     const html = renderToStaticMarkup(
       <InterpretationCard

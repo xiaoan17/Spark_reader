@@ -185,7 +185,12 @@ function readerViewButton(container: ParentNode, label: string) {
 }
 
 async function openImportMenu(container: ParentNode) {
-  await clickAsync(buttonByText(container, "导入"))
+  // 有书时导入按钮降为纯图标(无文字),统一走 data-testid 定位。
+  const button = container.querySelector('[data-testid="import-button"]')
+  if (!button) {
+    throw new Error("missing import button")
+  }
+  await clickAsync(button)
 }
 
 function click(element: Element) {

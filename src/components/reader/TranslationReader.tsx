@@ -74,6 +74,7 @@ export type TranslationReaderProps = {
   onComment?: () => void
   onOpenSparkItem?: (item: SavedInterpretation) => void
   onHighlight: () => void
+  onSaveToObsidian?: () => void
   onTextSelection: (
     text: string,
     pageNumber: number,
@@ -100,6 +101,7 @@ export function TranslationReader({
   onComment,
   onOpenSparkItem,
   onHighlight,
+  onSaveToObsidian,
   onTextSelection,
   onClearSelection,
   onPageWindowRequest,
@@ -613,6 +615,7 @@ export function TranslationReader({
                   onHighlight={onHighlight}
                   onPlainExplain={onPlainExplain}
                   onComment={onComment}
+                  onSaveToObsidian={onSaveToObsidian}
                 />
               </article>
             )

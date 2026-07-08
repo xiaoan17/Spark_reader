@@ -1,4 +1,5 @@
 mod chunk_id;
+mod codex_exec;
 mod commands;
 mod config;
 mod embeddings;
@@ -7,6 +8,7 @@ mod knowledge;
 mod llm;
 mod mineru;
 mod mineru_parser;
+mod obsidian;
 mod plain_book_parser;
 mod product_self_check;
 mod storage;
@@ -14,6 +16,7 @@ mod translation;
 mod zotero;
 
 mod agent_host;
+mod app_menu;
 mod book_tool_server;
 
 pub mod coordinates;
@@ -26,13 +29,16 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // Resolve the library db path once and hand it to the agent-host
-            // supervisor, which starts the book-tool server and (if enabled) the
-            // OpenCode sidecar.
+            // supervisor, which starts the book-tool HTTP/MCP server and probes
+            // the Codex engine.
             use tauri::Manager as _;
             let app_data_dir = app.handle().path().app_data_dir().ok();
             match storage::default_db_path(app_data_dir) {
                 Ok(db_path) => agent_host::init(db_path),
                 Err(err) => eprintln!("failed to resolve db path for agent host: {err:#}"),
+            }
+            if let Err(err) = app_menu::install(app.handle()) {
+                eprintln!("failed to install native menu: {err}");
             }
             Ok(())
         })
@@ -49,6 +55,8 @@ pub fn run() {
             commands::delete_knowledge_card,
             commands::export_book_knowledge_json,
             commands::export_book_knowledge_markdown,
+            commands::export_book_knowledge_to_obsidian,
+            commands::export_snippet_to_obsidian,
             commands::find_book_by_source_pdf,
             commands::get_agent_host_url,
             commands::get_book_knowledge_map,
@@ -60,6 +68,7 @@ pub fn run() {
             commands::get_knowledge_card,
             commands::get_knowledge_graph,
             commands::get_mineru_settings,
+            commands::get_obsidian_settings,
             commands::get_or_generate_card_summary,
             commands::get_or_generate_document_tldr,
             commands::get_or_generate_highlight_note,
@@ -91,6 +100,7 @@ pub fn run() {
             commands::save_interpretation,
             commands::save_llm_settings,
             commands::save_mineru_settings,
+            commands::save_obsidian_settings,
             commands::search_book,
             commands::search_index_summary,
             commands::search_knowledge,

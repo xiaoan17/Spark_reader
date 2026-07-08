@@ -131,6 +131,13 @@
     color: var(--reader-chrome-text);
   }
 
+  /* 视图切换组的容器底色:把"模式切换"与右侧动作按钮在视觉上分开 */
+  .reader-chrome-view-group {
+    background: color-mix(in srgb, var(--reader-chrome-muted) 10%, transparent);
+    border-radius: 8px;
+    padding: 2px;
+  }
+
   .reader-chrome-view-button {
     color: var(--reader-chrome-muted);
   }

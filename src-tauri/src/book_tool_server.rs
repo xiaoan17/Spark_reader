@@ -1,15 +1,18 @@
-//! Book-tool HTTP server: the bridge that lets the out-of-process OpenCode
-//! sidecar reach the Rust core's SQLite book data.
+//! Book-tool HTTP server: the bridge that lets the out-of-process agent
+//! engine (Codex) reach the Rust core's SQLite book data.
 //!
-//! OpenCode runs as a separate Node process and cannot read our in-process
-//! SQLite. Its `deep_reader` / `translator` agents call four book tools
-//! (`book_search`, `book_get_chunk`, `book_get_neighbors`, `book_structure`)
-//! which POST to this server (see `agent-host/.../lib/book-tool-client.ts`).
+//! The engine runs as a separate process and cannot read our in-process
+//! SQLite. Its agents call four book tools (`book_search`, `book_get_chunk`,
+//! `book_get_neighbors`, `book_structure`) over two equivalent surfaces:
 //!
-//! The contract is fixed by that client:
-//!   POST /tools/{name}  Content-Type: application/json
-//!   Authorization: Bearer {token}   (empty/mismatched token => 401)
-//!   body = camelCase JSON, response = JSON.
+//!   1. POST /tools/{name}  Content-Type: application/json
+//!      Authorization: Bearer {token}   (empty/mismatched token => 401)
+//!      body = camelCase JSON, response = JSON. (Legacy direct surface.)
+//!   2. POST /mcp — MCP streamable-HTTP endpoint (JSON-RPC 2.0). This is what
+//!      `codex exec` connects to via `[mcp_servers.books] url = ".../mcp"`,
+//!      authenticating with the same bearer token. Only `initialize`,
+//!      `tools/list`, `tools/call` and `ping` are implemented; notifications
+//!      get 202. Responses are plain JSON (the spec allows non-SSE replies).
 //!
 //! Implemented as a minimal handwritten HTTP/1.1 server over tokio so we don't
 //! pull in a web framework (keeps the `=`-pinned dependency surface minimal).
@@ -320,6 +323,10 @@ fn handle_request(
         return (405, json!({ "error": "method_not_allowed" }));
     }
 
+    if request.path == "/mcp" || request.path == "/mcp/" {
+        return handle_mcp(&request.body, config);
+    }
+
     let Some(tool) = request.path.strip_prefix("/tools/") else {
         return (404, json!({ "error": "not_found" }));
     };
@@ -330,6 +337,142 @@ fn handle_request(
         Err(ToolError::Backend(msg)) => (500, json!({ "error": msg })),
         Err(ToolError::Unknown) => (404, json!({ "error": "unknown_tool" })),
     }
+}
+
+/// MCP protocol version we answer `initialize` with when the client's own
+/// version is absent. Codex negotiates by echoing whatever both sides support;
+/// tools/list + tools/call semantics are stable across the versions we care about.
+const MCP_FALLBACK_PROTOCOL_VERSION: &str = "2025-03-26";
+
+/// Handle one MCP streamable-HTTP message (a single JSON-RPC 2.0 object).
+/// Notifications (no `id`) are acknowledged with 202 and an empty object.
+fn handle_mcp(body: &[u8], config: &BookToolServerConfig) -> (u16, serde_json::Value) {
+    let Ok(message) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return (
+            400,
+            json!({ "jsonrpc": "2.0", "id": null,
+                    "error": { "code": -32700, "message": "parse error" } }),
+        );
+    };
+    if message.is_array() {
+        // JSON-RPC batching was removed from the MCP spec; codex never sends it.
+        return (
+            400,
+            json!({ "jsonrpc": "2.0", "id": null,
+                    "error": { "code": -32600, "message": "batch requests unsupported" } }),
+        );
+    }
+    let method = message.get("method").and_then(|v| v.as_str()).unwrap_or("");
+    let id = message.get("id").cloned();
+    // Notifications (initialized, cancelled, ...) need no response body.
+    if id.is_none() || method.starts_with("notifications/") {
+        return (202, json!({}));
+    }
+    let id = id.unwrap_or(serde_json::Value::Null);
+    let params = message.get("params").cloned().unwrap_or(json!({}));
+
+    let result = match method {
+        "initialize" => {
+            let protocol_version = params
+                .get("protocolVersion")
+                .and_then(|v| v.as_str())
+                .unwrap_or(MCP_FALLBACK_PROTOCOL_VERSION);
+            Ok(json!({
+                "protocolVersion": protocol_version,
+                "capabilities": { "tools": {} },
+                "serverInfo": {
+                    "name": "focused-reading-book-tools",
+                    "version": env!("CARGO_PKG_VERSION"),
+                },
+            }))
+        }
+        "ping" => Ok(json!({})),
+        "tools/list" => Ok(json!({ "tools": mcp_tool_definitions() })),
+        "tools/call" => {
+            let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
+            let args_bytes = serde_json::to_vec(&arguments).unwrap_or_else(|_| b"{}".to_vec());
+            match dispatch_tool(name, &args_bytes, config) {
+                Ok(value) => Ok(json!({
+                    "content": [{ "type": "text", "text": value.to_string() }],
+                    "isError": false,
+                })),
+                // Tool-level failures go into the result per the MCP spec so the
+                // model can see them and adjust, instead of a protocol error.
+                Err(ToolError::Unknown) => Ok(json!({
+                    "content": [{ "type": "text", "text": format!("unknown tool: {name}") }],
+                    "isError": true,
+                })),
+                Err(ToolError::BadInput(msg)) => Ok(json!({
+                    "content": [{ "type": "text", "text": format!("invalid arguments: {msg}") }],
+                    "isError": true,
+                })),
+                Err(ToolError::Backend(msg)) => Ok(json!({
+                    "content": [{ "type": "text", "text": format!("backend error: {msg}") }],
+                    "isError": true,
+                })),
+            }
+        }
+        _ => Err(json!({ "code": -32601, "message": format!("method not found: {method}") })),
+    };
+
+    match result {
+        Ok(result) => (200, json!({ "jsonrpc": "2.0", "id": id, "result": result })),
+        Err(error) => (200, json!({ "jsonrpc": "2.0", "id": id, "error": error })),
+    }
+}
+
+/// MCP tool definitions mirroring the four /tools/ routes. Schemas use
+/// camelCase argument names to match `dispatch_tool`'s serde contracts.
+fn mcp_tool_definitions() -> serde_json::Value {
+    let book_id = json!({ "type": "string", "description": "本书的 bookId" });
+    let chunk_id = json!({ "type": "string", "description": "目标块的 chunk_id" });
+    json!([
+        {
+            "name": "book_search",
+            "description": "在当前书内做混合检索（全文+向量），返回相关文本块及其 chunk_id。",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "bookId": book_id,
+                    "query": { "type": "string", "description": "检索查询" },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 24 }
+                },
+                "required": ["bookId", "query"]
+            }
+        },
+        {
+            "name": "book_get_chunk",
+            "description": "按 chunk_id 取回单个文本块的完整内容。",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "bookId": book_id, "chunkId": chunk_id },
+                "required": ["bookId", "chunkId"]
+            }
+        },
+        {
+            "name": "book_get_neighbors",
+            "description": "取回某个 chunk_id 前后相邻的文本块（radius 控制范围）。",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "bookId": book_id,
+                    "chunkId": chunk_id,
+                    "radius": { "type": "integer", "minimum": 0, "maximum": 8 }
+                },
+                "required": ["bookId", "chunkId"]
+            }
+        },
+        {
+            "name": "book_structure",
+            "description": "取回本书的结构（章节标题块列表）。",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "bookId": book_id },
+                "required": ["bookId"]
+            }
+        }
+    ])
 }
 
 fn is_authorized(request: &ParsedRequest, token: &str) -> bool {
@@ -433,6 +576,7 @@ async fn write_response(
     let body = serde_json::to_vec(payload).unwrap_or_else(|_| b"{}".to_vec());
     let reason = match status {
         200 => "OK",
+        202 => "Accepted",
         400 => "Bad Request",
         401 => "Unauthorized",
         404 => "Not Found",
@@ -539,11 +683,186 @@ mod tests {
         assert_eq!(find_header_end(b"incomplete\r\n"), None);
     }
 
+    fn mcp_request(body: serde_json::Value) -> ParsedRequest {
+        parsed("POST", "/mcp", Some("Bearer secret"), &body.to_string())
+    }
+
+    #[test]
+    fn mcp_requires_auth() {
+        let request = parsed(
+            "POST",
+            "/mcp",
+            None,
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#,
+        );
+        let (status, _) = handle_request(&request, &config("secret"));
+        assert_eq!(status, 401);
+    }
+
+    #[test]
+    fn mcp_initialize_echoes_protocol_version() {
+        let request = mcp_request(json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": { "protocolVersion": "2025-06-18",
+                        "capabilities": {}, "clientInfo": { "name": "codex" } }
+        }));
+        let (status, body) = handle_request(&request, &config("secret"));
+        assert_eq!(status, 200);
+        assert_eq!(body["result"]["protocolVersion"], json!("2025-06-18"));
+        assert!(body["result"]["capabilities"]["tools"].is_object());
+        assert_eq!(body["id"], json!(1));
+    }
+
+    #[test]
+    fn mcp_notification_is_accepted_without_result() {
+        let request = mcp_request(json!({
+            "jsonrpc": "2.0", "method": "notifications/initialized"
+        }));
+        let (status, _) = handle_request(&request, &config("secret"));
+        assert_eq!(status, 202);
+    }
+
+    #[test]
+    fn mcp_tools_list_exposes_the_four_book_tools() {
+        let request = mcp_request(json!({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/list"
+        }));
+        let (status, body) = handle_request(&request, &config("secret"));
+        assert_eq!(status, 200);
+        let names: Vec<&str> = body["result"]["tools"]
+            .as_array()
+            .expect("tools array")
+            .iter()
+            .map(|tool| tool["name"].as_str().expect("tool name"))
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "book_search",
+                "book_get_chunk",
+                "book_get_neighbors",
+                "book_structure"
+            ]
+        );
+    }
+
+    #[test]
+    fn mcp_tools_call_unknown_tool_is_tool_error_not_protocol_error() {
+        let request = mcp_request(json!({
+            "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "params": { "name": "book_nope", "arguments": {} }
+        }));
+        let (status, body) = handle_request(&request, &config("secret"));
+        assert_eq!(status, 200);
+        assert_eq!(body["result"]["isError"], json!(true));
+        assert!(body.get("error").is_none());
+    }
+
+    #[test]
+    fn mcp_tools_call_bad_arguments_is_tool_error() {
+        let request = mcp_request(json!({
+            "jsonrpc": "2.0", "id": 4, "method": "tools/call",
+            "params": { "name": "book_search", "arguments": { "query": 42 } }
+        }));
+        let (status, body) = handle_request(&request, &config("secret"));
+        assert_eq!(status, 200);
+        assert_eq!(body["result"]["isError"], json!(true));
+    }
+
+    #[test]
+    fn mcp_unknown_method_is_json_rpc_error() {
+        let request = mcp_request(json!({
+            "jsonrpc": "2.0", "id": 5, "method": "resources/list"
+        }));
+        let (status, body) = handle_request(&request, &config("secret"));
+        assert_eq!(status, 200);
+        assert_eq!(body["error"]["code"], json!(-32601));
+    }
+
+    #[test]
+    fn mcp_batch_is_rejected() {
+        let request = mcp_request(json!([
+            { "jsonrpc": "2.0", "id": 1, "method": "ping" }
+        ]));
+        let (status, body) = handle_request(&request, &config("secret"));
+        assert_eq!(status, 400);
+        assert_eq!(body["error"]["code"], json!(-32600));
+    }
+
     #[test]
     fn is_authorized_requires_bearer_prefix() {
         let request = parsed("POST", "/tools/book_search", Some("secret"), "{}");
         assert!(!is_authorized(&request, "secret"));
         let request = parsed("POST", "/tools/book_search", Some("Bearer secret"), "{}");
         assert!(is_authorized(&request, "secret"));
+    }
+
+    /// Live end-to-end smoke: a real `codex exec` connects to our /mcp endpoint,
+    /// lists the book tools, and calls one. Requires the codex binary and its
+    /// provider credentials, and spends real tokens — run explicitly with
+    /// `cargo test --lib mcp_codex_live_smoke -- --ignored --test-threads=1 --nocapture`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore]
+    async fn mcp_codex_live_smoke() {
+        let Some(binary) = crate::codex_exec::codex_binary() else {
+            panic!("codex binary not found; install codex-cli to run this smoke test");
+        };
+
+        let dir = std::env::temp_dir().join(format!("fr-mcp-smoke-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("smoke dir");
+        let db_path = dir.join("library.sqlite3");
+        // Initialize the schema so tool calls hit real (empty) tables.
+        let _ = crate::storage::list_books(&db_path).expect("init db");
+
+        let token = "smoke-test-token".to_string();
+        let addr = spawn(BookToolServerConfig {
+            db_path,
+            token: token.clone(),
+            port: 0,
+        })
+        .await
+        .expect("bind mcp server");
+
+        let output = std::process::Command::new(binary)
+            .arg("exec")
+            .arg("--json")
+            .arg("--skip-git-repo-check")
+            .arg("--sandbox")
+            .arg("read-only")
+            .arg("-c")
+            .arg("approval_policy=\"never\"")
+            .arg("--cd")
+            .arg(&dir)
+            .arg("-c")
+            .arg(format!(
+                "mcp_servers={{books={{url=\"http://{addr}/mcp\",bearer_token_env_var=\"{}\",startup_timeout_sec=20}}}}",
+                crate::codex_exec::BOOK_TOOL_TOKEN_ENV
+            ))
+            .env(crate::codex_exec::BOOK_TOOL_TOKEN_ENV, &token)
+            .arg("call the book_structure tool with bookId \"smoke-book\", then reply with exactly: TOOLS_OK <comma-separated names of the book tools you can see>")
+            .output()
+            .expect("run codex");
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        println!("--- codex stdout ---\n{stdout}");
+        println!(
+            "--- codex stderr ---\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            stdout.contains("mcp_tool_call"),
+            "expected an mcp_tool_call item, codex never reached our /mcp endpoint"
+        );
+        assert!(
+            stdout.contains("TOOLS_OK"),
+            "expected the final TOOLS_OK message"
+        );
+        assert!(
+            stdout.contains("book_search"),
+            "tools/list should expose book_search"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

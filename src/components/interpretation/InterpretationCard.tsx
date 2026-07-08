@@ -1,5 +1,6 @@
 import {
   AlertCircle,
+  BookMarked,
   ChevronDown,
   Copy,
   FileSearch,
@@ -61,6 +62,8 @@ type InterpretationCardProps = {
   onRegenerate?: () => void
   onStop?: () => void
   onOpenSettings?: () => void
+  onExportToObsidian?: () => void
+  obsidianExporting?: boolean
   runtimeHint?: string
   className?: string
 }
@@ -91,6 +94,8 @@ export function InterpretationCard({
   onRegenerate,
   onStop,
   onOpenSettings,
+  onExportToObsidian,
+  obsidianExporting = false,
   runtimeHint,
   className,
 }: InterpretationCardProps) {
@@ -208,6 +213,22 @@ export function InterpretationCard({
               }}
             />
             <div className="ml-auto flex shrink-0 items-center gap-0.5">
+              {onExportToObsidian && interpretation.trim().length > 0 ? (
+                <button
+                  type="button"
+                  className="reader-chrome-icon-button inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors duration-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  aria-label="存到 Obsidian"
+                  title="存到 Obsidian"
+                  disabled={obsidianExporting}
+                  onClick={onExportToObsidian}
+                >
+                  {obsidianExporting ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <BookMarked className="h-4 w-4" />
+                  )}
+                </button>
+              ) : null}
               <button
                 type="button"
                 className={cn(

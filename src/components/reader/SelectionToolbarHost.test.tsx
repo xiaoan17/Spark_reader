@@ -110,4 +110,30 @@ describe("SelectionToolbarHost", () => {
     expect(defaultProps.onExplain).not.toHaveBeenCalled()
     host.unmount()
   })
+
+  it("wires the Obsidian export action through the selection toolbar", async () => {
+    const onSaveToObsidian = vi.fn()
+    const host = await renderHost(true, { onSaveToObsidian })
+
+    const button = host.container.querySelector<HTMLButtonElement>(
+      "button[aria-label='存到 Obsidian']",
+    )
+    expect(button).toBeTruthy()
+
+    await act(async () => {
+      button?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+      await Promise.resolve()
+    })
+
+    expect(onSaveToObsidian).toHaveBeenCalledTimes(1)
+    host.unmount()
+  })
+
+  it("omits the Obsidian export action when no handler is provided", async () => {
+    const host = await renderHost(true)
+    expect(
+      host.container.querySelector("button[aria-label='存到 Obsidian']"),
+    ).toBeNull()
+    host.unmount()
+  })
 })

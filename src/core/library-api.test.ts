@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest"
-import { CommandError, normalizeCommandError } from "./library-api"
+import {
+  CommandError,
+  exportBookKnowledgeToObsidian,
+  exportSnippetToObsidian,
+  getObsidianSettings,
+  normalizeCommandError,
+  saveObsidianSettings,
+} from "./library-api"
 
 describe("library api command errors", () => {
   it("normalizes structured command errors without losing suggestions", () => {
@@ -30,5 +37,39 @@ describe("library api command errors", () => {
     expect(error.message).toContain("桌面版操作失败")
     expect(error.message).toContain("开发诊断")
     expect(error.message).not.toContain("后端")
+  })
+})
+
+describe("obsidian export api in browser mode", () => {
+  // In the test environment `window.__TAURI_INTERNALS__` is absent, so the
+  // desktop-only commands take the browser fallback path.
+  it("reports an unconfigured vault without touching the desktop bridge", async () => {
+    await expect(getObsidianSettings()).resolves.toEqual({
+      vaultPath: "",
+      subdir: "",
+      configured: false,
+    })
+  })
+
+  it("fails saving settings with a readable desktop-only message", async () => {
+    await expect(saveObsidianSettings({ vaultPath: "/vault" })).rejects.toMatchObject({
+      message: "Obsidian 导出需要桌面版。",
+    })
+    await expect(saveObsidianSettings({ vaultPath: "/vault" })).rejects.toBeInstanceOf(CommandError)
+  })
+
+  it("fails snippet export gracefully outside the desktop app", async () => {
+    await expect(
+      exportSnippetToObsidian("book-1", {
+        kind: "spark",
+        content: "解读正文",
+        chunkIds: ["b1-p1-c1"],
+        timestamp: "2026-07-07 21:30",
+      }),
+    ).rejects.toBeInstanceOf(CommandError)
+  })
+
+  it("fails knowledge export gracefully outside the desktop app", async () => {
+    await expect(exportBookKnowledgeToObsidian("book-1")).rejects.toBeInstanceOf(CommandError)
   })
 })

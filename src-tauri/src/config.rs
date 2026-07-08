@@ -156,6 +156,8 @@ struct StoredLlmSettings {
     embedding: StoredEmbeddingSettings,
     #[serde(default)]
     mineru: StoredMinerUSettings,
+    #[serde(default)]
+    obsidian: StoredObsidianSettings,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -186,6 +188,34 @@ struct StoredMinerUSettings {
     #[serde(default, skip_serializing)]
     api_token: Option<String>,
     base_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredObsidianSettings {
+    vault_path: Option<String>,
+    subdir: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ObsidianSettingsResponse {
+    pub vault_path: String,
+    pub subdir: String,
+    pub configured: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveObsidianSettingsRequest {
+    pub vault_path: String,
+    pub subdir: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ObsidianConfig {
+    pub vault_path: PathBuf,
+    pub subdir: String,
 }
 
 #[derive(Debug, Error)]
@@ -285,6 +315,60 @@ pub fn save_mineru_settings(
 
     write_stored_settings(&stored)?;
     get_mineru_settings()
+}
+
+pub fn get_obsidian_settings() -> Result<ObsidianSettingsResponse, ConfigError> {
+    let stored = load_stored_settings()?;
+    let vault_path = stored
+        .obsidian
+        .vault_path
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    Ok(ObsidianSettingsResponse {
+        configured: !vault_path.is_empty(),
+        vault_path,
+        subdir: active_obsidian_subdir(&stored.obsidian.subdir),
+    })
+}
+
+pub fn save_obsidian_settings(
+    request: SaveObsidianSettingsRequest,
+) -> Result<ObsidianSettingsResponse, ConfigError> {
+    let mut stored = load_stored_settings()?;
+    let vault_path = request.vault_path.trim().to_string();
+    stored.obsidian.vault_path = if vault_path.is_empty() {
+        None
+    } else {
+        Some(vault_path)
+    };
+    stored.obsidian.subdir = request
+        .subdir
+        .map(|subdir| subdir.trim().trim_matches('/').to_string())
+        .filter(|subdir| !subdir.is_empty());
+    write_stored_settings(&stored)?;
+    get_obsidian_settings()
+}
+
+/// 未配置 vault 时返回 None(前端应隐藏入口,后端命令报可读错误)。
+pub fn obsidian_config() -> Result<Option<ObsidianConfig>, ConfigError> {
+    let settings = get_obsidian_settings()?;
+    if !settings.configured {
+        return Ok(None);
+    }
+    Ok(Some(ObsidianConfig {
+        vault_path: PathBuf::from(settings.vault_path),
+        subdir: settings.subdir,
+    }))
+}
+
+fn active_obsidian_subdir(subdir: &Option<String>) -> String {
+    subdir
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.trim_matches('/').to_string())
+        .unwrap_or_else(|| crate::obsidian::DEFAULT_SUBDIR.to_string())
 }
 
 pub fn embedding_config() -> Result<Option<EmbeddingConfig>, ConfigError> {

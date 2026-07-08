@@ -62,6 +62,19 @@ type Story = StoryObj<typeof meta>
 
 export const Complete: Story = {}
 
+export const WithObsidianExport: Story = {
+  args: {
+    onExportToObsidian: () => undefined,
+  },
+}
+
+export const ObsidianExporting: Story = {
+  args: {
+    onExportToObsidian: () => undefined,
+    obsidianExporting: true,
+  },
+}
+
 export const Planning: Story = {
   args: {
     phase: "planning",

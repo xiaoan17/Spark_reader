@@ -38,6 +38,7 @@ type LlmSettingsPanelProps = {
   onClose: () => void
   onLlmSettingsSaved?: (settings: LlmSettings) => void
   onEmbeddingSettingsSaved?: () => void
+  onOpenObsidian?: () => void
   defaultAdvancedOpen?: boolean
 }
 
@@ -132,6 +133,7 @@ export function LlmSettingsPanel({
   onClose,
   onLlmSettingsSaved,
   onEmbeddingSettingsSaved,
+  onOpenObsidian,
   defaultAdvancedOpen = false,
 }: LlmSettingsPanelProps) {
   const [provider, setProvider] = useState<LlmProviderKind>("deep_seek")
@@ -823,7 +825,12 @@ export function LlmSettingsPanel({
             ) : null}
           </div>
         ) : null}
-        <div className="flex justify-end gap-2 border-t p-4">
+        <div className="flex items-center justify-end gap-2 border-t p-4">
+          {onOpenObsidian ? (
+            <Button variant="ghost" className="mr-auto" onClick={onOpenObsidian}>
+              Obsidian 导出设置
+            </Button>
+          ) : null}
           <Button variant="ghost" onClick={onClose}>
             关闭
           </Button>
