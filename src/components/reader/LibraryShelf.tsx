@@ -1,5 +1,5 @@
-import { Library, RefreshCw, Search, Trash2 } from "lucide-react"
-import { useMemo, useState } from "react"
+import { Library, RefreshCw, Search, Trash2, TriangleAlert } from "lucide-react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import type { StoredBookSummary } from "@/core/library-api"
@@ -35,6 +35,7 @@ export function LibraryShelf({
 }: LibraryShelfProps) {
   const [query, setQuery] = useState("")
   const [range, setRange] = useState<LibraryShelfRange>("all")
+  const [pendingDeleteBook, setPendingDeleteBook] = useState<StoredBookSummary | null>(null)
   const filteredBooks = useMemo(
     () => filterLibraryBooks(books, query, range),
     [books, query, range],
@@ -55,6 +56,19 @@ export function LibraryShelf({
     ]
   }, [filteredBooks, range])
   const hasFilters = query.trim() || range !== "all"
+
+  function requestDeleteBook(bookId: string) {
+    const book = books.find((candidate) => candidate.bookId === bookId) ?? null
+    setPendingDeleteBook(book)
+  }
+
+  function confirmPendingDelete() {
+    if (pendingDeleteBook) {
+      onDelete(pendingDeleteBook.bookId)
+    }
+    setPendingDeleteBook(null)
+  }
+
   const visibleCountLabel =
     books.length > 0 && filteredBooks.length !== books.length
       ? `显示 ${filteredBooks.length} / ${books.length} 本`
@@ -122,7 +136,7 @@ export function LibraryShelf({
                       books={group.books}
                       activeBookId={activeBookId}
                       onOpen={onOpen}
-                      onDelete={onDelete}
+                      onDelete={requestDeleteBook}
                     />
                   </section>
                 ))}
@@ -146,6 +160,83 @@ export function LibraryShelf({
             </div>
           </div>
         )}
+      </div>
+      <DeleteBookDialog
+        book={pendingDeleteBook}
+        onCancel={() => setPendingDeleteBook(null)}
+        onConfirm={confirmPendingDelete}
+      />
+    </div>
+  )
+}
+
+type DeleteBookDialogProps = {
+  book: StoredBookSummary | null
+  onCancel: () => void
+  onConfirm: () => void
+}
+
+function DeleteBookDialog({ book, onCancel, onConfirm }: DeleteBookDialogProps) {
+  const cancelRef = useRef<HTMLButtonElement | null>(null)
+
+  useEffect(() => {
+    if (!book) {
+      return
+    }
+    cancelRef.current?.focus()
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault()
+        onCancel()
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [book, onCancel])
+
+  if (!book) {
+    return null
+  }
+
+  const bookTitle = book.title || "未命名图书"
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 p-6 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="delete-book-dialog-title"
+      onClick={onCancel}
+    >
+      <div
+        className="w-full max-w-sm rounded-lg border bg-card p-5 text-card-foreground shadow-lg"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start gap-3">
+          <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-danger/10 text-danger">
+            <TriangleAlert className="h-4 w-4" />
+          </span>
+          <div className="min-w-0">
+            <div id="delete-book-dialog-title" className="text-base font-semibold">
+              删除《{bookTitle}》？
+            </div>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              该书的解析结果、高亮与解读历史将一并删除，不可恢复。
+            </p>
+          </div>
+        </div>
+        <div className="mt-5 flex justify-end gap-2">
+          <Button ref={cancelRef} size="sm" variant="ghost" onClick={onCancel}>
+            取消
+          </Button>
+          <Button
+            size="sm"
+            className="bg-danger text-danger-foreground hover:bg-danger/90"
+            onClick={onConfirm}
+          >
+            确认删除
+          </Button>
+        </div>
       </div>
     </div>
   )

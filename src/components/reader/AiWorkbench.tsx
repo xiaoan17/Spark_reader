@@ -1,6 +1,7 @@
 import { Sparkles, WandSparkles } from "lucide-react"
 import type React from "react"
 import { AnimatedValue } from "@/components/ui/animated-value"
+import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import type {
   AgentTraceStep,
@@ -112,6 +113,14 @@ export function AiWorkbench({
           badge={runningTaskCount}
           onClick={() => onTabChange("tasks")}
         />
+        {/* 诚实标注：任务面板尚未接入真实 agent 引擎，当前由本地演示数据驱动。 */}
+        <Badge
+          variant="secondary"
+          className="mb-1.5 ml-1.5 h-[18px] px-1.5 text-[10px] font-normal"
+          title="功能预览中，任务尚未接入真实 agent 引擎"
+        >
+          预览
+        </Badge>
       </div>
 
       <div className="min-h-0 flex-1 overflow-hidden">

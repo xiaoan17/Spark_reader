@@ -76,3 +76,12 @@ export const Closed: Story = {
     open: false,
   },
 }
+
+export const ConfirmDelete: Story = {
+  play: async ({ canvasElement }) => {
+    const deleteButton = Array.from(canvasElement.querySelectorAll("button")).find((button) =>
+      button.getAttribute("aria-label")?.startsWith("删除"),
+    )
+    deleteButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+  },
+}

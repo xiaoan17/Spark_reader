@@ -84,6 +84,10 @@ export function TasksPanel({ tasks, runningCount, disabled = false, onRunTask, o
 
   return (
     <div className="flex min-h-full flex-col gap-3">
+      {/* 诚实标注：真实 agent 引擎桥接尚未完成，任务卡片由本地演示数据驱动。 */}
+      <p className="reader-panel-muted rounded-md border border-dashed px-3 py-2 text-xs leading-5">
+        功能预览中：当前任务由本地演示数据驱动，尚未接入真实 agent 引擎。
+      </p>
       <div className="reader-panel-card space-y-3 rounded-md border p-3">
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">

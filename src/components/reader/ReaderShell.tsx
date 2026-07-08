@@ -90,6 +90,7 @@ import { useReaderLibrary } from "./use-reader-library"
 import { useReaderSearch } from "./use-reader-search"
 import { useReaderShortcuts } from "./use-reader-shortcuts"
 import { useAppMenu } from "./use-app-menu"
+import type { AppMenuHandlers } from "./app-menu-actions"
 import { useLlmSettings } from "./use-llm-settings"
 import { useObsidianSettings } from "./use-obsidian-settings"
 import { useReaderPanels } from "./reader-panels"
@@ -739,15 +740,38 @@ export function ReaderShell({
     onComment()
   }
 
+  // 原生菜单动作 → 与顶栏相同的 handler。web 快捷键（use-reader-shortcuts）也复用
+  // 这同一套 handler,菜单/顶栏/键盘三处永不分叉。函数声明经 hoisting 可前向引用。
+  const appMenuHandlers: AppMenuHandlers = {
+    onImport: handleImportMenuOpen,
+    onToggleLibrary: () => {
+      togglePanel("libraryOpen")
+      void refreshStoredBooks()
+    },
+    onToggleSearch: () => {
+      togglePanel("searchOpen")
+      pushNotice(parsedPages.length > 0 ? "搜索面板已切换" : "导入书籍并生成转换稿后才能搜索")
+    },
+    onToggleSettings: () => togglePanel("settingsOpen"),
+    onOpenObsidianSettings: () => setPanelOpen("obsidianSettingsOpen", true),
+    onToggleSidebar: () => togglePanel("sidebarOpen"),
+    onToggleAppearance: () => togglePanel("themeMenuOpen"),
+    onSelectView: (view) => {
+      const item = readerViewItems.find((candidate) => candidate.view === view)
+      if (item) {
+        handleSelectReaderView(item)
+      }
+    },
+  }
+  // ref 每次渲染刷新为最新闭包;原生菜单事件订阅只建立一次(见 useAppMenu)。
+  appMenuHandlersRef.current = appMenuHandlers
+
   useReaderShortcuts({
     selectionText,
     runDeepInterpretation,
     setQuestion,
     onClearSelection,
-    onDeepInterpret,
-    onPlainExplain,
-    onWorkbenchTabChange,
-    onCurrentThreadLightweightChange,
+    appMenuHandlers,
   })
 
   function handleReaderDisplayThemeChange(themeId: ReaderDisplayThemeId) {
@@ -775,30 +799,6 @@ export function ReaderShell({
       return
     }
     switchReaderView(item.view)
-  }
-
-  // macOS 原生菜单动作 → 与顶栏相同的 handler。ref 每次渲染刷新,
-  // 事件订阅只建立一次(卸载时解除)。
-  appMenuHandlersRef.current = {
-    onImport: handleImportMenuOpen,
-    onToggleLibrary: () => {
-      togglePanel("libraryOpen")
-      void refreshStoredBooks()
-    },
-    onToggleSearch: () => {
-      togglePanel("searchOpen")
-      pushNotice(parsedPages.length > 0 ? "搜索面板已切换" : "导入书籍并生成转换稿后才能搜索")
-    },
-    onToggleSettings: () => togglePanel("settingsOpen"),
-    onOpenObsidianSettings: () => setPanelOpen("obsidianSettingsOpen", true),
-    onToggleSidebar: () => togglePanel("sidebarOpen"),
-    onToggleAppearance: () => togglePanel("themeMenuOpen"),
-    onSelectView: (view) => {
-      const item = readerViewItems.find((candidate) => candidate.view === view)
-      if (item) {
-        handleSelectReaderView(item)
-      }
-    },
   }
 
   return (
