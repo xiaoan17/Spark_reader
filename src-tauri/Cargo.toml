@@ -1,6 +1,6 @@
 [package]
 name = "focused-reading"
-version = "0.1.6"
+version = "0.1.7"
 description = "Spark desktop app"
 authors = ["anbc"]
 edition = "2021"
