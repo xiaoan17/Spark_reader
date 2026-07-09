@@ -12,6 +12,7 @@ import {
   saveEmbeddingSettings,
   saveLlmSettings,
   saveMineruSettings,
+  secretStorageStatus,
   testMineruConnectionWithSettings,
   testLlmConnectionWithSettings,
 } from "@/core/library-api"
@@ -99,6 +100,7 @@ vi.mock("@/core/library-api", async (importOriginal) => {
       model: "deepseek-v4-flash",
       ok: true,
     })),
+    secretStorageStatus: vi.fn(async () => null),
   }
 })
 
@@ -115,6 +117,13 @@ beforeEach(() => {
   vi.mocked(saveMineruSettings).mockClear()
   vi.mocked(testMineruConnectionWithSettings).mockClear()
   vi.mocked(testLlmConnectionWithSettings).mockClear()
+  vi.mocked(secretStorageStatus).mockReset()
+  vi.mocked(secretStorageStatus).mockResolvedValue(null)
+  try {
+    window.localStorage.removeItem("focused-reading.secret-rotation-banner.dismissed.v1")
+  } catch {
+    // jsdom localStorage is always available; ignore.
+  }
 })
 
 async function renderClient(element: React.ReactElement) {
@@ -759,6 +768,59 @@ describe("LlmSettingsPanel defaults", () => {
     expect(textContent(container)).toContain("引用 2")
     expect(textContent(container)).not.toContain("chunks")
     expect(textContent(container)).not.toContain("[p1-c1]")
+    unmount()
+  })
+
+  it("shows the plaintext-migration rotation banner once and persists dismissal", async () => {
+    vi.mocked(isTauriRuntime).mockReturnValue(true)
+    vi.mocked(secretStorageStatus).mockResolvedValue({
+      items: [{ name: "DEEPSEEK_API_KEY", location: "keychain" }],
+      hadPlaintextMigration: true,
+    })
+
+    const first = await renderClient(<LlmSettingsPanel open onClose={() => undefined} />)
+    await vi.waitFor(() => {
+      expect(textContent(first.container)).toContain("检测到 API key 曾以明文保存在 .env")
+    })
+
+    await click(buttonByText(first.container, "知道了"))
+    expect(first.container.querySelector('[data-testid="secret-rotation-banner"]')).toBeNull()
+    expect(
+      window.localStorage.getItem("focused-reading.secret-rotation-banner.dismissed.v1"),
+    ).toBe("1")
+    first.unmount()
+
+    const reopened = await renderClient(<LlmSettingsPanel open onClose={() => undefined} />)
+    await vi.waitFor(() => {
+      expect(secretStorageStatus).toHaveBeenCalled()
+    })
+    expect(textContent(reopened.container)).not.toContain("检测到 API key 曾以明文保存在 .env")
+    reopened.unmount()
+  })
+
+  it("labels each key input with its current storage location", async () => {
+    vi.mocked(isTauriRuntime).mockReturnValue(true)
+    vi.mocked(secretStorageStatus).mockResolvedValue({
+      items: [
+        { name: "DEEPSEEK_API_KEY", location: "keychain" },
+        { name: "MINERU_API_TOKEN", location: "env-plaintext" },
+        { name: "EMBEDDING_API_KEY", location: "absent" },
+      ],
+      hadPlaintextMigration: false,
+    })
+
+    const { container, unmount } = await renderClient(
+      <LlmSettingsPanel open onClose={() => undefined} />,
+    )
+
+    await vi.waitFor(() => {
+      const tags = [...container.querySelectorAll('[data-testid="secret-location-tag"]')].map(
+        (element) => textContent(element),
+      )
+      expect(tags).toContain("钥匙串")
+      expect(tags).toContain("旧 .env")
+    })
+    expect(textContent(container)).not.toContain("检测到 API key 曾以明文保存在 .env")
     unmount()
   })
 })

@@ -611,11 +611,6 @@ export function ReaderShell({
     setPanelOpen("onboardingOpen", false)
   }
 
-  function handleOnboardingSample() {
-    markOnboardingSeen()
-    onOpenSampleBook?.()
-  }
-
   function handleOnboardingImport() {
     markOnboardingSeen()
     setPanelOpen("importMenuOpen", true)
@@ -865,9 +860,14 @@ export function ReaderShell({
       <OnboardingFlow
         open={onboardingOpen}
         hasSampleBook={Boolean(onOpenSampleBook)}
+        desktopAvailable={isTauriRuntime()}
         onClose={markOnboardingSeen}
-        onOpenSample={handleOnboardingSample}
+        onOpenSample={() => onOpenSampleBook?.()}
         onImport={handleOnboardingImport}
+        onLlmSettingsSaved={(settings) => {
+          setLlmSettings(settings)
+          setLlmSettingsError("")
+        }}
       />
       <ImportChoicePanel
         open={importMenuOpen}

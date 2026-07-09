@@ -1534,7 +1534,7 @@ describe("ReaderShell runtime affordances", () => {
     expect(textContent(container)).toContain("先体验框选精读")
     expect(textContent(container)).toContain("无需配置 key")
     expect(textContent(container)).toContain("将 PDF 拖到此处")
-    expect(textContent(container)).toContain("先看一次框选精读链路")
+    expect(textContent(container)).toContain("第 1 步 · 先体验示例书")
     await clickAsync(buttonByText(container, "打开示例书"))
     expect(onOpenSampleBook).toHaveBeenCalledTimes(1)
     unmount()
@@ -1591,13 +1591,13 @@ describe("ReaderShell runtime affordances", () => {
       />,
     )
 
-    expect(textContent(container)).toContain("先看一次框选精读链路")
-    await clickAsync(buttonByText(container, "关闭"))
+    expect(textContent(container)).toContain("第 1 步 · 先体验示例书")
+    await clickAsync(buttonByText(container, "跳过引导"))
     expect(window.localStorage.getItem("focused-reading.onboarding.seen.v1")).toBe("1")
-    expect(textContent(container)).not.toContain("先看一次框选精读链路")
+    expect(textContent(container)).not.toContain("第 1 步 · 先体验示例书")
 
     await clickAsync(buttonByText(container, "查看引导"))
-    expect(textContent(container)).toContain("先看一次框选精读链路")
+    expect(textContent(container)).toContain("第 1 步 · 先体验示例书")
     unmount()
   })
 

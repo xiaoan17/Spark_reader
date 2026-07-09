@@ -5,6 +5,7 @@ import {
   Loader2,
   SearchCheck,
   Settings2,
+  ShieldAlert,
   XCircle,
 } from "lucide-react"
 import { useEffect, useState, type MouseEvent, type ReactNode } from "react"
@@ -20,14 +21,18 @@ import {
   saveEmbeddingSettings,
   saveLlmSettings,
   saveMineruSettings,
+  secretStorageStatus,
   testEmbeddingConnection,
   testLlmConnectionWithSettings,
   testMineruConnectionWithSettings,
-  normalizeCommandError,
   type LlmSettings,
   type LlmProviderKind,
   type ProductSelfCheckResponse,
+  type SecretLocation,
+  type SecretStorageStatus,
 } from "@/core/library-api"
+import { formatSettingsError } from "@/core/settings-connectivity"
+import { LLM_PROVIDER_SECRET_KEY, MINERU_SECRET_KEY } from "@/core/llm-providers"
 import {
   replaceInternalCitationsWithReadableLabels,
   sanitizeInternalReferenceText,
@@ -128,6 +133,23 @@ const browserModeTestMessage = "连接测试请使用桌面版。"
 
 const browserModeSelfCheckMessage = "开发诊断请使用桌面版。"
 
+const ROTATION_BANNER_DISMISSED_STORAGE_KEY = "focused-reading.secret-rotation-banner.dismissed.v1"
+
+const secretLocationLabels: Record<SecretLocation, string> = {
+  keychain: "钥匙串",
+  "env-plaintext": "旧 .env",
+  placeholder: "已迁移",
+  absent: "未配置",
+}
+
+function readRotationBannerDismissed() {
+  try {
+    return window.localStorage.getItem(ROTATION_BANNER_DISMISSED_STORAGE_KEY) === "1"
+  } catch {
+    return false
+  }
+}
+
 export function LlmSettingsPanel({
   open,
   onClose,
@@ -159,6 +181,27 @@ export function LlmSettingsPanel({
   const [selfCheckMessage, setSelfCheckMessage] = useState("")
   const [selfCheckResult, setSelfCheckResult] = useState<ProductSelfCheckResponse | null>(null)
   const [advancedOpen, setAdvancedOpen] = useState(defaultAdvancedOpen)
+  const [secretStatus, setSecretStatus] = useState<SecretStorageStatus | null>(null)
+  const [rotationBannerDismissed, setRotationBannerDismissed] = useState(readRotationBannerDismissed)
+
+  useEffect(() => {
+    if (!open || !isTauriRuntime()) {
+      return
+    }
+    let cancelled = false
+    void secretStorageStatus()
+      .then((status) => {
+        if (!cancelled) {
+          setSecretStatus(status)
+        }
+      })
+      .catch(() => {
+        // 存放位置只是辅助标签,查询失败不影响设置主流程。
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open])
 
   useEffect(() => {
     if (!open) {
@@ -447,6 +490,22 @@ export function LlmSettingsPanel({
     await handleSaveEmbedding()
   }
 
+  function handleDismissRotationBanner() {
+    setRotationBannerDismissed(true)
+    try {
+      window.localStorage.setItem(ROTATION_BANNER_DISMISSED_STORAGE_KEY, "1")
+    } catch {
+      // localStorage 不可用时仍就地关闭,只是下次可能重现。
+    }
+  }
+
+  function secretLocationFor(name: string): SecretLocation | null {
+    return secretStatus?.items.find((item) => item.name === name)?.location ?? null
+  }
+
+  const rotationBannerVisible =
+    Boolean(secretStatus?.hadPlaintextMigration) && !rotationBannerDismissed
+
   const busy = status === "loading" || status === "saving" || status === "testing"
   const embeddingBusy = embeddingStatus === "saving" || embeddingStatus === "testing"
   const mineruBusy = mineruStatus === "saving" || mineruStatus === "testing"
@@ -492,6 +551,9 @@ export function LlmSettingsPanel({
             </Button>
           </div>
         </div>
+        {rotationBannerVisible ? (
+          <SecretRotationBanner onDismiss={handleDismissRotationBanner} />
+        ) : null}
         <div className="space-y-4 border-b p-4 text-sm">
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -537,8 +599,9 @@ export function LlmSettingsPanel({
             ))}
           </div>
           <label className="block space-y-1.5">
-            <span className="text-xs font-medium text-muted-foreground">
+            <span className="flex flex-wrap items-center gap-1.5 text-xs font-medium text-muted-foreground">
               API Key {apiKeyConfigured ? "· 已配置" : "· 未配置"}
+              <SecretLocationTag location={secretLocationFor(LLM_PROVIDER_SECRET_KEY[provider])} />
             </span>
             <input
               className="h-9 w-full rounded-md border bg-background px-3 outline-none focus:ring-2 focus:ring-ring"
@@ -609,8 +672,9 @@ export function LlmSettingsPanel({
             </div>
           </div>
           <label className="block space-y-1.5">
-            <span className="text-xs font-medium text-muted-foreground">
+            <span className="flex flex-wrap items-center gap-1.5 text-xs font-medium text-muted-foreground">
               API Token {mineruApiTokenConfigured ? "· 已配置" : "· 未配置"}
+              <SecretLocationTag location={secretLocationFor(MINERU_SECRET_KEY)} />
             </span>
             <input
               className="h-9 w-full rounded-md border bg-background px-3 outline-none focus:ring-2 focus:ring-ring"
@@ -703,8 +767,9 @@ export function LlmSettingsPanel({
           {embeddingEnabled ? (
             <>
               <label className="block space-y-1.5">
-                <span className="text-xs font-medium text-muted-foreground">
+                <span className="flex flex-wrap items-center gap-1.5 text-xs font-medium text-muted-foreground">
                   Embedding API Key {embeddingApiKeyConfigured ? "· 已配置" : "· 未配置"}
+                  <SecretLocationTag location={secretLocationFor("EMBEDDING_API_KEY")} />
                 </span>
                 <input
                   className="h-9 w-full rounded-md border bg-background px-3 outline-none focus:ring-2 focus:ring-ring"
@@ -846,6 +911,45 @@ export function LlmSettingsPanel({
   )
 }
 
+export function SecretRotationBanner({ onDismiss }: { onDismiss: () => void }) {
+  return (
+    <div
+      className="flex items-start gap-2.5 border-b bg-warning/10 p-4 text-sm"
+      data-testid="secret-rotation-banner"
+    >
+      <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+      <div className="min-w-0 flex-1">
+        <div className="font-medium">检测到 API key 曾以明文保存在 .env</div>
+        <p className="mt-1 text-xs leading-5 text-muted-foreground">
+          这些 key 已迁移到系统钥匙串；为安全起见，建议前往对应平台重新生成（轮换）这些 key。
+        </p>
+      </div>
+      <Button size="sm" variant="ghost" className="shrink-0" onClick={onDismiss}>
+        知道了
+      </Button>
+    </div>
+  )
+}
+
+function SecretLocationTag({ location }: { location: SecretLocation | null }) {
+  if (!location) {
+    return null
+  }
+  return (
+    <span
+      className={cn(
+        "rounded-sm px-1.5 py-0.5 text-[11px] font-normal",
+        location === "env-plaintext"
+          ? "bg-warning/15 text-warning"
+          : "bg-muted text-muted-foreground",
+      )}
+      data-testid="secret-location-tag"
+    >
+      {secretLocationLabels[location]}
+    </span>
+  )
+}
+
 function ExternalHelpLink({
   href,
   onError,
@@ -915,17 +1019,8 @@ function selfCheckDisplayText(value: string) {
     .replace(/\bchunk\b/gi, "正文段落")
 }
 
-function settingsErrorMessage(error: unknown) {
-  const normalized = normalizeCommandError(error)
-  if (!normalized.suggestion) {
-    return normalized.message
-  }
-
-  const messageWithoutSuggestion = normalized.message
-    .replace(normalized.suggestion, "")
-    .replace(/[。.\s]+$/, "")
-  return `${messageWithoutSuggestion}。建议：${normalized.suggestion}`
-}
+// 与首次配置向导共用同一份错误文案逻辑(见 settings-connectivity)。
+const settingsErrorMessage = formatSettingsError
 
 function parseOptionalPositiveInt(value: string) {
   const trimmed = value.trim()
