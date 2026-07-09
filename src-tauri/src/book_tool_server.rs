@@ -865,4 +865,52 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// C9-spike helper (2026-07-09): spawn the real book-tool `/mcp` server and
+    /// keep it alive so an *external* `opencode serve` can attach to it as a
+    /// remote MCP (`type=remote`, `headers.Authorization = Bearer <token>`) and
+    /// we can hard-verify opencode's remote-MCP + bearer support against our own
+    /// protocol implementation. Prints the bound address, bearer token, and a
+    /// book id for the driver script, then blocks for a keepalive window.
+    ///
+    /// Not a normal test (it sleeps and never asserts) — gated to `--ignored`.
+    /// Run: `SPIKE_MCP_PORT=48191 SPIKE_MCP_TOKEN=opencode-spike-token \
+    ///   SPIKE_MCP_KEEPALIVE_SECS=240 cargo test --lib \
+    ///   opencode_remote_mcp_keepalive -- --ignored --nocapture`
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore]
+    async fn opencode_remote_mcp_keepalive() {
+        let dir = std::env::temp_dir().join(format!("fr-oc-mcp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("spike dir");
+        let db_path = dir.join("library.sqlite3");
+        // Initialize the schema so tool calls hit real (empty) tables.
+        let _ = crate::storage::list_books(&db_path).expect("init db");
+
+        let token =
+            std::env::var("SPIKE_MCP_TOKEN").unwrap_or_else(|_| "opencode-spike-token".to_string());
+        let port: u16 = std::env::var("SPIKE_MCP_PORT")
+            .ok()
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(0);
+        let addr = spawn(BookToolServerConfig {
+            db_path,
+            token: token.clone(),
+            port,
+        })
+        .await
+        .expect("bind mcp server");
+
+        println!("SPIKE_MCP_ADDR=http://{addr}/mcp");
+        println!("SPIKE_MCP_TOKEN={token}");
+        println!("SPIKE_MCP_BOOK_ID=spike-book");
+
+        let secs: u64 = std::env::var("SPIKE_MCP_KEEPALIVE_SECS")
+            .ok()
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(180);
+        tokio::time::sleep(Duration::from_secs(secs)).await;
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
