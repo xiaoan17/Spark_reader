@@ -19,10 +19,14 @@ use serde::Serialize;
 
 use crate::book_tool_server::{self, BookToolServerConfig};
 use crate::codex_exec;
+use crate::responses_bridge::{self, ResponsesBridgeConfig};
 
 struct AgentHostState {
     book_tool_token: String,
     book_tool_port: u16,
+    /// Per-run bearer token + port for the local Responses bridge (C8).
+    bridge_token: String,
+    bridge_port: u16,
     codex_available: bool,
 }
 
@@ -33,6 +37,8 @@ fn state() -> &'static Mutex<AgentHostState> {
         Mutex::new(AgentHostState {
             book_tool_token: String::new(),
             book_tool_port: 0,
+            bridge_token: String::new(),
+            bridge_port: 0,
             codex_available: false,
         })
     })
@@ -86,6 +92,36 @@ pub fn book_tools_mcp() -> Option<codex_exec::BookToolsMcp> {
     })
 }
 
+/// The Responses bridge provider for `codex_exec`, resolved against the current
+/// Agent model-source setting. Returns `None` — meaning "let codex use its own
+/// machine-local login" — when the source is `CodexLocal`, when the bridge is
+/// not up, or when the app's LLM config can't be resolved (e.g. no key). The
+/// provider key never appears here; only the app model name and the bridge's own
+/// bearer token do.
+pub fn bridge_provider() -> Option<codex_exec::BridgeProvider> {
+    if !matches!(
+        crate::config::agent_model_source(),
+        crate::config::AgentModelSource::App
+    ) {
+        return None;
+    }
+    let (token, port) = {
+        let guard = state().lock().ok()?;
+        (guard.bridge_token.clone(), guard.bridge_port)
+    };
+    if token.is_empty() || port == 0 {
+        return None;
+    }
+    // Model name comes from the app's LLM config; if it can't resolve (missing
+    // key), fall back to codex-local rather than driving codex with no model.
+    let model = crate::config::llm_config().ok()?.model;
+    Some(codex_exec::BridgeProvider {
+        base_url: format!("http://127.0.0.1:{port}/v1"),
+        token,
+        model,
+    })
+}
+
 pub fn status() -> AgentHostStatus {
     let (port, available) = state()
         .lock()
@@ -119,14 +155,19 @@ fn mint_token() -> String {
 pub fn init(db_path: PathBuf) {
     let token = mint_token();
     let port = book_tool_server::resolve_port();
+    let bridge_token = mint_token();
+    let bridge_port = responses_bridge::resolve_port();
 
     {
         let mut guard = state().lock().expect("agent host state poisoned");
         guard.book_tool_token = token.clone();
         guard.book_tool_port = port;
+        guard.bridge_token = bridge_token.clone();
+        guard.bridge_port = bridge_port;
     }
 
     // Start the book-tool HTTP/MCP server on the existing tokio runtime.
+    let book_tool_token_for_bridge = token.clone();
     let server_config = BookToolServerConfig {
         db_path,
         token,
@@ -139,6 +180,27 @@ pub fn init(db_path: PathBuf) {
             }
             Err(err) => {
                 eprintln!("book-tool server failed to start: {err}");
+            }
+        }
+    });
+
+    // Start the local Responses bridge (C8) so the app-configured model can
+    // drive codex without inheriting the machine's ~/.codex login. The bridge
+    // executes codex's namespaced MCP book tools itself (codex can't route them
+    // for custom Responses providers), so it needs the book-tool endpoint.
+    let bridge_config = ResponsesBridgeConfig {
+        token: bridge_token,
+        port: bridge_port,
+        book_tool_base: format!("http://127.0.0.1:{port}"),
+        book_tool_token: book_tool_token_for_bridge,
+    };
+    tauri::async_runtime::spawn(async move {
+        match responses_bridge::spawn(bridge_config).await {
+            Ok(addr) => {
+                eprintln!("responses bridge listening on {addr} (Responses API at /v1/responses)");
+            }
+            Err(err) => {
+                eprintln!("responses bridge failed to start: {err}");
             }
         }
     });

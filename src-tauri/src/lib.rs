@@ -18,6 +18,7 @@ mod zotero;
 mod agent_host;
 mod app_menu;
 mod book_tool_server;
+mod responses_bridge;
 
 pub mod coordinates;
 
@@ -106,6 +107,7 @@ pub fn run() {
             commands::save_highlight,
             commands::save_embedding_settings,
             commands::save_interpretation,
+            commands::save_agent_model_source,
             commands::save_llm_settings,
             commands::save_mineru_settings,
             commands::save_obsidian_settings,

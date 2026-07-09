@@ -400,6 +400,146 @@ pub async fn chat_with_tools(request: ChatRequest) -> Result<ChatToolResponse, L
     }
 }
 
+/// One provider turn for the Responses bridge: text + tool calls + usage +
+/// stop reason, plus the resolved provider/model so the bridge can tag the SSE
+/// response and caches. A single attempt — retry/backoff lives in the bridge so
+/// it can react to the `LlmError::Provider { status }` it sees (e.g. 429).
+#[derive(Debug, Clone)]
+pub struct BridgeCompletion {
+    pub text: String,
+    pub tool_calls: Vec<ToolCall>,
+    pub usage: Option<Value>,
+    /// The resolved app model name, echoed into the Responses SSE so codex (and
+    /// the live smoke) can confirm the answer came from the app provider.
+    pub model: String,
+}
+
+/// Run one bridge turn against the app's currently configured provider,
+/// preserving tool calls, usage, and stop reason for Responses translation.
+pub async fn complete_for_bridge(request: ChatRequest) -> Result<BridgeCompletion, LlmError> {
+    let config = config::llm_config()?;
+    match config.provider {
+        LlmProviderKind::DeepSeek | LlmProviderKind::OpenAi => {
+            complete_openai_compat_for_bridge(&config, request).await
+        }
+        LlmProviderKind::Anthropic => complete_anthropic_for_bridge(&config, request).await,
+    }
+}
+
+async fn complete_openai_compat_for_bridge(
+    config: &config::LlmConfig,
+    request: ChatRequest,
+) -> Result<BridgeCompletion, LlmError> {
+    let client = reqwest::Client::new();
+    let url = format!("{}/chat/completions", config.base_url.trim_end_matches('/'));
+    let body = openai_chat_body(config, &request, false);
+
+    let response = client
+        .post(url)
+        .headers(bearer_headers(&config.api_key)?)
+        .json(&body)
+        .send()
+        .await?;
+
+    let status = response.status();
+    let text = response.text().await?;
+    if !status.is_success() {
+        return Err(LlmError::Provider {
+            status: status.as_u16(),
+            body: text,
+        });
+    }
+
+    let parsed: Value = serde_json::from_str(&text).map_err(|_| LlmError::Provider {
+        status: status.as_u16(),
+        body: text.clone(),
+    })?;
+    log_llm_usage(config.provider, parsed.get("usage"));
+
+    let message = parsed
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| choices.first());
+    let content = message
+        .and_then(|choice| choice.get("message"))
+        .and_then(|m| m.get("content"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let tool_calls = message
+        .and_then(|choice| choice.get("message"))
+        .map(parse_openai_tool_calls)
+        .unwrap_or_default();
+
+    Ok(BridgeCompletion {
+        text: content,
+        tool_calls,
+        usage: parsed.get("usage").cloned(),
+        model: config.model.clone(),
+    })
+}
+
+async fn complete_anthropic_for_bridge(
+    config: &config::LlmConfig,
+    request: ChatRequest,
+) -> Result<BridgeCompletion, LlmError> {
+    let client = reqwest::Client::new();
+    let url = format!("{}/v1/messages", config.base_url.trim_end_matches('/'));
+    let system = request
+        .messages
+        .iter()
+        .filter(|message| matches!(message.role, ChatRole::System))
+        .map(|message| message.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let chat_messages = request
+        .messages
+        .iter()
+        .filter(|message| !matches!(message.role, ChatRole::System))
+        .map(anthropic_message_json)
+        .collect::<Vec<_>>();
+    let mut body = anthropic_chat_body(config, &request, chat_messages);
+    if !system.trim().is_empty() {
+        body["system"] = anthropic_cached_text_block(system);
+    }
+
+    let response = client
+        .post(url)
+        .headers(anthropic_headers(&config.api_key)?)
+        .json(&body)
+        .send()
+        .await?;
+
+    let status = response.status();
+    let text = response.text().await?;
+    if !status.is_success() {
+        return Err(LlmError::Provider {
+            status: status.as_u16(),
+            body: text,
+        });
+    }
+
+    let parsed: AnthropicMessageResponse =
+        serde_json::from_str(&text).map_err(|_| LlmError::Provider {
+            status: status.as_u16(),
+            body: text.clone(),
+        })?;
+    log_llm_usage(config.provider, parsed.usage.as_ref());
+    let usage = parsed.usage.clone();
+    let ChatToolResponse {
+        content,
+        tool_calls,
+    } = parse_anthropic_tool_response(parsed.content);
+
+    Ok(BridgeCompletion {
+        text: content,
+        tool_calls,
+        usage,
+        model: config.model.clone(),
+    })
+}
+
 pub async fn chat_stream_with_cancellation<F>(
     messages: Vec<ChatMessage>,
     max_tokens: u32,

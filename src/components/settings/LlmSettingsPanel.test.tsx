@@ -9,6 +9,7 @@ import {
   isTauriRuntime,
   openExternalUrl,
   productSelfCheck,
+  saveAgentModelSource,
   saveEmbeddingSettings,
   saveLlmSettings,
   saveMineruSettings,
@@ -39,6 +40,7 @@ vi.mock("@/core/library-api", async (importOriginal) => {
       baseUrl: "https://api.deepseek.com",
       model: "deepseek-v4-flash",
       apiKeyConfigured: true,
+      agentModelSource: "app",
       providers: {
         deep_seek: {
           baseUrl: "https://api.deepseek.com",
@@ -86,6 +88,13 @@ vi.mock("@/core/library-api", async (importOriginal) => {
         },
       },
     })),
+    saveAgentModelSource: vi.fn(async (source: string) => ({
+      provider: "deep_seek",
+      baseUrl: "https://api.deepseek.com",
+      model: "deepseek-v4-flash",
+      apiKeyConfigured: true,
+      agentModelSource: source,
+    })),
     saveMineruSettings: vi.fn(async () => ({
       baseUrl: "https://mineru.net",
       apiTokenConfigured: true,
@@ -113,6 +122,7 @@ beforeEach(() => {
   vi.mocked(openExternalUrl).mockClear()
   vi.mocked(productSelfCheck).mockReset()
   vi.mocked(saveEmbeddingSettings).mockClear()
+  vi.mocked(saveAgentModelSource).mockClear()
   vi.mocked(saveLlmSettings).mockClear()
   vi.mocked(saveMineruSettings).mockClear()
   vi.mocked(testMineruConnectionWithSettings).mockClear()
@@ -331,6 +341,31 @@ describe("LlmSettingsPanel defaults", () => {
       expect(textContent(container)).toContain("MinerU 设置已保存")
     })
     expect(textContent(container)).not.toContain("mineru-secret-token")
+    unmount()
+  })
+
+  it("switches the Agent model source and persists it", async () => {
+    vi.mocked(isTauriRuntime).mockReturnValue(true)
+
+    const { container, unmount } = await renderClient(
+      <LlmSettingsPanel open onClose={() => undefined} />,
+    )
+
+    // Loads to the app-configured model source by default.
+    await vi.waitFor(() => {
+      expect(buttonByText(container, "应用内配置的模型（推荐）").getAttribute("aria-pressed")).toBe(
+        "true",
+      )
+    })
+
+    await click(buttonByText(container, "本机 Codex 登录（高级）"))
+
+    await vi.waitFor(() => {
+      expect(saveAgentModelSource).toHaveBeenCalledWith("codex-local")
+      expect(
+        buttonByText(container, "本机 Codex 登录（高级）").getAttribute("aria-pressed"),
+      ).toBe("true")
+    })
     unmount()
   })
 

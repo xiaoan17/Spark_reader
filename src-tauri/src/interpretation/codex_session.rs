@@ -55,6 +55,7 @@
         let invocation = codex_exec::CodexInvocation {
             prompt,
             book_tools: Some(book_tools),
+            provider: crate::agent_host::bridge_provider(),
             timeout: SESSION_TIMEOUT,
         };
 

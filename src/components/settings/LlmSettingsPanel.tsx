@@ -18,6 +18,7 @@ import {
   isTauriRuntime,
   openExternalUrl,
   productSelfCheck,
+  saveAgentModelSource,
   saveEmbeddingSettings,
   saveLlmSettings,
   saveMineruSettings,
@@ -25,6 +26,7 @@ import {
   testEmbeddingConnection,
   testLlmConnectionWithSettings,
   testMineruConnectionWithSettings,
+  type AgentModelSource,
   type LlmSettings,
   type LlmProviderKind,
   type ProductSelfCheckResponse,
@@ -162,6 +164,9 @@ export function LlmSettingsPanel({
   const [providerDrafts, setProviderDrafts] = useState(initialProviderDrafts)
   const [status, setStatus] = useState<"idle" | "loading" | "saving" | "testing" | "ok" | "error">("idle")
   const [message, setMessage] = useState("")
+  const [agentModelSource, setAgentModelSource] = useState<AgentModelSource>("app")
+  const [agentSourceStatus, setAgentSourceStatus] = useState<"idle" | "saving" | "error">("idle")
+  const [agentSourceMessage, setAgentSourceMessage] = useState("")
   const [embeddingEnabled, setEmbeddingEnabled] = useState(true)
   const [embeddingProvider, setEmbeddingProvider] = useState(defaultEmbeddingSettings.provider)
   const [embeddingBaseUrl, setEmbeddingBaseUrl] = useState(defaultEmbeddingSettings.baseUrl)
@@ -221,6 +226,9 @@ export function LlmSettingsPanel({
         if (cancelled) return
         setProvider(settings.provider)
         setProviderDrafts(() => providerDraftsFromSettings(settings))
+        setAgentModelSource(settings.agentModelSource ?? "app")
+        setAgentSourceStatus("idle")
+        setAgentSourceMessage("")
         setEmbeddingEnabled(embedding.enabled)
         setEmbeddingProvider(embedding.provider === "disabled" ? defaultEmbeddingSettings.provider : embedding.provider)
         setEmbeddingBaseUrl(embedding.baseUrl || defaultEmbeddingSettings.baseUrl)
@@ -305,6 +313,31 @@ export function LlmSettingsPanel({
     } catch (error) {
       setStatus("error")
       setMessage(settingsErrorMessage(error))
+    }
+  }
+
+  async function handleAgentModelSourceChange(nextSource: AgentModelSource) {
+    if (nextSource === agentModelSource && agentSourceStatus !== "error") {
+      return
+    }
+    const previous = agentModelSource
+    setAgentModelSource(nextSource)
+    if (!isTauriRuntime()) {
+      setAgentModelSource(previous)
+      setAgentSourceStatus("error")
+      setAgentSourceMessage(browserModeSaveMessage)
+      return
+    }
+    setAgentSourceStatus("saving")
+    setAgentSourceMessage("")
+    try {
+      const settings = await saveAgentModelSource(nextSource)
+      setAgentModelSource(settings.agentModelSource ?? nextSource)
+      setAgentSourceStatus("idle")
+    } catch (error) {
+      setAgentModelSource(previous)
+      setAgentSourceStatus("error")
+      setAgentSourceMessage(settingsErrorMessage(error))
     }
   }
 
@@ -643,6 +676,56 @@ export function LlmSettingsPanel({
               {status === "ok" ? <CheckCircle2 className="h-4 w-4 text-primary" /> : null}
               {status === "error" ? <XCircle className="h-4 w-4 text-danger" /> : null}
               <span>{message}</span>
+            </div>
+          ) : null}
+        </div>
+        <div className="space-y-3 border-b p-4 text-sm" data-testid="agent-model-source-section">
+          <div>
+            <div className="text-sm font-semibold">Agent 模型来源</div>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">
+              深读（Spark）与对照翻译由 Codex agent 驱动。选择让本机 Codex 用哪个模型工作。
+            </p>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2" aria-label="Agent 模型来源选择">
+            <button
+              type="button"
+              className={cn(
+                "rounded-md border bg-background px-3 py-2 text-left transition-[background-color,border-color,box-shadow,transform] duration-interactive ease-reader hover:bg-muted active:scale-[0.99]",
+                agentModelSource === "app"
+                  ? "border-primary bg-primary/10 ring-1 ring-primary/30"
+                  : "border-border",
+              )}
+              aria-pressed={agentModelSource === "app"}
+              disabled={agentSourceStatus === "saving"}
+              onClick={() => void handleAgentModelSourceChange("app")}
+            >
+              <span className="block text-sm font-medium">应用内配置的模型（推荐）</span>
+              <span className="mt-1 block truncate text-xs text-muted-foreground">
+                {providerLabels[provider]} · {model || defaultSettings[provider].model}
+              </span>
+            </button>
+            <button
+              type="button"
+              className={cn(
+                "rounded-md border bg-background px-3 py-2 text-left transition-[background-color,border-color,box-shadow,transform] duration-interactive ease-reader hover:bg-muted active:scale-[0.99]",
+                agentModelSource === "codex-local"
+                  ? "border-primary bg-primary/10 ring-1 ring-primary/30"
+                  : "border-border",
+              )}
+              aria-pressed={agentModelSource === "codex-local"}
+              disabled={agentSourceStatus === "saving"}
+              onClick={() => void handleAgentModelSourceChange("codex-local")}
+            >
+              <span className="block text-sm font-medium">本机 Codex 登录（高级）</span>
+              <span className="mt-1 block truncate text-xs text-muted-foreground">
+                用本机 Codex 已登录的模型，不经应用配置
+              </span>
+            </button>
+          </div>
+          {agentSourceMessage ? (
+            <div className="flex gap-2 rounded-md bg-muted p-2 text-xs">
+              {agentSourceStatus === "error" ? <XCircle className="h-4 w-4 text-danger" /> : null}
+              <span>{agentSourceMessage}</span>
             </div>
           ) : null}
         </div>

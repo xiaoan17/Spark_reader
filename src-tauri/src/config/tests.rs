@@ -783,3 +783,33 @@
         }
         clear_override_secret_store();
     }
+
+    #[test]
+    fn agent_model_source_defaults_to_app_and_roundtrips() {
+        let _guard = crate::TEST_ENV_LOCK.lock().expect("env lock");
+        let _secret = SecretStoreGuard::install();
+        clear_config_path_env();
+        let dir = config_dir("agent-model-source");
+        let _ = fs::remove_dir_all(&dir);
+        env::set_var("FOCUSED_READING_CONFIG_DIR", &dir);
+        isolated_env_path(&dir);
+
+        // Default with no stored setting is App (app-configured model).
+        assert_eq!(agent_model_source(), AgentModelSource::App);
+        assert_eq!(
+            get_llm_settings().expect("settings").agent_model_source,
+            AgentModelSource::App
+        );
+
+        // Switch to codex-local and confirm it persists.
+        let saved = save_agent_model_source(AgentModelSource::CodexLocal).expect("save");
+        assert_eq!(saved.agent_model_source, AgentModelSource::CodexLocal);
+        assert_eq!(agent_model_source(), AgentModelSource::CodexLocal);
+
+        // Switch back to app.
+        save_agent_model_source(AgentModelSource::App).expect("save back");
+        assert_eq!(agent_model_source(), AgentModelSource::App);
+
+        let _ = fs::remove_dir_all(&dir);
+        clear_config_path_env();
+    }

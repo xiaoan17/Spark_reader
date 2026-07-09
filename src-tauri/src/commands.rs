@@ -266,6 +266,13 @@ pub fn save_llm_settings(
 }
 
 #[command]
+pub fn save_agent_model_source(
+    source: crate::config::AgentModelSource,
+) -> CommandResult<crate::config::LlmSettingsResponse> {
+    crate::config::save_agent_model_source(source).map_err(command_error)
+}
+
+#[command]
 pub fn save_embedding_settings(
     request: crate::config::SaveEmbeddingSettingsRequest,
 ) -> CommandResult<crate::config::EmbeddingSettingsResponse> {

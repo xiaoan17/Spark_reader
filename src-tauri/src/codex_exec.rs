@@ -30,11 +30,29 @@ pub struct BookToolsMcp {
     pub token: String,
 }
 
+/// Drive codex with the app-configured model through the local Responses bridge
+/// (C8). When present, codex is pointed at a custom `wire_api="responses"`
+/// provider served by `responses_bridge`, and its `CODEX_HOME` is isolated so
+/// none of the user's `~/.codex` login/config/instructions leak in. When absent,
+/// codex uses its own machine-local login (the "codex-local" model source).
+#[derive(Debug, Clone)]
+pub struct BridgeProvider {
+    /// Bridge base URL, e.g. `http://127.0.0.1:48174/v1`.
+    pub base_url: String,
+    /// Per-run bearer token codex sends to the bridge (NOT the provider key).
+    pub token: String,
+    /// The app-configured model name codex should request.
+    pub model: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct CodexInvocation {
     pub prompt: String,
     /// Attach the book-tool MCP server; `None` runs tool-less (translation).
     pub book_tools: Option<BookToolsMcp>,
+    /// Drive codex with the app model via the Responses bridge; `None` keeps
+    /// codex's machine-local login (codex-local model source).
+    pub provider: Option<BridgeProvider>,
     pub timeout: Duration,
 }
 
@@ -113,6 +131,27 @@ fn workspace_dir() -> PathBuf {
     let dir = std::env::temp_dir().join("focused-reading-codex-workspace");
     let _ = std::fs::create_dir_all(&dir);
     dir
+}
+
+/// Isolated `CODEX_HOME` for bridge-driven runs. Pointing codex here (instead of
+/// the default `~/.codex`) keeps the user's login/auth, global config, and
+/// global instructions from leaking into app-model runs — the whole point of
+/// the C8 bridge. Empty is fine: all provider wiring comes via `-c` overrides.
+fn isolated_codex_home() -> PathBuf {
+    let dir = std::env::temp_dir().join("focused-reading-codex-home");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+/// The `-c model_providers.spark=...` override wiring codex to the local
+/// Responses bridge. `env_key` names the env var codex sends as the bearer
+/// token; the real provider key never enters codex's environment.
+fn spark_provider_override(provider: &BridgeProvider) -> String {
+    format!(
+        "model_providers.spark={{name=\"spark\",base_url=\"{}\",env_key=\"{}\",wire_api=\"responses\"}}",
+        provider.base_url,
+        crate::responses_bridge::BRIDGE_TOKEN_ENV,
+    )
 }
 
 /// The `-c mcp_servers=...` override value. Whole-table replacement (verified):
@@ -209,8 +248,6 @@ pub async fn run(
         .arg(workspace_dir())
         .arg("-c")
         .arg(mcp_servers_override(&invocation.book_tools))
-        // Prompt arrives via stdin ("-") so long selections never hit argv limits.
-        .arg("-")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -218,6 +255,23 @@ pub async fn run(
     if let Some(tools) = &invocation.book_tools {
         command.env(BOOK_TOOL_TOKEN_ENV, &tools.token);
     }
+    // C8: when the app model drives codex, point it at the local Responses
+    // bridge and isolate CODEX_HOME so ~/.codex login/config/instructions never
+    // leak in. Without a provider, codex keeps its own machine-local login.
+    if let Some(provider) = &invocation.provider {
+        command
+            .env("CODEX_HOME", isolated_codex_home())
+            .env(crate::responses_bridge::BRIDGE_TOKEN_ENV, &provider.token)
+            .arg("-c")
+            .arg("model_provider=\"spark\"")
+            .arg("-c")
+            .arg(format!("model=\"{}\"", provider.model))
+            .arg("-c")
+            .arg(spark_provider_override(provider));
+    }
+    // Prompt arrives via stdin ("-") so long selections never hit argv limits.
+    // Must be the final positional arg (after all `-c` overrides).
+    command.arg("-");
 
     let mut child = command
         .spawn()

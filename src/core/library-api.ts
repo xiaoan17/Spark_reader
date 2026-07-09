@@ -306,12 +306,20 @@ export type InterpretationStreamEvent = {
 
 export type LlmProviderKind = "deep_seek" | "open_ai" | "anthropic"
 
+/**
+ * Which model drives the Codex agent (Spark deep reading + translation):
+ * - "app": the app-configured LLM (default DeepSeek) via the local Responses bridge
+ * - "codex-local": codex uses its own machine-local `~/.codex` login (advanced)
+ */
+export type AgentModelSource = "app" | "codex-local"
+
 export type LlmSettings = {
   provider: LlmProviderKind
   baseUrl: string
   model: string
   apiKeyConfigured: boolean
   providers?: Partial<Record<LlmProviderKind, LlmProviderSettings>>
+  agentModelSource?: AgentModelSource
 }
 
 export type LlmProviderSettings = {
@@ -785,6 +793,10 @@ export async function getLlmSettings() {
 
 export async function saveLlmSettings(request: SaveLlmSettingsRequest) {
   return invokeCommand<LlmSettings>("save_llm_settings", { request })
+}
+
+export async function saveAgentModelSource(source: AgentModelSource) {
+  return invokeCommand<LlmSettings>("save_agent_model_source", { source })
 }
 
 export async function testLlmConnection() {

@@ -16,6 +16,13 @@ use thiserror::Error;
 mod secret_store;
 
 use secret_store::active_secret_store;
+// Live smokes outside this module (e.g. responses_bridge) must opt into the
+// real keychain the same way config's own live tests do.
+#[cfg(test)]
+pub(crate) use secret_store::{
+    set_override_secret_store as set_override_secret_store_for_tests,
+    KeyringSecretStore as KeyringSecretStoreForTests,
+};
 #[cfg(test)]
 use secret_store::{
     clear_override_secret_store, set_override_secret_store, KeyringSecretStore, MemorySecretStore,
@@ -52,6 +59,21 @@ pub enum LlmProviderKind {
     DeepSeek,
     OpenAi,
     Anthropic,
+}
+
+/// Which model drives the Codex agent (Spark deep reading + translation).
+///
+/// - `App` (default): the app's configured LLM (default DeepSeek) drives codex
+///   through the local Responses bridge (`responses_bridge`); codex never sees
+///   the machine's `~/.codex` login and the provider key stays in Rust.
+/// - `CodexLocal`: codex uses whatever provider its own `~/.codex` config is
+///   logged into (the pre-bridge behavior), for advanced users who prefer it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentModelSource {
+    #[default]
+    App,
+    CodexLocal,
 }
 
 #[derive(Debug, Clone)]
@@ -148,6 +170,8 @@ pub struct LlmSettingsResponse {
     pub model: String,
     pub api_key_configured: bool,
     pub providers: BTreeMap<String, LlmProviderSettingsResponse>,
+    /// Which model drives the Codex agent (app-configured vs machine-local codex).
+    pub agent_model_source: AgentModelSource,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -180,6 +204,9 @@ struct StoredLlmSettings {
     mineru: StoredMinerUSettings,
     #[serde(default)]
     obsidian: StoredObsidianSettings,
+    /// 驱动 Codex agent 的模型来源(应用内配置 / 本机 Codex 登录)。缺省即"应用内"。
+    #[serde(default)]
+    agent_model_source: Option<AgentModelSource>,
     /// 是否曾把明文 key 从 `.env` 迁入钥匙串(本次或历史)。供前端一次性提示"建议轮换
     /// 已明文落盘过的 key"。`#[serde(default)]` 保证旧 settings.json 仍能加载。
     #[serde(default)]
@@ -489,7 +516,26 @@ pub fn get_llm_settings() -> Result<LlmSettingsResponse, ConfigError> {
         model: active_model(active, provider),
         api_key_configured: env_key(provider).is_ok(),
         providers: all_provider_settings(&stored),
+        agent_model_source: stored.agent_model_source.unwrap_or_default(),
     })
+}
+
+/// The model source that drives the Codex agent. Reads the stored setting,
+/// defaulting to `App` (app-configured model via the Responses bridge).
+pub fn agent_model_source() -> AgentModelSource {
+    load_stored_settings()
+        .map(|stored| stored.agent_model_source.unwrap_or_default())
+        .unwrap_or_default()
+}
+
+/// Persist the Agent model source toggle and echo back the full LLM settings.
+pub fn save_agent_model_source(
+    source: AgentModelSource,
+) -> Result<LlmSettingsResponse, ConfigError> {
+    let mut stored = load_stored_settings()?;
+    stored.agent_model_source = Some(source);
+    write_stored_settings(&stored)?;
+    get_llm_settings()
 }
 
 pub fn save_llm_settings(

@@ -408,6 +408,7 @@ mod translate_codex {
             crate::codex_exec::CodexInvocation {
                 prompt,
                 book_tools: None,
+                provider: crate::agent_host::bridge_provider(),
                 timeout: PAGE_TIMEOUT,
             },
             |_event| {},
@@ -781,19 +782,29 @@ fn translation_source_fingerprint(
 }
 
 /// Identifies which translation engine produced a cached page, so caches are
-/// isolated across engines. Bump the codex tag when the translator
-/// workflow/prompt changes materially.
+/// isolated across engines *and* across the model that produced them. The C8
+/// bridge means the same codex engine can be driven by different app models (or
+/// the machine-local codex login), so the model source + model name are folded
+/// in — otherwise switching the Agent model would silently mix translations.
+/// Bump the `codex-app` prefix when the translator workflow/prompt changes.
 ///
 /// Gated on `codex_enabled()` (a process-stable env flag) rather than
 /// `ready()` (which flips once the async binary probe lands). This keeps the
 /// fingerprint identical between job start and status polling — otherwise an
 /// engine that becomes ready mid-job would make the status query compute a
 /// different key and report 0% progress for already-translated pages.
-fn translation_engine_tag() -> &'static str {
-    if crate::agent_host::codex_enabled() {
-        "codex-aligned-1"
-    } else {
-        "rust-inline"
+fn translation_engine_tag() -> String {
+    if !crate::agent_host::codex_enabled() {
+        return "rust-inline".to_string();
+    }
+    match crate::config::agent_model_source() {
+        config::AgentModelSource::App => {
+            let model = config::llm_config()
+                .map(|c| c.model)
+                .unwrap_or_else(|_| "app".to_string());
+            format!("codex-app-1-{model}")
+        }
+        config::AgentModelSource::CodexLocal => "codex-local-1".to_string(),
     }
 }
 
@@ -1029,7 +1040,7 @@ mod tests {
             "fingerprint must still bind to the source pdf fingerprint"
         );
         assert!(
-            fingerprint.contains(translation_engine_tag()),
+            fingerprint.contains(&translation_engine_tag()),
             "fingerprint must isolate caches by translation engine"
         );
         let _ = std::fs::remove_file(&db_path);
