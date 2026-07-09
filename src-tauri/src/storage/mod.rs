@@ -122,7 +122,8 @@ pub fn save_book_with_options(
            tldr_text = NULL,
            tldr_generated_at = NULL,
            tldr_model = NULL,
-           tldr_source_version = NULL",
+           tldr_source_version = NULL,
+           tldr_engine_tag = NULL",
         params![
             book_id,
             request.title.trim(),
@@ -1404,6 +1405,7 @@ pub fn save_book_tldr(
     text: &str,
     model: &str,
     source_version: u32,
+    engine_tag: &str,
 ) -> Result<DocumentTldr> {
     let conn = open_database(db_path)?;
     conn.execute(
@@ -1411,9 +1413,10 @@ pub fn save_book_tldr(
          SET tldr_text = ?2,
              tldr_generated_at = datetime('now'),
              tldr_model = ?3,
-             tldr_source_version = ?4
+             tldr_source_version = ?4,
+             tldr_engine_tag = ?5
          WHERE id = ?1",
-        params![book_id, text, model, source_version],
+        params![book_id, text, model, source_version, engine_tag],
     )
     .context("failed to save book TLDR")?;
     get_book_tldr_with_conn(&conn, book_id)?
@@ -1426,7 +1429,8 @@ fn get_book_tldr_with_conn(conn: &Connection, book_id: &str) -> Result<Option<Do
                 tldr_text,
                 strftime('%Y-%m-%dT%H:%M:%SZ', tldr_generated_at) AS tldr_generated_at,
                 tldr_model,
-                tldr_source_version
+                tldr_source_version,
+                tldr_engine_tag
          FROM books
          WHERE id = ?1",
         params![book_id],
@@ -1435,6 +1439,7 @@ fn get_book_tldr_with_conn(conn: &Connection, book_id: &str) -> Result<Option<Do
             let generated_at = row.get::<_, Option<String>>(2)?;
             let model = row.get::<_, Option<String>>(3)?;
             let source_version = row.get::<_, Option<u32>>(4)?;
+            let engine_tag = row.get::<_, Option<String>>(5)?;
             Ok(match (text, generated_at, model, source_version) {
                 (Some(text), Some(generated_at), Some(model), Some(source_version))
                     if !text.trim().is_empty() =>
@@ -1445,6 +1450,7 @@ fn get_book_tldr_with_conn(conn: &Connection, book_id: &str) -> Result<Option<Do
                         generated_at,
                         model,
                         source_version,
+                        engine_tag,
                     })
                 }
                 _ => None,
@@ -1462,7 +1468,8 @@ fn clear_book_tldr_with_conn(conn: &Connection, book_id: &str) -> Result<()> {
          SET tldr_text = NULL,
              tldr_generated_at = NULL,
              tldr_model = NULL,
-             tldr_source_version = NULL
+             tldr_source_version = NULL,
+             tldr_engine_tag = NULL
          WHERE id = ?1",
         params![book_id],
     )
@@ -1494,6 +1501,7 @@ pub(crate) fn open_database(path: &Path) -> Result<Connection> {
           tldr_generated_at TEXT,
           tldr_model TEXT,
           tldr_source_version INTEGER,
+          tldr_engine_tag TEXT,
           created_at TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS pages (
@@ -1662,6 +1670,12 @@ pub(crate) fn open_database(path: &Path) -> Result<Connection> {
         "books",
         "tldr_source_version",
         "ALTER TABLE books ADD COLUMN tldr_source_version INTEGER",
+    )?;
+    ensure_column(
+        &conn,
+        "books",
+        "tldr_engine_tag",
+        "ALTER TABLE books ADD COLUMN tldr_engine_tag TEXT",
     )?;
     ensure_column(
         &conn,

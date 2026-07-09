@@ -1106,14 +1106,21 @@ pub async fn get_or_generate_document_tldr(
 ) -> CommandResult<storage::DocumentTldr> {
     let db_path = library_db_path(&app)?;
     storage::get_converted_book_manifest(&db_path, &book_id).map_err(command_error)?;
+    let engine_tag = interpretation::tldr_engine_tag();
     if force_regenerate != Some(true) {
         if let Some(cached) = storage::get_book_tldr(&db_path, &book_id).map_err(command_error)? {
-            if cached.source_version == storage::TLDR_SOURCE_VERSION {
+            // Reuse only when both the format version and the producing engine
+            // still match — switching engine/model busts the cached overview.
+            if interpretation::tldr_cache_is_fresh(
+                cached.source_version,
+                cached.engine_tag.as_deref(),
+                &engine_tag,
+            ) {
                 return Ok(cached);
             }
         }
     }
-    let text = interpretation::generate_document_tldr(&db_path, &book_id)
+    let text = interpretation::generate_document_tldr_with_progress(&app, &db_path, &book_id)
         .await
         .map_err(command_error)?;
     let model = llm::active_model_label().map_err(command_error)?;
@@ -1123,8 +1130,14 @@ pub async fn get_or_generate_document_tldr(
         &text,
         &model,
         storage::TLDR_SOURCE_VERSION,
+        &engine_tag,
     )
     .map_err(command_error)
+}
+
+#[command]
+pub fn cancel_document_tldr(book_id: String) -> bool {
+    interpretation::cancel_document_tldr(&book_id)
 }
 
 #[command]

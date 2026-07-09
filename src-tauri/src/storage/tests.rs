@@ -1517,11 +1517,13 @@ fn saves_reads_and_clears_book_tldr_cache() {
         "这本书解释复利为何依赖时间、纪律和风险控制。",
         "test/model",
         TLDR_SOURCE_VERSION,
+        "rust-inline-1",
     )
     .expect("TLDR should save");
     assert_eq!(saved_tldr.book_id, saved_book.book_id);
     assert_eq!(saved_tldr.model, "test/model");
     assert_eq!(saved_tldr.source_version, TLDR_SOURCE_VERSION);
+    assert_eq!(saved_tldr.engine_tag.as_deref(), Some("rust-inline-1"));
 
     let manifest =
         get_converted_book_manifest(&path, &saved_book.book_id).expect("manifest should load");

@@ -31,6 +31,7 @@ export function App() {
     followUps,
     tldr,
     tldrLoading,
+    tldrProgress,
     tldrError,
     tldrLlmReady,
     workbenchTab,
@@ -86,7 +87,7 @@ export function App() {
   const { stopActiveRequest } = lifecycle
   const focus = useReaderFocus()
   const knowledge = useReaderKnowledge()
-  const { ensureTldr } = useReaderTldr()
+  const { ensureTldr, cancelTldr } = useReaderTldr()
   const agentTaskHandlers = useReaderAgentTasks({
     persistAgentTaskCards: knowledge.persistAgentTaskCards,
   })
@@ -194,6 +195,7 @@ export function App() {
       followUps={followUps}
       tldr={tldr}
       tldrLoading={tldrLoading}
+      tldrProgress={tldrProgress}
       tldrError={tldrError}
       tldrLlmReady={tldrLlmReady}
       workbenchTab={workbenchTab}
@@ -256,6 +258,7 @@ export function App() {
       onStopAgentTask={agentTaskHandlers.handleStopAgentTask}
       onGenerateTldr={() => void ensureTldr(bookId, { manual: true })}
       onRegenerateTldr={() => void ensureTldr(bookId, { force: true, manual: true })}
+      onCancelTldr={() => cancelTldr(bookId)}
       onSaveHighlight={highlightHandlers.handleSaveHighlight}
       onOpenHighlight={highlightHandlers.handleOpenHighlight}
       onDeleteHighlight={highlightHandlers.handleDeleteHighlight}

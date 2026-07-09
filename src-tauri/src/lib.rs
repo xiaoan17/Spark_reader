@@ -80,6 +80,7 @@ pub fn run() {
             commands::get_obsidian_settings,
             commands::get_or_generate_card_summary,
             commands::get_or_generate_document_tldr,
+            commands::cancel_document_tldr,
             commands::get_or_generate_highlight_note,
             commands::get_neighbors,
             commands::get_llm_settings,

@@ -196,6 +196,89 @@
     }
 
     #[test]
+    fn clean_tldr_text_normalizes_codex_prose_output() {
+        // A codex TLDR arrives as blank-line-separated prose, sometimes wrapped
+        // in quotes with soft line breaks — clean_tldr_text must yield the same
+        // paragraph shape the frontend TldrMarkdown renderer expects.
+        let raw = "“这是一份技术报告，\n围绕成本对比展开。\n\n它的结论是自建更省。”";
+        let cleaned = clean_tldr_text(raw);
+
+        assert_eq!(cleaned, "这是一份技术报告， 围绕成本对比展开。\n\n它的结论是自建更省。");
+        assert!(!cleaned.contains('“'));
+        assert!(!cleaned.contains('”'));
+    }
+
+    #[test]
+    fn tldr_codex_progress_maps_events_to_stages() {
+        use crate::codex_exec::CodexEvent;
+
+        assert_eq!(
+            tldr_codex_progress(&CodexEvent::ToolStarted),
+            Some(TldrCodexProgress::Sampling)
+        );
+        assert_eq!(
+            tldr_codex_progress(&CodexEvent::AgentMessage("整书速览……".to_string())),
+            Some(TldrCodexProgress::Synthesizing)
+        );
+        assert_eq!(
+            tldr_codex_progress(&CodexEvent::ThreadStarted("t".to_string())),
+            None
+        );
+        assert_eq!(tldr_codex_progress(&CodexEvent::TurnCompleted), None);
+        assert_eq!(tldr_codex_progress(&CodexEvent::Other), None);
+    }
+
+    #[test]
+    fn tldr_cache_is_fresh_requires_version_and_engine_tag_match() {
+        let version = crate::storage::TLDR_SOURCE_VERSION;
+        // Same version + same engine tag → reuse.
+        assert!(tldr_cache_is_fresh(version, Some("codex-app-1-deepseek"), "codex-app-1-deepseek"));
+        // Different engine tag (e.g. switched to codex-local) → regenerate.
+        assert!(!tldr_cache_is_fresh(version, Some("codex-app-1-deepseek"), "codex-local-1"));
+        // Stale format version → regenerate even if tag matches.
+        assert!(!tldr_cache_is_fresh(version - 1, Some("codex-local-1"), "codex-local-1"));
+        // Legacy cache with no engine tag → regenerate.
+        assert!(!tldr_cache_is_fresh(version, None, "codex-local-1"));
+    }
+
+    #[test]
+    fn tldr_codex_prompt_carries_book_id_and_structure_first_workflow() {
+        let prompt = build_tldr_codex_prompt("book-42");
+        assert!(prompt.contains("book-42"));
+        assert!(prompt.contains("book_structure"));
+        // The whole-book instructions (not the passage deep-reader ones) are used.
+        assert!(prompt.contains("TLDR"));
+    }
+
+    #[test]
+    fn active_tldr_registry_cancels_and_unregisters_book() {
+        let book_id = format!("tldr-cancel-test-{}", std::process::id());
+        unregister_active_tldr(&book_id);
+
+        assert!(!cancel_document_tldr(&book_id));
+        let token = register_active_tldr(&book_id);
+        assert!(cancel_document_tldr(&book_id));
+        assert!(llm::is_cancelled(&token));
+
+        unregister_active_tldr(&book_id);
+        assert!(!cancel_document_tldr(&book_id));
+    }
+
+    #[test]
+    fn tldr_engine_tag_is_rust_inline_when_codex_disabled() {
+        let _guard = crate::TEST_ENV_LOCK.lock().expect("env lock");
+        let previous = std::env::var("FOCUSED_READING_CODEX_DISABLED").ok();
+        std::env::set_var("FOCUSED_READING_CODEX_DISABLED", "1");
+
+        assert_eq!(tldr_engine_tag(), "rust-inline-1");
+
+        match previous {
+            Some(value) => std::env::set_var("FOCUSED_READING_CODEX_DISABLED", value),
+            None => std::env::remove_var("FOCUSED_READING_CODEX_DISABLED"),
+        }
+    }
+
+    #[test]
     fn retrieval_plan_adds_mode_specific_queries_without_losing_focus() {
         let request = InterpretRequest {
             book_id: "book-1".to_string(),
@@ -1494,4 +1577,162 @@
 
         unregister_active_interpretation(&request_id);
         assert!(!cancel_interpretation(&request_id));
+    }
+
+    /// Live end-to-end smoke: a real `codex exec` turn runs the agentic TLDR on a
+    /// tiny real book, driven by the app-configured model through the Responses
+    /// bridge, calling real book tools. Requires the codex binary and a resolvable
+    /// app LLM key (keychain/.env) — it spends real tokens. Run explicitly:
+    ///   `cargo test --lib tldr_codex_live_smoke -- --ignored --test-threads=1 --nocapture`
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore]
+    async fn tldr_codex_live_smoke() {
+        let Some(_binary) = crate::codex_exec::codex_binary() else {
+            panic!("codex binary not found; install codex-cli to run this smoke test");
+        };
+        // No embedding provider: book_search falls back to FTS, and save_book's
+        // blocking embedding client would otherwise drop a runtime inside this
+        // async test (same guard every async test here uses).
+        std::env::set_var("EMBEDDING_PROVIDER", "disabled");
+        // Test builds default to the in-memory secret store; a live smoke must read
+        // the real keychain like the production app (same as the bridge live test).
+        crate::config::set_override_secret_store_for_tests(std::sync::Arc::new(
+            crate::config::KeyringSecretStoreForTests,
+        ));
+        let llm = crate::config::llm_config()
+            .expect("app LLM config must resolve (missing provider key?) — cannot run live smoke");
+
+        let dir = std::env::temp_dir().join(format!("fr-tldr-smoke-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("smoke dir");
+        let db_path = dir.join("library.sqlite3");
+
+        // A tiny real book so book_structure / book_get_chunk return content.
+        // save_book runs a blocking embedding client, whose internal runtime must
+        // not be dropped inside this async test — run it on a blocking thread.
+        let saved = {
+            let db_path = db_path.clone();
+            tokio::task::spawn_blocking(move || {
+                storage::save_book(
+                    &db_path,
+                    storage::SaveBookRequest {
+                        title: "复利小书".to_string(),
+                        total_pages: 3,
+                        parser_engine: "test".to_string(),
+                        coordinate_mode: "text-only".to_string(),
+                        quality: None,
+                        source_pdf_path: None,
+                        source_asset_dir: None,
+                        source_asset_dirs: Vec::new(),
+                        pages: vec![
+                            storage::ParsedPageInput {
+                                page_index: 0,
+                                text: "第一章：复利来自长期坚持与时间积累。".to_string(),
+                                markdown: "## 第一章\n\n复利来自长期坚持与时间积累。".to_string(),
+                            },
+                            storage::ParsedPageInput {
+                                page_index: 1,
+                                text: "第二章：现金流与纪律决定能否坚持到底。".to_string(),
+                                markdown: "## 第二章\n\n现金流与纪律决定能否坚持到底。".to_string(),
+                            },
+                            storage::ParsedPageInput {
+                                page_index: 2,
+                                text: "第三章：风险控制让长期计划不被意外打断。".to_string(),
+                                markdown: "## 第三章\n\n风险控制让长期计划不被意外打断。".to_string(),
+                            },
+                        ],
+                        chunks: vec![
+                            storage::ParsedChunkInput {
+                                chunk_id: "p1-c1".to_string(),
+                                page_index: 0,
+                                text: "复利来自长期坚持与时间积累。".to_string(),
+                                markdown: "### [p1-c1] 第一章\n\n复利来自长期坚持与时间积累。"
+                                    .to_string(),
+                                rects: Vec::new(),
+                                coordinate_version: COORDINATE_VERSION,
+                            },
+                            storage::ParsedChunkInput {
+                                chunk_id: "p2-c1".to_string(),
+                                page_index: 1,
+                                text: "现金流与纪律决定能否坚持到底。".to_string(),
+                                markdown: "### [p2-c1] 第二章\n\n现金流与纪律决定能否坚持到底。"
+                                    .to_string(),
+                                rects: Vec::new(),
+                                coordinate_version: COORDINATE_VERSION,
+                            },
+                            storage::ParsedChunkInput {
+                                chunk_id: "p3-c1".to_string(),
+                                page_index: 2,
+                                text: "风险控制让长期计划不被意外打断。".to_string(),
+                                markdown: "### [p3-c1] 第三章\n\n风险控制让长期计划不被意外打断。"
+                                    .to_string(),
+                                rects: Vec::new(),
+                                coordinate_version: COORDINATE_VERSION,
+                            },
+                        ],
+                    },
+                )
+            })
+            .await
+            .expect("save_book task should join")
+            .expect("book should save")
+        };
+
+        // Book-tool MCP server + Responses bridge (app model path), same wiring as
+        // the bridge live smoke.
+        let book_token = "tldr-smoke-book-token".to_string();
+        let book_addr = crate::book_tool_server::spawn(crate::book_tool_server::BookToolServerConfig {
+            db_path: db_path.clone(),
+            token: book_token.clone(),
+            port: 0,
+        })
+        .await
+        .expect("bind book-tool server");
+
+        let bridge_token = "tldr-smoke-bridge-token".to_string();
+        let bridge_addr =
+            crate::responses_bridge::spawn(crate::responses_bridge::ResponsesBridgeConfig {
+                token: bridge_token.clone(),
+                port: 0,
+                book_tool_base: format!("http://{book_addr}"),
+                book_tool_token: book_token.clone(),
+            })
+            .await
+            .expect("bind responses bridge");
+
+        let invocation = crate::codex_exec::CodexInvocation {
+            prompt: tldr::build_tldr_codex_prompt(&saved.book_id),
+            book_tools: Some(crate::codex_exec::BookToolsMcp {
+                mcp_url: format!("http://{book_addr}/mcp"),
+                token: book_token,
+            }),
+            provider: Some(crate::codex_exec::BridgeProvider {
+                base_url: format!("http://{bridge_addr}/v1"),
+                token: bridge_token,
+                model: llm.model.clone(),
+            }),
+            timeout: std::time::Duration::from_secs(180),
+        };
+
+        crate::responses_bridge::BOOK_TOOLS_EXECUTED
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        let outcome = crate::codex_exec::run(invocation, |_| {}, || false)
+            .await
+            .expect("codex TLDR turn should complete via the bridge");
+
+        let executed = crate::responses_bridge::BOOK_TOOLS_EXECUTED
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let tldr = clean_tldr_text(&outcome.final_message);
+        println!("--- tldr codex live smoke ---");
+        println!("app model: {}", llm.model);
+        println!("book tools executed by bridge: {executed}");
+        println!("tldr: {tldr}");
+
+        assert!(
+            executed > 0,
+            "expected the agentic TLDR to call at least one book tool"
+        );
+        assert!(!tldr.trim().is_empty(), "agentic TLDR produced no overview");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }

@@ -186,6 +186,24 @@ export type DocumentTldr = {
   generatedAt: string
   model: string
   sourceVersion: number
+  engineTag?: string | null
+}
+
+export type TldrStreamStage =
+  | "structureAnalysis"
+  | "sampling"
+  | "synthesizing"
+  | "done"
+  | "cancelled"
+  | "failed"
+
+export type TldrStreamEvent = {
+  bookId: string
+  stage: TldrStreamStage
+  message: string
+  sampled?: number | null
+  total?: number | null
+  engine?: string | null
 }
 
 export type ConvertedBookManifest = StoredBookSummary
@@ -709,6 +727,21 @@ export async function regenerateDocumentTldr(bookId: string) {
   return invokeCommand<DocumentTldr>("get_or_generate_document_tldr", {
     bookId,
     forceRegenerate: true,
+  })
+}
+
+export async function cancelDocumentTldr(bookId: string) {
+  return invokeCommand<boolean>("cancel_document_tldr", { bookId })
+}
+
+export async function listenDocumentTldrStream(
+  handler: (event: TldrStreamEvent) => void,
+): Promise<UnlistenFn | null> {
+  if (!isTauriRuntime()) {
+    return null
+  }
+  return listen<TldrStreamEvent>("tldr://stream", (event) => {
+    handler(event.payload)
   })
 }
 

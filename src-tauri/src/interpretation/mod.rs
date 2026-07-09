@@ -1157,7 +1157,10 @@ mod codex_session;
 #[cfg(test)]
 mod tests;
 
-pub use tldr::generate_document_tldr;
+pub use tldr::{
+    cancel_document_tldr, generate_document_tldr_with_progress, tldr_cache_is_fresh,
+    tldr_engine_tag,
+};
 pub use types::*;
 use citations::*;
 use prompt::*;

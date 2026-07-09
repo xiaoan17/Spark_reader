@@ -117,3 +117,31 @@ pub enum AgentTracePhase {
     Iterate,
     Synthesize,
 }
+
+/// Progress event for document-level TLDR generation. Keyed by `book_id` (only
+/// one TLDR runs per book at a time), so the frontend filters by book.
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TldrStreamEvent {
+    pub book_id: String,
+    pub stage: TldrStreamStage,
+    pub message: String,
+    /// How many chapters/sections have been sampled so far (sampling stage).
+    pub sampled: Option<u32>,
+    /// Total sampling targets when known (deterministic Rust path); `None` for
+    /// the agentic Codex path where the count is open-ended.
+    pub total: Option<u32>,
+    /// Which engine is producing this TLDR (`codex` or `rust`), for the UI hint.
+    pub engine: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum TldrStreamStage {
+    StructureAnalysis,
+    Sampling,
+    Synthesizing,
+    Done,
+    Cancelled,
+    Failed,
+}

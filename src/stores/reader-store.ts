@@ -61,6 +61,13 @@ export type DocumentTldrState = {
   sourceVersion: number
 }
 
+export type TldrProgress = {
+  stage: "structureAnalysis" | "sampling" | "synthesizing"
+  message: string
+  sampled?: number | null
+  engine?: string | null
+}
+
 export type EvidenceChunkSnapshot = {
   chunkId: string
   chunkIdVersion: number
@@ -314,6 +321,7 @@ type ReaderState = {
   tldrError: string
   tldrDismissed: boolean
   tldrLlmReady: boolean
+  tldrProgress: TldrProgress | null
   parsedPages: ParsedPage[]
   parsedChunks: ParsedChunk[]
   parsedText: string
@@ -387,6 +395,7 @@ type ReaderState = {
   setTldrError: (message: string) => void
   setTldrDismissed: (dismissed: boolean) => void
   setTldrLlmReady: (ready: boolean) => void
+  setTldrProgress: (progress: TldrProgress | null) => void
   setFollowUps: (followUps: FollowUpTurn[]) => void
   addInterpretationHistory: (item: SavedInterpretation) => void
   addHighlight: (highlight: SavedHighlight) => void
@@ -443,6 +452,7 @@ export const useReaderStore = create<ReaderState>((set) => ({
   tldrError: "",
   tldrDismissed: false,
   tldrLlmReady: true,
+  tldrProgress: null,
   parsedPages: [],
   parsedChunks: [],
   parsedText: "",
@@ -498,6 +508,7 @@ export const useReaderStore = create<ReaderState>((set) => ({
       tldrError: "",
       tldrDismissed: false,
       tldrLlmReady: true,
+      tldrProgress: null,
       parsedPages: [],
       parsedChunks: [],
       parsedText: "",
@@ -535,6 +546,7 @@ export const useReaderStore = create<ReaderState>((set) => ({
       tldrLoading: false,
       tldrError: "",
       tldrDismissed: false,
+      tldrProgress: null,
     }),
   mergeParsedDocumentWindow: (pages, chunks, text = "", markdown = "") =>
     set((state) => {
@@ -695,11 +707,13 @@ export const useReaderStore = create<ReaderState>((set) => ({
         knowledgeError: "",
       }
     }),
-  setTldr: (tldr) => set({ tldr, tldrError: "", tldrLoading: false, tldrDismissed: false }),
+  setTldr: (tldr) =>
+    set({ tldr, tldrError: "", tldrLoading: false, tldrDismissed: false, tldrProgress: null }),
   setTldrLoading: (tldrLoading) => set({ tldrLoading }),
-  setTldrError: (tldrError) => set({ tldrError, tldrLoading: false }),
+  setTldrError: (tldrError) => set({ tldrError, tldrLoading: false, tldrProgress: null }),
   setTldrDismissed: (tldrDismissed) => set({ tldrDismissed }),
   setTldrLlmReady: (tldrLlmReady) => set({ tldrLlmReady }),
+  setTldrProgress: (tldrProgress) => set({ tldrProgress }),
   setFollowUps: (followUps) => set({ followUps }),
   addInterpretationHistory: (item) =>
     set((state) => ({

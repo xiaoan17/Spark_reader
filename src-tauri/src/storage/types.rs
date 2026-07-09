@@ -203,6 +203,10 @@ pub struct DocumentTldr {
     pub generated_at: String,
     pub model: String,
     pub source_version: u32,
+    /// Engine + model-source + model-name signature the TLDR was produced with.
+    /// Cache stays valid only while this matches the current engine tag, so
+    /// switching engine/model naturally invalidates a stale overview.
+    pub engine_tag: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

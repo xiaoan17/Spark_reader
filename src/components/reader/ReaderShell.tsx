@@ -43,6 +43,7 @@ import type {
   TextQuality,
   AnswerSource,
   DocumentTldrState,
+  TldrProgress,
   WorkbenchTab,
 } from "@/stores/reader-store"
 import type { NormalizedPageRect } from "@/core/coordinates"
@@ -137,6 +138,7 @@ type ReaderShellProps = {
   followUps: FollowUpTurn[]
   tldr?: DocumentTldrState | null
   tldrLoading?: boolean
+  tldrProgress?: TldrProgress | null
   tldrError?: string
   tldrLlmReady?: boolean
   workbenchTab?: WorkbenchTab
@@ -212,6 +214,7 @@ type ReaderShellProps = {
   onStopAgentTask?: (taskId: string) => void
   onGenerateTldr?: () => void
   onRegenerateTldr?: () => void
+  onCancelTldr?: () => void
   onSaveHighlight: () => Promise<boolean>
   onOpenHighlight: (highlight: SavedHighlight) => void
   onDeleteHighlight: (highlightId: string) => void
@@ -256,6 +259,7 @@ export function ReaderShell({
   followUps,
   tldr = null,
   tldrLoading = false,
+  tldrProgress = null,
   tldrError = "",
   tldrLlmReady = true,
   workbenchTab = "spark",
@@ -310,6 +314,7 @@ export function ReaderShell({
   onStopAgentTask = () => undefined,
   onGenerateTldr = () => undefined,
   onRegenerateTldr = () => undefined,
+  onCancelTldr = () => undefined,
   onSaveHighlight,
   onOpenHighlight,
   onDeleteHighlight: _onDeleteHighlight,
@@ -988,12 +993,14 @@ export function ReaderShell({
               generatedAt={tldr?.generatedAt}
               model={tldr?.model}
               loading={tldrLoading}
+              progress={tldrProgress}
               error={tldrError}
               desktopAvailable={isTauriRuntime()}
               llmReady={tldrLlmReady}
               displayThemeStyle={readerDisplayStyle}
               onGenerate={onGenerateTldr}
               onRegenerate={onRegenerateTldr}
+              onCancel={onCancelTldr}
             />
           ) : canShowConvertedText && readerView === "translation" ? (
             <TranslationReader
