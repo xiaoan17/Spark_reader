@@ -5,7 +5,6 @@ import {
   Loader2,
   SearchCheck,
   Settings2,
-  ShieldAlert,
   XCircle,
 } from "lucide-react"
 import { useEffect, useState, type MouseEvent, type ReactNode } from "react"
@@ -135,21 +134,11 @@ const browserModeTestMessage = "连接测试请使用桌面版。"
 
 const browserModeSelfCheckMessage = "开发诊断请使用桌面版。"
 
-const ROTATION_BANNER_DISMISSED_STORAGE_KEY = "focused-reading.secret-rotation-banner.dismissed.v1"
-
 const secretLocationLabels: Record<SecretLocation, string> = {
-  keychain: "钥匙串",
+  "local-file": "本地文件",
+  keychain: "旧钥匙串",
   "env-plaintext": "旧 .env",
-  placeholder: "已迁移",
   absent: "未配置",
-}
-
-function readRotationBannerDismissed() {
-  try {
-    return window.localStorage.getItem(ROTATION_BANNER_DISMISSED_STORAGE_KEY) === "1"
-  } catch {
-    return false
-  }
 }
 
 export function LlmSettingsPanel({
@@ -187,7 +176,6 @@ export function LlmSettingsPanel({
   const [selfCheckResult, setSelfCheckResult] = useState<ProductSelfCheckResponse | null>(null)
   const [advancedOpen, setAdvancedOpen] = useState(defaultAdvancedOpen)
   const [secretStatus, setSecretStatus] = useState<SecretStorageStatus | null>(null)
-  const [rotationBannerDismissed, setRotationBannerDismissed] = useState(readRotationBannerDismissed)
 
   useEffect(() => {
     if (!open || !isTauriRuntime()) {
@@ -523,21 +511,9 @@ export function LlmSettingsPanel({
     await handleSaveEmbedding()
   }
 
-  function handleDismissRotationBanner() {
-    setRotationBannerDismissed(true)
-    try {
-      window.localStorage.setItem(ROTATION_BANNER_DISMISSED_STORAGE_KEY, "1")
-    } catch {
-      // localStorage 不可用时仍就地关闭,只是下次可能重现。
-    }
-  }
-
   function secretLocationFor(name: string): SecretLocation | null {
     return secretStatus?.items.find((item) => item.name === name)?.location ?? null
   }
-
-  const rotationBannerVisible =
-    Boolean(secretStatus?.hadPlaintextMigration) && !rotationBannerDismissed
 
   const busy = status === "loading" || status === "saving" || status === "testing"
   const embeddingBusy = embeddingStatus === "saving" || embeddingStatus === "testing"
@@ -584,9 +560,6 @@ export function LlmSettingsPanel({
             </Button>
           </div>
         </div>
-        {rotationBannerVisible ? (
-          <SecretRotationBanner onDismiss={handleDismissRotationBanner} />
-        ) : null}
         <div className="space-y-4 border-b p-4 text-sm">
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -994,37 +967,17 @@ export function LlmSettingsPanel({
   )
 }
 
-export function SecretRotationBanner({ onDismiss }: { onDismiss: () => void }) {
-  return (
-    <div
-      className="flex items-start gap-2.5 border-b bg-warning/10 p-4 text-sm"
-      data-testid="secret-rotation-banner"
-    >
-      <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
-      <div className="min-w-0 flex-1">
-        <div className="font-medium">检测到 API key 曾以明文保存在 .env</div>
-        <p className="mt-1 text-xs leading-5 text-muted-foreground">
-          这些 key 已迁移到系统钥匙串；为安全起见，建议前往对应平台重新生成（轮换）这些 key。
-        </p>
-      </div>
-      <Button size="sm" variant="ghost" className="shrink-0" onClick={onDismiss}>
-        知道了
-      </Button>
-    </div>
-  )
-}
-
 function SecretLocationTag({ location }: { location: SecretLocation | null }) {
   if (!location) {
     return null
   }
+  // 旧布局(钥匙串 / .env 明文)用暖色轻提示,提示这是待收敛的历史存放;本地文件是默认常态。
+  const isLegacy = location === "keychain" || location === "env-plaintext"
   return (
     <span
       className={cn(
         "rounded-sm px-1.5 py-0.5 text-[11px] font-normal",
-        location === "env-plaintext"
-          ? "bg-warning/15 text-warning"
-          : "bg-muted text-muted-foreground",
+        isLegacy ? "bg-warning/15 text-warning" : "bg-muted text-muted-foreground",
       )}
       data-testid="secret-location-tag"
     >

@@ -398,7 +398,7 @@ export type MinerUConnectionTestResponse = {
 }
 
 /** 单个敏感项当前的存放位置(与 Rust `SecretLocation` 一一对应)。 */
-export type SecretLocation = "keychain" | "env-plaintext" | "placeholder" | "absent"
+export type SecretLocation = "local-file" | "keychain" | "env-plaintext" | "absent"
 
 export type SecretItemStatus = {
   /** 环境变量名,如 `DEEPSEEK_API_KEY`、`MINERU_API_TOKEN`。 */
@@ -407,9 +407,9 @@ export type SecretItemStatus = {
 }
 
 export type SecretStorageStatus = {
+  /** 当前生效的后端:`"file"`(默认本地明文)或 `"keychain"`(opt-in)。 */
+  backend: string
   items: SecretItemStatus[]
-  /** 历史上是否发生过明文迁移,供设置页一次性「建议轮换 key」banner 决策。 */
-  hadPlaintextMigration: boolean
 }
 
 export type ZoteroSearchResult = {

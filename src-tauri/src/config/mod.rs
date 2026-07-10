@@ -40,7 +40,8 @@ const APP_CONFIG_DIR_NAME: &str = "com.anbc.focused-reading";
 const SETTINGS_FILE_NAME: &str = "llm-settings.json";
 const DOTENV_FILE_NAME: &str = ".env";
 
-/// `.env` 中敏感项迁入钥匙串后留下的占位值。占位不再被迁移(幂等),读取时视为未配置。
+/// 历史遗留:旧版本曾把明文迁入钥匙串并在 `.env` 留下这个占位。现在默认后端是本地文件,
+/// 不再写占位,但读取时仍把它当作"未配置"跳过,兼容跑过旧版的开发机。
 pub const KEYCHAIN_PLACEHOLDER: &str = "moved-to-keychain";
 
 /// 所有由后端管理、绝不进前端的敏感项(环境变量名)。非敏感配置(开关 / URL / 模型名)
@@ -52,6 +53,35 @@ const SECRET_KEYS: [&str; 5] = [
     "ANTHROPIC_API_KEY",
     "EMBEDDING_API_KEY",
 ];
+
+/// 本地明文密钥文件名(与 `llm-settings.json` 同目录)。默认后端 `FileSecretStore` 的落盘处。
+const SECRETS_FILE_NAME: &str = "secrets.json";
+
+/// 敏感项存储后端。默认本地明文文件(零系统交互、发版不弹框);
+/// `FOCUSED_READING_SECRET_BACKEND=keychain` 才走系统钥匙串(opt-in)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecretBackend {
+    File,
+    Keychain,
+}
+
+fn secret_backend() -> SecretBackend {
+    match env::var("FOCUSED_READING_SECRET_BACKEND")
+        .ok()
+        .as_deref()
+        .map(str::trim)
+    {
+        Some(value) if value.eq_ignore_ascii_case("keychain") => SecretBackend::Keychain,
+        _ => SecretBackend::File,
+    }
+}
+
+fn secret_backend_label() -> &'static str {
+    match secret_backend() {
+        SecretBackend::File => "file",
+        SecretBackend::Keychain => "keychain",
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -207,10 +237,10 @@ struct StoredLlmSettings {
     /// 驱动 Codex agent 的模型来源(应用内配置 / 本机 Codex 登录)。缺省即"应用内"。
     #[serde(default)]
     agent_model_source: Option<AgentModelSource>,
-    /// 是否曾把明文 key 从 `.env` 迁入钥匙串(本次或历史)。供前端一次性提示"建议轮换
-    /// 已明文落盘过的 key"。`#[serde(default)]` 保证旧 settings.json 仍能加载。
+    /// 反向迁移(钥匙串→本地文件)是否已完整跑过一趟。置真后启动直接短路,连钥匙串探测都
+    /// 省掉,保证"一次弹窗后永不再弹"。`#[serde(default)]` 保证旧 settings.json 仍能加载。
     #[serde(default)]
-    had_plaintext_migration: Option<bool>,
+    keychain_import_done: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -849,66 +879,51 @@ fn migrate_legacy_api_keys(stored: &mut StoredLlmSettings) -> Result<bool, Confi
     Ok(changed)
 }
 
-/// 保存敏感项:写入钥匙串(不再写 `.env` 明文),同步进程环境使当前会话立即生效,并把
-/// `.env` 里残留的同名明文替换为占位。
+/// 保存敏感项:写入当前后端(默认本地文件),并同步进程环境使当前会话立即生效。
+/// 不再触碰 `.env`——本地文件是唯一真相。
 fn save_secret(name: &'static str, value: &str) -> Result<(), ConfigError> {
     active_secret_store()
         .set(name, value)
         .map_err(ConfigError::SecretStore)?;
     env::set_var(name, value);
-    scrub_dotenv_secret_to_placeholder(name)?;
     Ok(())
 }
 
-/// 若 `.env` 里存在该敏感项的非占位赋值,原子地替换为占位串;否则不动(不新建 `.env`)。
-fn scrub_dotenv_secret_to_placeholder(name: &str) -> Result<(), ConfigError> {
-    let path = dotenv_path()?;
-    if !path.exists() {
-        return Ok(());
-    }
-    let raw =
-        fs::read_to_string(&path).map_err(|err| ConfigError::ReadSettings(err.to_string()))?;
-    let mut changed = false;
-    let lines = raw
-        .lines()
-        .map(|line| {
-            if line.trim_start().starts_with('#') {
-                return line.to_string();
-            }
-            let Some((key, current)) = line.split_once('=') else {
-                return line.to_string();
-            };
-            if key.trim() == name && current.trim() != KEYCHAIN_PLACEHOLDER {
-                changed = true;
-                format_dotenv_assignment(name, KEYCHAIN_PLACEHOLDER)
-            } else {
-                line.to_string()
-            }
-        })
-        .collect::<Vec<_>>();
-    if !changed {
-        return Ok(());
-    }
-    write_dotenv_atomic(&path, &lines)
+fn secrets_file_path() -> Result<PathBuf, ConfigError> {
+    Ok(config_dir()?.join(SECRETS_FILE_NAME))
 }
 
-/// 原子写 `.env`:写临时文件 → 收紧权限 → rename 覆盖。同目录 rename 在 unix 上是原子的,
-/// 避免半截写坏配置。
-fn write_dotenv_atomic(path: &Path, lines: &[String]) -> Result<(), ConfigError> {
+fn read_secrets_file(path: &Path) -> Result<BTreeMap<String, String>, ConfigError> {
+    if !path.exists() {
+        return Ok(BTreeMap::new());
+    }
+    let raw = fs::read_to_string(path).map_err(|err| ConfigError::ReadSettings(err.to_string()))?;
+    if raw.trim().is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    serde_json::from_str(&raw).map_err(|err| ConfigError::ReadSettings(err.to_string()))
+}
+
+/// 原子写 `secrets.json`:写临时文件 → 收紧权限(600) → rename 覆盖。避免半截写坏。
+fn write_secrets_file_atomic(
+    path: &Path,
+    secrets: &BTreeMap<String, String>,
+) -> Result<(), ConfigError> {
     if let Some(parent) = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
     {
         fs::create_dir_all(parent).map_err(|err| ConfigError::WriteSettings(err.to_string()))?;
     }
+    let mut output = serde_json::to_string_pretty(secrets)
+        .map_err(|err| ConfigError::WriteSettings(err.to_string()))?;
+    output.push('\n');
     let file_name = path
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
-        .ok_or_else(|| ConfigError::WriteSettings("dotenv path has no file name".to_string()))?;
+        .ok_or_else(|| ConfigError::WriteSettings("secrets path has no file name".to_string()))?;
     let tmp_path = path.with_file_name(format!("{file_name}.{}.tmp", std::process::id()));
 
-    let mut output = lines.join("\n");
-    output.push('\n');
     fs::write(&tmp_path, output).map_err(|err| ConfigError::WriteSettings(err.to_string()))?;
     if let Err(err) = restrict_secret_file_permissions(&tmp_path) {
         let _ = fs::remove_file(&tmp_path);
@@ -919,6 +934,33 @@ fn write_dotenv_atomic(path: &Path, lines: &[String]) -> Result<(), ConfigError>
         return Err(ConfigError::WriteSettings(err.to_string()));
     }
     Ok(())
+}
+
+/// 以下三个 `file_secret_*` 是 `FileSecretStore` 的真实现,集中放在 config 模块与其它配置
+/// IO 一处;`secret_store::FileSecretStore` 只做薄委托。
+fn file_secret_get(name: &str) -> Option<String> {
+    let path = secrets_file_path().ok()?;
+    let secrets = read_secrets_file(&path).ok()?;
+    secrets
+        .get(name)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn file_secret_set(name: &str, value: &str) -> Result<(), ConfigError> {
+    let path = secrets_file_path()?;
+    let mut secrets = read_secrets_file(&path)?;
+    secrets.insert(name.to_string(), value.to_string());
+    write_secrets_file_atomic(&path, &secrets)
+}
+
+fn file_secret_delete(name: &str) -> Result<(), ConfigError> {
+    let path = secrets_file_path()?;
+    let mut secrets = read_secrets_file(&path)?;
+    if secrets.remove(name).is_none() {
+        return Ok(());
+    }
+    write_secrets_file_atomic(&path, &secrets)
 }
 
 #[cfg(unix)]
@@ -954,18 +996,6 @@ fn restrict_secret_file_permissions(path: &Path) -> Result<(), ConfigError> {
         )));
     }
     Ok(())
-}
-
-fn format_dotenv_assignment(name: &str, value: &str) -> String {
-    let simple = value
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '/' | ':' | '+'));
-    if simple {
-        format!("{name}={value}")
-    } else {
-        let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
-        format!("{name}=\"{escaped}\"")
-    }
 }
 
 fn active_embedding_provider(settings: &StoredEmbeddingSettings) -> Option<String> {
@@ -1057,13 +1087,13 @@ fn active_mineru_base_url(settings: &StoredMinerUSettings) -> String {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SecretLocation {
-    /// 已在系统钥匙串。
+    /// 在本地明文文件 `secrets.json`(默认后端)。
+    LocalFile,
+    /// 仅在系统钥匙串(旧数据未迁移,或 opt-in 钥匙串后端)。
     Keychain,
-    /// 仍以明文留在 `.env` / 进程环境。
+    /// 仅以明文留在 `.env` / 进程环境(旧布局 / 源码用户)。
     EnvPlaintext,
-    /// `.env` 里是迁移占位(已迁走,但钥匙串当前查不到)。
-    Placeholder,
-    /// 三处都没有。
+    /// 哪都没有。
     Absent,
 }
 
@@ -1077,15 +1107,15 @@ pub struct SecretItemStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SecretStorageStatus {
+    /// 当前生效的后端:`"file"`(默认本地明文)或 `"keychain"`(opt-in)。
+    pub backend: String,
     pub items: Vec<SecretItemStatus>,
-    /// 本次或历史上是否发生过明文迁移(供前端一次性"建议轮换 key" banner)。
-    pub had_plaintext_migration: bool,
 }
 
-/// 迁移一次的结果,供启动流程记录日志。历史累计标记通过 [`secret_storage_status`] 查询。
+/// 反向迁移一次的结果,供启动流程记录日志。
 #[derive(Debug, Clone, Copy)]
 pub struct SecretMigrationOutcome {
-    /// 本次调用是否实际迁移/清理了明文项。
+    /// 本次调用是否实际把 key 从钥匙串搬回了本地文件。
     pub migrated_now: bool,
 }
 
@@ -1101,48 +1131,72 @@ fn parse_dotenv_assignments(path: &Path) -> Result<HashMap<String, String>, Conf
     Ok(map)
 }
 
-/// 启动时把 `.env` 中的明文敏感项迁入钥匙串,并把该项替换为占位。幂等:占位/空值跳过,
-/// 已在钥匙串中的项不会被 `.env` 里的旧值覆盖(仅清理明文)。任一项曾明文落盘即置持久
-/// 标记 `had_plaintext_migration`。
-pub fn migrate_dotenv_secrets_to_keychain() -> Result<SecretMigrationOutcome, ConfigError> {
-    let mut stored = load_stored_settings()?;
-    let path = dotenv_path()?;
-    let mut migrated_now = false;
+/// 反向迁移:把历史存在系统钥匙串里的 key 搬回本地文件,再**删掉钥匙串条目**。读钥匙串里
+/// 已存在的条目会触发最后一次授权弹窗(adhoc 签名下不可避免),迁移+删除后从此永不再弹。
+///
+/// 仅在默认文件后端下运行;钥匙串 opt-in 时钥匙串本身就是 store,无需搬运。持久标记
+/// `keychain_import_done` 保证整个反向迁移至多干净跑一趟,之后启动直接短路(连不存在的
+/// 条目探测都省掉)。幂等。
+pub fn migrate_keychain_secrets_to_file() -> Result<SecretMigrationOutcome, ConfigError> {
+    migrate_keychain_secrets_to_file_with(&secret_store::KeyringSecretStore)
+}
 
-    if path.exists() {
-        let parsed = parse_dotenv_assignments(&path)?;
-        let store = active_secret_store();
-        for name in SECRET_KEYS {
-            let Some(raw) = parsed.get(name) else {
-                continue;
-            };
-            let value = raw.trim();
-            if value.is_empty() || value == KEYCHAIN_PLACEHOLDER {
-                continue;
-            }
-            // 真实明文:钥匙串没有才写入(不拿旧 .env 覆盖更新的钥匙串值),随后清理明文。
-            if store.get(name).is_none() {
-                store
-                    .set(name, value)
-                    .map_err(ConfigError::SecretStore)?;
-            }
-            scrub_dotenv_secret_to_placeholder(name)?;
-            migrated_now = true;
-        }
+/// 以可注入的钥匙串 store 实现反向迁移,便于测试用内存 mock 当"假钥匙串"。
+fn migrate_keychain_secrets_to_file_with(
+    keychain: &dyn secret_store::SecretStore,
+) -> Result<SecretMigrationOutcome, ConfigError> {
+    if secret_backend() != SecretBackend::File {
+        return Ok(SecretMigrationOutcome { migrated_now: false });
+    }
+    let mut stored = load_stored_settings()?;
+    if stored.keychain_import_done == Some(true) {
+        return Ok(SecretMigrationOutcome { migrated_now: false });
     }
 
-    if migrated_now && stored.had_plaintext_migration != Some(true) {
-        stored.had_plaintext_migration = Some(true);
+    let mut migrated_now = false;
+    let mut had_error = false;
+    for name in SECRET_KEYS {
+        // 本地文件已有 → 跳过,连钥匙串都不碰(不弹窗)。
+        if file_secret_get(name).is_some() {
+            continue;
+        }
+        // 钥匙串没有该条目时 get 不弹窗(errSecItemNotFound);有才弹一次。
+        let Some(value) = keychain.get(name) else {
+            continue;
+        };
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        if let Err(err) = file_secret_set(name, value) {
+            eprintln!("keychain->file import failed for {name}: {err}");
+            had_error = true;
+            continue;
+        }
+        // 搬运成功后删掉钥匙串条目,从此不再弹。
+        if let Err(err) = keychain.delete(name) {
+            eprintln!("failed to remove migrated keychain entry {name}: {err}");
+            had_error = true;
+        }
+        migrated_now = true;
+    }
+
+    // 干净跑完一趟(哪怕没搬任何东西)就落标记,后续启动直接短路。
+    if !had_error {
+        stored.keychain_import_done = Some(true);
         write_stored_settings(&stored)?;
     }
 
     Ok(SecretMigrationOutcome { migrated_now })
 }
 
-/// 返回每个敏感项的存放位置 + 历史明文迁移标记,供前端设置页展示与 banner 决策。
+/// 返回当前后端 + 每个敏感项的存放位置,供前端设置页展示。
+///
+/// **默认文件后端下绝不探测钥匙串**(那会重新弹框);因此钥匙串里遗留、尚未被启动反向迁移
+/// 搬走的 key 会显示为 `absent` 而非 `keychain`。正常升级路径下启动即已把钥匙串搬空,用户
+/// 打开设置页时都是 `local-file`。
 pub fn secret_storage_status() -> Result<SecretStorageStatus, ConfigError> {
     load_dotenv();
-    let stored = load_stored_settings()?;
     let path = dotenv_path()?;
     let parsed = if path.exists() {
         parse_dotenv_assignments(&path).unwrap_or_default()
@@ -1150,42 +1204,42 @@ pub fn secret_storage_status() -> Result<SecretStorageStatus, ConfigError> {
         HashMap::new()
     };
     let store = active_secret_store();
+    let backend = secret_backend();
 
     let items = SECRET_KEYS
         .iter()
-        .map(|name| {
-            let location = secret_location(name, store.as_ref(), &parsed);
-            SecretItemStatus {
-                name: (*name).to_string(),
-                location,
-            }
+        .map(|name| SecretItemStatus {
+            name: (*name).to_string(),
+            location: secret_location(name, store.as_ref(), backend, &parsed),
         })
         .collect();
 
     Ok(SecretStorageStatus {
+        backend: secret_backend_label().to_string(),
         items,
-        had_plaintext_migration: stored.had_plaintext_migration.unwrap_or(false),
     })
 }
 
 fn secret_location(
     name: &str,
     store: &dyn secret_store::SecretStore,
+    backend: SecretBackend,
     parsed_dotenv: &HashMap<String, String>,
 ) -> SecretLocation {
+    // 只探测当前后端(文件后端下不碰钥匙串,避免弹框)。
     if store.get(name).is_some() {
-        return SecretLocation::Keychain;
-    }
-    if let Some(value) = parsed_dotenv
-        .get(name)
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-    {
-        return if value == KEYCHAIN_PLACEHOLDER {
-            SecretLocation::Placeholder
-        } else {
-            SecretLocation::EnvPlaintext
+        return match backend {
+            SecretBackend::File => SecretLocation::LocalFile,
+            SecretBackend::Keychain => SecretLocation::Keychain,
         };
+    }
+    let in_dotenv_plaintext = parsed_dotenv
+        .get(name)
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty() && *value != KEYCHAIN_PLACEHOLDER)
+        .is_some();
+    if in_dotenv_plaintext {
+        return SecretLocation::EnvPlaintext;
     }
     // 不在 .env 文件里,但可能通过真实 shell 环境导出。
     let in_process_env = env::var(name)

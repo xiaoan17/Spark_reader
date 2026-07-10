@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react"
-import { LlmSettingsPanel, SecretRotationBanner } from "./LlmSettingsPanel"
+import { LlmSettingsPanel } from "./LlmSettingsPanel"
 
 const meta = {
   title: "Settings/LlmSettingsPanel",
@@ -25,13 +25,4 @@ export const Closed: Story = {
   args: {
     open: false,
   },
-}
-
-/** 密钥曾以明文迁移过时，设置页顶部的一次性轮换提醒 banner。 */
-export const RotationBanner: StoryObj<typeof SecretRotationBanner> = {
-  render: () => (
-    <div className="max-w-xl overflow-hidden rounded-lg border bg-card text-card-foreground">
-      <SecretRotationBanner onDismiss={() => undefined} />
-    </div>
-  ),
 }

@@ -29,13 +29,14 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            // 启动即把 .env 中的明文密钥迁入系统钥匙串(幂等)。失败不致命,仅记录。
-            match config::migrate_dotenv_secrets_to_keychain() {
+            // 启动即把历史存在系统钥匙串里的 key 搬回本地文件并删掉钥匙串条目(幂等,至多
+            // 干净跑一趟)。这会触发升级用户最后一次授权弹窗,此后永不再弹。失败不致命。
+            match config::migrate_keychain_secrets_to_file() {
                 Ok(outcome) if outcome.migrated_now => {
-                    eprintln!("migrated plaintext secrets from .env into the system keychain");
+                    eprintln!("imported secrets from the system keychain into the local file");
                 }
                 Ok(_) => {}
-                Err(err) => eprintln!("secret keychain migration skipped: {err}"),
+                Err(err) => eprintln!("keychain->file secret import skipped: {err}"),
             }
             // Resolve the library db path once and hand it to the agent-host
             // supervisor, which starts the book-tool HTTP/MCP server and probes
