@@ -132,14 +132,8 @@ async fn run_translation_job(
                 )?;
                 continue;
             }
-            let existing = get_cached_page(
-                db_path,
-                &book.book_id,
-                page.page_index,
-                &source_fingerprint,
-                &provider,
-                &model,
-            )?;
+            let existing =
+                get_cached_page(db_path, &book.book_id, page.page_index, &source_fingerprint)?;
             if !request.force
                 && existing
                     .as_ref()
@@ -259,16 +253,10 @@ pub fn translation_status(db_path: &std::path::Path, book_id: &str) -> Result<Tr
         .unwrap_or_default();
     ensure_translation_schema(db_path)?;
     let source_fingerprint = translation_source_fingerprint(db_path, &book)?;
-    let pages = list_cached_pages(
-        db_path,
-        &book.book_id,
-        &source_fingerprint,
-        &provider,
-        &model,
-    )?
-    .into_iter()
-    .filter(|page| page.page_index < book.total_pages)
-    .collect::<Vec<_>>();
+    let pages = list_cached_pages(db_path, &book.book_id, &source_fingerprint)?
+        .into_iter()
+        .filter(|page| page.page_index < book.total_pages)
+        .collect::<Vec<_>>();
     let completed_pages = pages
         .iter()
         .filter(|page| page.status == TranslationPageStatus::Done)
@@ -601,7 +589,10 @@ fn ensure_translation_schema(db_path: &std::path::Path) -> Result<()> {
           status TEXT NOT NULL,
           error TEXT NOT NULL DEFAULT '',
           updated_at TEXT NOT NULL,
-          PRIMARY KEY(book_id, page_index, source_fingerprint, provider, model)
+          -- provider/model are row metadata recording who translated a page, not
+          -- part of the reuse key: switching model/provider must still reuse a
+          -- cached page. Only book + page + source_fingerprint identify a page.
+          PRIMARY KEY(book_id, page_index, source_fingerprint)
         );
         ",
     )
@@ -629,7 +620,9 @@ fn save_translation_page(db_path: &std::path::Path, page: TranslationPageRecord<
            translated_markdown, status, error, updated_at
          )
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now'))
-         ON CONFLICT(book_id, page_index, source_fingerprint, provider, model) DO UPDATE SET
+         ON CONFLICT(book_id, page_index, source_fingerprint) DO UPDATE SET
+           provider = excluded.provider,
+           model = excluded.model,
            source_markdown = excluded.source_markdown,
            translated_markdown = excluded.translated_markdown,
            status = excluded.status,
@@ -656,16 +649,14 @@ fn get_cached_page(
     book_id: &str,
     page_index: u32,
     source_fingerprint: &str,
-    provider: &str,
-    model: &str,
 ) -> Result<Option<TranslationPage>> {
     let conn = Connection::open(db_path)
         .with_context(|| format!("failed to open SQLite database {}", db_path.display()))?;
     conn.query_row(
         "SELECT page_index, source_markdown, translated_markdown, status, error, provider, model, updated_at
          FROM page_translations
-         WHERE book_id = ?1 AND page_index = ?2 AND source_fingerprint = ?3 AND provider = ?4 AND model = ?5",
-        params![book_id, page_index, source_fingerprint, provider, model],
+         WHERE book_id = ?1 AND page_index = ?2 AND source_fingerprint = ?3",
+        params![book_id, page_index, source_fingerprint],
         translation_page_from_row,
     )
     .optional()
@@ -676,8 +667,6 @@ fn list_cached_pages(
     db_path: &std::path::Path,
     book_id: &str,
     source_fingerprint: &str,
-    provider: &str,
-    model: &str,
 ) -> Result<Vec<TranslationPage>> {
     let conn = Connection::open(db_path)
         .with_context(|| format!("failed to open SQLite database {}", db_path.display()))?;
@@ -685,13 +674,13 @@ fn list_cached_pages(
         .prepare(
             "SELECT page_index, source_markdown, translated_markdown, status, error, provider, model, updated_at
              FROM page_translations
-             WHERE book_id = ?1 AND source_fingerprint = ?2 AND provider = ?3 AND model = ?4
+             WHERE book_id = ?1 AND source_fingerprint = ?2
              ORDER BY page_index",
         )
         .context("failed to prepare translation page list")?;
     let pages = stmt
         .query_map(
-            params![book_id, source_fingerprint, provider, model],
+            params![book_id, source_fingerprint],
             translation_page_from_row,
         )?
         .collect::<rusqlite::Result<Vec<_>>>()
@@ -743,21 +732,22 @@ fn translation_source_fingerprint(
     db_path: &std::path::Path,
     book: &storage::StoredBookSummary,
 ) -> Result<String> {
-    // The engine tag (rust vs codex) is folded into the fingerprint so
-    // switching engines (or upgrading the translator workflow) naturally
-    // invalidates stale cached pages instead of mixing formats.
-    let engine = translation_engine_tag();
+    // Reuse key = protocol version + the source PDF fingerprint only. The engine
+    // (rust vs codex) and the driving provider/model deliberately do NOT enter
+    // the key: an upgrade that swaps the engine tag, or a user switching models,
+    // must still reuse already-translated pages. The protocol version stays in
+    // the key because the block-alignment format is what a cached page is bound
+    // to — bump `TRANSLATION_PROTOCOL_VERSION` when that format changes and old
+    // pages genuinely need re-translating.
     if !book.source_pdf_fingerprint.trim().is_empty() {
         return Ok(format!(
-            "{}:{}:{}",
+            "{}:{}",
             TRANSLATION_PROTOCOL_VERSION,
-            engine,
             book.source_pdf_fingerprint.trim()
         ));
     }
     let mut hasher = DefaultHasher::new();
     TRANSLATION_PROTOCOL_VERSION.hash(&mut hasher);
-    engine.hash(&mut hasher);
     book.book_id.hash(&mut hasher);
     book.total_pages.hash(&mut hasher);
     let mut start_page = 0;
@@ -781,31 +771,149 @@ fn translation_source_fingerprint(
     Ok(format!("book-source-{:016x}", hasher.finish()))
 }
 
-/// Identifies which translation engine produced a cached page, so caches are
-/// isolated across engines *and* across the model that produced them. The C8
-/// bridge means the same codex engine can be driven by different app models (or
-/// the machine-local codex login), so the model source + model name are folded
-/// in — otherwise switching the Agent model would silently mix translations.
-/// Bump the `codex-app` prefix when the translator workflow/prompt changes.
+/// Normalize a stored translation `source_fingerprint` to the current key
+/// format (`"{PROTOCOL}:{pdf_fingerprint}"`).
 ///
-/// Gated on `codex_enabled()` (a process-stable env flag) rather than
-/// `ready()` (which flips once the async binary probe lands). This keeps the
-/// fingerprint identical between job start and status polling — otherwise an
-/// engine that becomes ready mid-job would make the status query compute a
-/// different key and report 0% progress for already-translated pages.
-fn translation_engine_tag() -> String {
-    if !crate::agent_host::codex_enabled() {
-        return "rust-inline".to_string();
+/// Historic pages folded an engine tag in the middle
+/// (`"{PROTOCOL}:{engine}:{pdf_fingerprint}"`, where `engine` was
+/// `codex-aligned-1`, `codex-app-1-{model}`, `codex-local-1`, `rust-inline`,
+/// …). Since neither `PROTOCOL` nor a pdf fingerprint ever contains `':'`, we
+/// strip any middle segment by keeping the protocol prefix and the final
+/// `':'`-delimited segment. Idempotent, and a no-op for values that are not
+/// protocol-tagged (e.g. the `book-source-…` hash fallback, whose old rows are
+/// unrecoverable and left untouched).
+pub(crate) fn normalize_translation_fingerprint(fingerprint: &str) -> String {
+    let prefix = format!("{TRANSLATION_PROTOCOL_VERSION}:");
+    let Some(rest) = fingerprint.strip_prefix(&prefix) else {
+        return fingerprint.to_string();
+    };
+    match rest.rsplit_once(':') {
+        // `rest` = "{engine}:{pdf_fingerprint}" → drop the engine segment.
+        Some((_engine, pdf_fingerprint)) => format!("{prefix}{pdf_fingerprint}"),
+        // `rest` = "{pdf_fingerprint}" → already in the new format.
+        None => fingerprint.to_string(),
     }
-    match crate::config::agent_model_source() {
-        config::AgentModelSource::App => {
-            let model = config::llm_config()
-                .map(|c| c.model)
-                .unwrap_or_else(|_| "app".to_string());
-            format!("codex-app-1-{model}")
+}
+
+/// One-time migration that rescues orphaned translation caches: rebuild
+/// `page_translations` with the new reuse key (dropping provider/model from the
+/// PRIMARY KEY) and normalize every historic `source_fingerprint` to the
+/// engine-free format. When normalization collapses several rows (different
+/// engines/models) onto the same page, the most recently updated row wins.
+///
+/// No-op when the table was never created (a user who never ran translation).
+/// Idempotent: it is gated behind a schema `user_version` bump by the caller,
+/// and internally drops any leftover scratch table before starting.
+pub(crate) fn migrate_page_translations_fingerprints(conn: &Connection) -> Result<()> {
+    let table_exists = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'page_translations'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()
+        .context("failed to probe page_translations table")?
+        .is_some();
+    if !table_exists {
+        return Ok(());
+    }
+
+    conn.execute_batch(
+        "DROP TABLE IF EXISTS page_translations_migrated;
+         CREATE TABLE page_translations_migrated (
+           book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+           page_index INTEGER NOT NULL,
+           source_fingerprint TEXT NOT NULL DEFAULT '',
+           provider TEXT NOT NULL DEFAULT '',
+           model TEXT NOT NULL DEFAULT '',
+           source_markdown TEXT NOT NULL,
+           translated_markdown TEXT NOT NULL,
+           status TEXT NOT NULL,
+           error TEXT NOT NULL DEFAULT '',
+           updated_at TEXT NOT NULL,
+           PRIMARY KEY(book_id, page_index, source_fingerprint)
+         );",
+    )
+    .context("failed to create migrated translation table")?;
+
+    // Rows are read oldest-first and inserted with INSERT OR REPLACE, so after a
+    // fingerprint collapse the newest `updated_at` row is the one that survives.
+    // `updated_at` is `datetime('now')` text, whose lexical order is chronological.
+    let rows = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT book_id, page_index, source_fingerprint, provider, model,
+                        source_markdown, translated_markdown, status, error, updated_at
+                 FROM page_translations
+                 ORDER BY updated_at ASC",
+            )
+            .context("failed to prepare legacy translation read")?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, u32>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, String>(9)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("failed to read legacy translation rows")?;
+        rows
+    };
+
+    {
+        let mut insert = conn
+            .prepare(
+                "INSERT OR REPLACE INTO page_translations_migrated(
+                   book_id, page_index, source_fingerprint, provider, model,
+                   source_markdown, translated_markdown, status, error, updated_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            )
+            .context("failed to prepare migrated translation insert")?;
+        for (
+            book_id,
+            page_index,
+            source_fingerprint,
+            provider,
+            model,
+            source_markdown,
+            translated_markdown,
+            status,
+            error,
+            updated_at,
+        ) in rows
+        {
+            let normalized = normalize_translation_fingerprint(&source_fingerprint);
+            insert
+                .execute(params![
+                    book_id,
+                    page_index,
+                    normalized,
+                    provider,
+                    model,
+                    source_markdown,
+                    translated_markdown,
+                    status,
+                    error,
+                    updated_at,
+                ])
+                .context("failed to insert migrated translation row")?;
         }
-        config::AgentModelSource::CodexLocal => "codex-local-1".to_string(),
     }
+
+    conn.execute_batch(
+        "DROP TABLE page_translations;
+         ALTER TABLE page_translations_migrated RENAME TO page_translations;",
+    )
+    .context("failed to swap migrated translation table")?;
+    Ok(())
 }
 
 fn active_translations() -> &'static Mutex<HashMap<String, Arc<AtomicBool>>> {
@@ -1020,7 +1128,7 @@ mod tests {
     }
 
     #[test]
-    fn source_fingerprint_includes_translation_protocol_version() {
+    fn source_fingerprint_is_protocol_plus_pdf_only() {
         let db_path = temp_db("fingerprint");
         let _ = std::fs::remove_file(&db_path);
         let saved = save_translation_fixture(&db_path);
@@ -1029,20 +1137,94 @@ mod tests {
         manifest.source_pdf_fingerprint = "pdf-fingerprint".to_string();
         let fingerprint =
             translation_source_fingerprint(&db_path, &manifest).expect("fingerprint should build");
-        // Protocol version prefix + engine tag fold into the key so old caches
-        // and cross-engine caches are naturally invalidated.
-        assert!(
-            fingerprint.starts_with("block-v3-baoyu-normal:"),
-            "translation cache key must invalidate pre-block-alignment cache entries"
+        // The reuse key is exactly protocol + pdf fingerprint: no engine tag, no
+        // provider/model — so an engine upgrade or a model switch still reuses
+        // already-translated pages.
+        assert_eq!(
+            fingerprint, "block-v3-baoyu-normal:pdf-fingerprint",
+            "fingerprint must be protocol:pdf only, with no engine/model segment"
         );
-        assert!(
-            fingerprint.ends_with(":pdf-fingerprint"),
-            "fingerprint must still bind to the source pdf fingerprint"
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[test]
+    fn normalize_fingerprint_strips_engine_segment() {
+        // Every historic engine tag collapses to the same engine-free key.
+        for engine in [
+            "codex-aligned-1",
+            "codex-app-1-deepseek-chat",
+            "codex-app-1-gpt-4o",
+            "codex-local-1",
+            "rust-inline",
+        ] {
+            let old = format!("block-v3-baoyu-normal:{engine}:pdf-fp-123");
+            assert_eq!(
+                normalize_translation_fingerprint(&old),
+                "block-v3-baoyu-normal:pdf-fp-123",
+                "engine tag {engine} should be stripped"
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_fingerprint_is_idempotent_and_leaves_fallback_alone() {
+        // Already-new format is unchanged (idempotent).
+        let already = "block-v3-baoyu-normal:pdf-fp-123";
+        assert_eq!(normalize_translation_fingerprint(already), already);
+        assert_eq!(
+            normalize_translation_fingerprint(&normalize_translation_fingerprint(
+                "block-v3-baoyu-normal:codex-aligned-1:pdf-fp-123"
+            )),
+            already
         );
-        assert!(
-            fingerprint.contains(&translation_engine_tag()),
-            "fingerprint must isolate caches by translation engine"
-        );
+        // Non-protocol hash fallback rows are untouched (unrecoverable).
+        let fallback = "book-source-0011223344556677";
+        assert_eq!(normalize_translation_fingerprint(fallback), fallback);
+    }
+
+    #[test]
+    fn migration_rescues_orphaned_translation_rows_keeping_latest() {
+        let db_path = temp_db("migrate");
+        let _ = std::fs::remove_file(&db_path);
+        let saved = save_translation_fixture(&db_path);
+        ensure_translation_schema(&db_path).expect("schema should initialize");
+
+        // Simulate two legacy rows for the same page produced by different engines
+        // (different old fingerprints), the second one newer.
+        let conn = Connection::open(&db_path).expect("open db");
+        conn.execute(
+            "INSERT INTO page_translations(book_id, page_index, source_fingerprint, provider, model,
+               source_markdown, translated_markdown, status, error, updated_at)
+             VALUES (?1, 0, 'block-v3-baoyu-normal:codex-aligned-1:pdf-fp', 'deep_seek', 'deepseek-chat',
+               'src', 'OLD 译文', 'done', '', '2026-01-01 00:00:00')",
+            params![saved.book_id],
+        )
+        .expect("insert legacy row 1");
+        conn.execute(
+            "INSERT INTO page_translations(book_id, page_index, source_fingerprint, provider, model,
+               source_markdown, translated_markdown, status, error, updated_at)
+             VALUES (?1, 0, 'block-v3-baoyu-normal:codex-app-1-gpt-4o:pdf-fp', 'open_ai', 'gpt-4o',
+               'src', 'NEW 译文', 'done', '', '2026-02-02 00:00:00')",
+            params![saved.book_id],
+        )
+        .expect("insert legacy row 2");
+        drop(conn);
+
+        // Migration is idempotent: running twice must not error or double-collapse.
+        let conn = Connection::open(&db_path).expect("open db");
+        migrate_page_translations_fingerprints(&conn).expect("first migration");
+        migrate_page_translations_fingerprints(&conn).expect("second migration (idempotent)");
+        drop(conn);
+
+        // Both engine rows collapse to one row on the engine-free key; the newer
+        // page (gpt-4o) wins and is now reachable under the current fingerprint.
+        let normalized_fp = normalize_translation_fingerprint("block-v3-baoyu-normal:codex-aligned-1:pdf-fp");
+        assert_eq!(normalized_fp, "block-v3-baoyu-normal:pdf-fp");
+        let pages =
+            list_cached_pages(&db_path, &saved.book_id, &normalized_fp).expect("list cached pages");
+        assert_eq!(pages.len(), 1, "the two legacy rows collapse to one");
+        assert_eq!(pages[0].translated_markdown, "NEW 译文", "newest row wins");
+        assert_eq!(pages[0].model, "gpt-4o");
         let _ = std::fs::remove_file(&db_path);
     }
 }

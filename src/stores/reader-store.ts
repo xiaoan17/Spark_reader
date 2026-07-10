@@ -94,6 +94,8 @@ export type SavedInterpretation = {
   /** 解读模式（deep/plain/apply），与 kind 正交；旧记录为 null/缺失。 */
   mode?: InterpretMode | null
   evidenceChunkSnapshots?: EvidenceChunkSnapshot[]
+  /** Agent 检索过程；旧记录/本地兜底为 null/缺失，历史回看时用于恢复检索过程面板。 */
+  trace?: AgentTraceStep[] | null
   createdAt: string
 }
 

@@ -311,6 +311,7 @@ async fn run_product_self_check_in_dir(
             kind: None,
             mode: None,
             evidence_chunk_snapshots: Vec::new(),
+            trace: None,
         },
     )?;
     let saved_follow_up = storage::save_interpretation(
@@ -337,6 +338,7 @@ async fn run_product_self_check_in_dir(
             kind: None,
             mode: None,
             evidence_chunk_snapshots: Vec::new(),
+            trace: None,
         },
     )?;
     let history = storage::list_interpretations(&db_path, &saved.book_id)?;

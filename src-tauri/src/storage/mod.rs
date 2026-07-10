@@ -138,6 +138,23 @@ pub fn save_book_with_options(
     tx.execute("DELETE FROM pages WHERE book_id = ?1", params![book_id])
         .context("failed to delete old pages")?;
     clear_fts_for_book(&tx, &book_id).context("failed to clear old text index")?;
+    // Snapshot existing vectors into the FK-free carryover before the chunk
+    // delete cascades them away, so rebuild_embeddings can reuse the ones whose
+    // chunk text is unchanged instead of paying the embedding API again.
+    tx.execute(
+        "DELETE FROM chunk_embeddings_carryover WHERE book_id = ?1",
+        params![book_id],
+    )
+    .context("failed to clear stale embedding carryover")?;
+    tx.execute(
+        "INSERT INTO chunk_embeddings_carryover(
+           book_id, chunk_id, provider, base_url, model, dimension, embedding_json, chunk_text_hash
+         )
+         SELECT book_id, chunk_id, provider, base_url, model, dimension, embedding_json, chunk_text_hash
+         FROM chunk_embeddings WHERE book_id = ?1",
+        params![book_id],
+    )
+    .context("failed to snapshot embeddings into carryover")?;
     tx.execute(
         "DELETE FROM chunk_embeddings WHERE book_id = ?1",
         params![book_id],
@@ -260,9 +277,15 @@ pub fn save_book_with_options(
         .context("failed to rebind saved interpretation evidence ids")?;
     rebuild_fts(&conn, &book_id).context("failed to rebuild text search index")?;
     if !options.skip_embedding_rebuild {
-        if let Err(err) = rebuild_embeddings(&mut conn, &book_id) {
-            record_embedding_error(&conn, &book_id, &format!("{err:#}"))?;
-            eprintln!("failed to rebuild provider embedding index for {book_id}: {err:#}");
+        match rebuild_embeddings(&mut conn, &book_id) {
+            Ok(stats) => eprintln!(
+                "embedding rebuild for {book_id}: reused {} / newly embedded {}",
+                stats.reused, stats.embedded
+            ),
+            Err(err) => {
+                record_embedding_error(&conn, &book_id, &format!("{err:#}"))?;
+                eprintln!("failed to rebuild provider embedding index for {book_id}: {err:#}");
+            }
         }
     }
 
@@ -406,9 +429,15 @@ pub fn hybrid_search_book(
 pub fn rebuild_search_index(db_path: &Path, book_id: &str) -> Result<SearchIndexSummary> {
     let mut conn = open_database(db_path)?;
     rebuild_fts(&conn, book_id)?;
-    if let Err(err) = rebuild_embeddings(&mut conn, book_id) {
-        record_embedding_error(&conn, book_id, &format!("{err:#}"))?;
-        eprintln!("failed to rebuild provider embedding index for {book_id}: {err:#}");
+    match rebuild_embeddings(&mut conn, book_id) {
+        Ok(stats) => eprintln!(
+            "embedding reindex for {book_id}: reused {} / newly embedded {}",
+            stats.reused, stats.embedded
+        ),
+        Err(err) => {
+            record_embedding_error(&conn, book_id, &format!("{err:#}"))?;
+            eprintln!("failed to rebuild provider embedding index for {book_id}: {err:#}");
+        }
     }
     clear_book_tldr_with_conn(&conn, book_id)?;
     search_index_summary(db_path, book_id)
@@ -1246,6 +1275,12 @@ pub fn save_interpretation(
     let evidence_snapshot_json = serde_json::to_string(&request.evidence_chunk_snapshots)
         .context("failed to serialize evidence chunk snapshots")?;
     let kind = normalized_interpretation_kind(&request);
+    let trace_json = request
+        .trace
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .context("failed to serialize interpretation trace")?;
 
     conn.execute(
         "INSERT INTO interpretations(
@@ -1267,9 +1302,10 @@ pub fn save_interpretation(
            kind,
            interpret_mode,
            evidence_chunk_snapshots_json,
+           trace_json,
            created_at
          )
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, datetime('now'))",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, datetime('now'))",
         params![
             id,
             request.book_id,
@@ -1288,7 +1324,8 @@ pub fn save_interpretation(
             request.answer_source.as_str(),
             kind.as_str(),
             request.mode.as_deref(),
-            evidence_snapshot_json
+            evidence_snapshot_json,
+            trace_json
         ],
     )
     .context("failed to save interpretation")?;
@@ -1342,7 +1379,8 @@ pub fn list_interpretations_page(
                     i.kind,
                     i.interpret_mode,
                     i.evidence_chunk_snapshots_json,
-                    i.created_at
+                    i.created_at,
+                    i.trace_json
              FROM interpretations i
              JOIN recent_sessions r
                ON r.session_key = COALESCE(NULLIF(i.session_id, ''), i.id)
@@ -1550,8 +1588,24 @@ pub(crate) fn open_database(path: &Path) -> Result<Connection> {
           model TEXT NOT NULL,
           dimension INTEGER NOT NULL,
           embedding_json TEXT NOT NULL,
+          chunk_text_hash TEXT,
           PRIMARY KEY(book_id, chunk_id, provider, model),
           FOREIGN KEY(book_id, chunk_id) REFERENCES chunks(book_id, chunk_id) ON DELETE CASCADE
+        );
+        -- Survives the chunk delete+reinsert inside save_book (no FK to chunks),
+        -- so an unchanged chunk's vector can be reused instead of re-embedded.
+        -- Populated just before that delete and consumed (then cleared) by the
+        -- next rebuild_embeddings.
+        CREATE TABLE IF NOT EXISTS chunk_embeddings_carryover (
+          book_id TEXT NOT NULL,
+          chunk_id TEXT NOT NULL,
+          provider TEXT NOT NULL DEFAULT '',
+          base_url TEXT NOT NULL DEFAULT '',
+          model TEXT NOT NULL,
+          dimension INTEGER NOT NULL,
+          embedding_json TEXT NOT NULL,
+          chunk_text_hash TEXT,
+          PRIMARY KEY(book_id, chunk_id, provider, model)
         );
         CREATE TABLE IF NOT EXISTS highlights (
           id TEXT PRIMARY KEY,
@@ -1588,6 +1642,7 @@ pub(crate) fn open_database(path: &Path) -> Result<Connection> {
           kind TEXT NOT NULL DEFAULT 'interpretation',
           interpret_mode TEXT,
           evidence_chunk_snapshots_json TEXT NOT NULL DEFAULT '[]',
+          trace_json TEXT,
           created_at TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS chunk_id_aliases (
@@ -1769,6 +1824,12 @@ pub(crate) fn open_database(path: &Path) -> Result<Connection> {
     )?;
     ensure_column(
         &conn,
+        "chunk_embeddings",
+        "chunk_text_hash",
+        "ALTER TABLE chunk_embeddings ADD COLUMN chunk_text_hash TEXT",
+    )?;
+    ensure_column(
+        &conn,
         "interpretations",
         "session_id",
         "ALTER TABLE interpretations ADD COLUMN session_id TEXT NOT NULL DEFAULT ''",
@@ -1838,6 +1899,12 @@ pub(crate) fn open_database(path: &Path) -> Result<Connection> {
         "evidence_chunk_snapshots_json",
         "ALTER TABLE interpretations ADD COLUMN evidence_chunk_snapshots_json TEXT NOT NULL DEFAULT '[]'",
     )?;
+    ensure_column(
+        &conn,
+        "interpretations",
+        "trace_json",
+        "ALTER TABLE interpretations ADD COLUMN trace_json TEXT",
+    )?;
     knowledge::initialize_schema(&conn)?;
     apply_schema_migrations(&conn)?;
 
@@ -1854,7 +1921,33 @@ fn register_sqlite_functions(conn: &Connection) -> Result<()> {
             Ok(strip_legacy_chunk_citations(&value))
         },
     )
-    .context("failed to register SQLite strip_legacy_chunk_citations function")
+    .context("failed to register SQLite strip_legacy_chunk_citations function")?;
+    // Shared by the hash backfill migration (SQL) and rebuild_embeddings (Rust)
+    // so a chunk's carried-over vector matches only when its embed input is byte
+    // identical. Must stay in lockstep with `embedding_input_hash`.
+    conn.create_scalar_function(
+        "embedding_input_hash",
+        2,
+        rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC,
+        |ctx| {
+            let text: String = ctx.get(0)?;
+            let markdown: String = ctx.get(1)?;
+            Ok(embedding_input_hash(&text, &markdown))
+        },
+    )
+    .context("failed to register SQLite embedding_input_hash function")
+}
+
+/// Stable content hash of a chunk's embedding input (`"{text}\n{markdown}"`),
+/// used as the reuse dimension for cached vectors. `DefaultHasher` (SipHash with
+/// fixed keys) is deterministic across processes, so a hash stored in one run is
+/// comparable in the next.
+pub(crate) fn embedding_input_hash(text: &str, markdown: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    text.hash(&mut hasher);
+    "\n".hash(&mut hasher);
+    markdown.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
 }
 
 fn strip_legacy_chunk_citations(value: &str) -> String {
@@ -1884,6 +1977,12 @@ fn strip_legacy_chunk_citations(value: &str) -> String {
 }
 
 const SCHEMA_VERSION: u32 = chunk_id::NAMESPACED_CHUNK_ID_VERSION;
+/// Normalize `page_translations.source_fingerprint` to the engine-free reuse key
+/// and drop provider/model from its PRIMARY KEY (P0 cache-reuse fix).
+const TRANSLATION_FINGERPRINT_MIGRATION_VERSION: u32 = 3;
+/// Backfill `chunk_embeddings.chunk_text_hash` so existing vectors are reusable
+/// on the next rebuild (P3 embedding-reuse fix).
+const EMBEDDING_CONTENT_HASH_MIGRATION_VERSION: u32 = 4;
 
 fn apply_schema_migrations(conn: &Connection) -> Result<()> {
     let current = schema_user_version(conn)?;
@@ -1894,6 +1993,34 @@ fn apply_schema_migrations(conn: &Connection) -> Result<()> {
         migrate_chunk_ids_v2(conn)?;
         set_schema_user_version(conn, SCHEMA_VERSION)?;
     }
+    if current < TRANSLATION_FINGERPRINT_MIGRATION_VERSION {
+        crate::translation::migrate_page_translations_fingerprints(conn)?;
+        set_schema_user_version(conn, TRANSLATION_FINGERPRINT_MIGRATION_VERSION)?;
+    }
+    if current < EMBEDDING_CONTENT_HASH_MIGRATION_VERSION {
+        backfill_chunk_embedding_hashes(conn)?;
+        set_schema_user_version(conn, EMBEDDING_CONTENT_HASH_MIGRATION_VERSION)?;
+    }
+    Ok(())
+}
+
+/// Populate `chunk_text_hash` for pre-existing embedding rows from the live chunk
+/// text, so already-computed vectors are eligible for reuse on the next rebuild.
+/// Idempotent (only touches NULL hashes); a row whose chunk has since vanished
+/// stays NULL and is simply re-embedded later.
+fn backfill_chunk_embedding_hashes(conn: &Connection) -> Result<()> {
+    conn.execute(
+        "UPDATE chunk_embeddings
+            SET chunk_text_hash = (
+              SELECT embedding_input_hash(chunks.text, chunks.markdown)
+              FROM chunks
+              WHERE chunks.book_id = chunk_embeddings.book_id
+                AND chunks.chunk_id = chunk_embeddings.chunk_id
+            )
+          WHERE chunk_text_hash IS NULL",
+        [],
+    )
+    .context("failed to backfill chunk embedding hashes")?;
     Ok(())
 }
 
@@ -3048,7 +3175,81 @@ fn rebuild_fts(conn: &Connection, book_id: &str) -> Result<()> {
     Ok(())
 }
 
-fn rebuild_embeddings(conn: &mut Connection, book_id: &str) -> Result<()> {
+/// How a rebuild reconciled the vector index: how many chunk vectors were reused
+/// from cache versus freshly embedded through the provider API.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct EmbeddingRebuildStats {
+    pub reused: u32,
+    pub embedded: u32,
+}
+
+/// A cached vector eligible for reuse, keyed by chunk_id in the reuse map.
+#[derive(Debug, Clone)]
+struct ReusableEmbedding {
+    provider: String,
+    base_url: String,
+    model: String,
+    dimension: u32,
+    embedding_json: String,
+    chunk_text_hash: Option<String>,
+}
+
+/// Vectors that could be reused, gathered from both the live table (manual
+/// re-index path, where chunk rows survive) and the carryover table (save_book
+/// path, where the chunk delete cascaded the live rows away). Read this *before*
+/// clearing `chunk_embeddings`.
+fn load_reusable_embeddings(
+    conn: &Connection,
+    book_id: &str,
+) -> Result<HashMap<String, ReusableEmbedding>> {
+    let mut map: HashMap<String, ReusableEmbedding> = HashMap::new();
+    // Carryover first; live rows do not overwrite a carryover entry. In practice
+    // only one source is populated per rebuild, so precedence rarely matters.
+    for source in ["chunk_embeddings_carryover", "chunk_embeddings"] {
+        let sql = format!(
+            "SELECT chunk_id, provider, base_url, model, dimension, embedding_json, chunk_text_hash
+             FROM {source} WHERE book_id = ?1"
+        );
+        let mut stmt = conn
+            .prepare(&sql)
+            .with_context(|| format!("failed to prepare reuse read from {source}"))?;
+        let rows = stmt
+            .query_map(params![book_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    ReusableEmbedding {
+                        provider: row.get(1)?,
+                        base_url: row.get(2)?,
+                        model: row.get(3)?,
+                        dimension: row.get(4)?,
+                        embedding_json: row.get(5)?,
+                        chunk_text_hash: row.get(6)?,
+                    },
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .with_context(|| format!("failed to read reuse rows from {source}"))?;
+        for (chunk_id, row) in rows {
+            map.entry(chunk_id).or_insert(row);
+        }
+    }
+    Ok(map)
+}
+
+fn clear_embedding_carryover(conn: &Connection, book_id: &str) -> Result<()> {
+    conn.execute(
+        "DELETE FROM chunk_embeddings_carryover WHERE book_id = ?1",
+        params![book_id],
+    )
+    .context("failed to clear embedding carryover")?;
+    Ok(())
+}
+
+fn rebuild_embeddings(conn: &mut Connection, book_id: &str) -> Result<EmbeddingRebuildStats> {
+    let chunks = fetch_chunks(conn, book_id)?;
+    // Gather reuse candidates before we clear the live table.
+    let reusable = load_reusable_embeddings(conn, book_id)?;
+
     conn.execute(
         "DELETE FROM chunk_embeddings WHERE book_id = ?1",
         params![book_id],
@@ -3060,70 +3261,171 @@ fn rebuild_embeddings(conn: &mut Connection, book_id: &str) -> Result<()> {
     )
     .context("failed to clear old embedding metadata")?;
 
-    let chunks = fetch_chunks(conn, book_id)?;
-    let inputs = chunks
-        .iter()
-        .map(|chunk| format!("{}\n{}", chunk.text, chunk.markdown))
-        .collect::<Vec<_>>();
-    if inputs.is_empty() {
-        return Ok(());
+    if chunks.is_empty() {
+        clear_embedding_carryover(conn, book_id)?;
+        return Ok(EmbeddingRebuildStats::default());
     }
-    let Some(batch) =
-        embeddings::embed_texts(&inputs).context("failed to call embedding provider")?
-    else {
-        return Ok(());
+
+    let Some(config) = config::embedding_config().context("failed to read embedding config")? else {
+        // Provider disabled: leave the index empty (prior behavior) and drop the
+        // carryover so it does not linger.
+        clear_embedding_carryover(conn, book_id)?;
+        return Ok(EmbeddingRebuildStats::default());
     };
-    if batch.vectors.is_empty() {
-        return Ok(());
+
+    // Partition current chunks into reusable (same provider/model/base_url,
+    // matching content hash, and — when configured — matching dimension) vs
+    // chunks that must be (re-)embedded.
+    let hashes = chunks
+        .iter()
+        .map(|chunk| embedding_input_hash(&chunk.text, &chunk.markdown))
+        .collect::<Vec<_>>();
+    let mut reused_rows: Vec<(usize, ReusableEmbedding)> = Vec::new();
+    let mut to_embed: Vec<usize> = Vec::new();
+    for (index, chunk) in chunks.iter().enumerate() {
+        let candidate = reusable.get(&chunk.chunk_id).filter(|row| {
+            row.provider == config.provider
+                && row.base_url == config.base_url
+                && row.model == config.model
+                && row.chunk_text_hash.as_deref() == Some(hashes[index].as_str())
+                && config
+                    .expected_dimension
+                    .map_or(true, |dim| row.dimension as usize == dim)
+        });
+        match candidate {
+            Some(row) => reused_rows.push((index, row.clone())),
+            None => to_embed.push(index),
+        }
     }
 
-    conn.execute(
-        "INSERT INTO embedding_indexes(book_id, provider, base_url, model, dimension, last_error, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, '', datetime('now'))
-         ON CONFLICT(book_id) DO UPDATE SET
-           provider = excluded.provider,
-           base_url = excluded.base_url,
-           model = excluded.model,
-           dimension = excluded.dimension,
-           last_error = '',
-           created_at = excluded.created_at",
-        params![
-            book_id,
-            batch.provider,
-            batch.base_url,
-            batch.model,
-            batch.dimension as u32
-        ],
-    )
-    .context("failed to upsert embedding index metadata")?;
+    // Insert the reused vectors first so a subsequent embedding-API failure does
+    // not lose them (they are already committed by the time we call the provider).
+    let mut index_meta: Option<(String, String, String, u32)> = reused_rows
+        .first()
+        .map(|(_, row)| {
+            (
+                row.provider.clone(),
+                row.base_url.clone(),
+                row.model.clone(),
+                row.dimension,
+            )
+        });
+    insert_reused_embeddings(conn, book_id, &chunks, &hashes, &reused_rows)?;
 
+    // Embed the misses (if any) and insert them.
+    let mut embedded_count = 0u32;
+    if !to_embed.is_empty() {
+        let inputs = to_embed
+            .iter()
+            .map(|&index| format!("{}\n{}", chunks[index].text, chunks[index].markdown))
+            .collect::<Vec<_>>();
+        if let Some(batch) =
+            embeddings::embed_texts(&inputs).context("failed to call embedding provider")?
+        {
+            if !batch.vectors.is_empty() {
+                index_meta = Some((
+                    batch.provider.clone(),
+                    batch.base_url.clone(),
+                    batch.model.clone(),
+                    batch.dimension as u32,
+                ));
+                let tx = conn
+                    .transaction()
+                    .context("failed to start embedding insert transaction")?;
+                {
+                    let mut stmt = tx
+                        .prepare(
+                            "INSERT INTO chunk_embeddings(book_id, chunk_id, provider, base_url, model, dimension, embedding_json, chunk_text_hash)
+                             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                        )
+                        .context("failed to prepare embedding insert")?;
+                    for (&index, embedding) in to_embed.iter().zip(batch.vectors.iter()) {
+                        let embedding_json = serde_json::to_string(embedding)
+                            .context("failed to serialize embedding")?;
+                        stmt.execute(params![
+                            book_id,
+                            chunks[index].chunk_id,
+                            batch.provider,
+                            batch.base_url,
+                            batch.model,
+                            batch.dimension as u32,
+                            embedding_json,
+                            hashes[index],
+                        ])
+                        .with_context(|| {
+                            format!("failed to insert embedding for {}", chunks[index].chunk_id)
+                        })?;
+                        embedded_count += 1;
+                    }
+                }
+                tx.commit()
+                    .context("failed to commit embedding insert transaction")?;
+            }
+        }
+    }
+
+    // Record index metadata (provider/model/dimension) when we have any vectors.
+    if let Some((provider, base_url, model, dimension)) = index_meta {
+        conn.execute(
+            "INSERT INTO embedding_indexes(book_id, provider, base_url, model, dimension, last_error, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, '', datetime('now'))
+             ON CONFLICT(book_id) DO UPDATE SET
+               provider = excluded.provider,
+               base_url = excluded.base_url,
+               model = excluded.model,
+               dimension = excluded.dimension,
+               last_error = '',
+               created_at = excluded.created_at",
+            params![book_id, provider, base_url, model, dimension],
+        )
+        .context("failed to upsert embedding index metadata")?;
+    }
+
+    clear_embedding_carryover(conn, book_id)?;
+    Ok(EmbeddingRebuildStats {
+        reused: reused_rows.len() as u32,
+        embedded: embedded_count,
+    })
+}
+
+fn insert_reused_embeddings(
+    conn: &mut Connection,
+    book_id: &str,
+    chunks: &[ParsedChunkInput],
+    hashes: &[String],
+    reused_rows: &[(usize, ReusableEmbedding)],
+) -> Result<()> {
+    if reused_rows.is_empty() {
+        return Ok(());
+    }
     let tx = conn
         .transaction()
-        .context("failed to start embedding insert transaction")?;
-    let mut stmt = tx
-        .prepare(
-            "INSERT INTO chunk_embeddings(book_id, chunk_id, provider, base_url, model, dimension, embedding_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        )
-        .context("failed to prepare embedding insert")?;
-    for (chunk, embedding) in chunks.iter().zip(batch.vectors.iter()) {
-        let embedding_json =
-            serde_json::to_string(embedding).context("failed to serialize embedding")?;
-        stmt.execute(params![
-            book_id,
-            chunk.chunk_id,
-            batch.provider,
-            batch.base_url,
-            batch.model,
-            batch.dimension as u32,
-            embedding_json
-        ])
-        .with_context(|| format!("failed to insert embedding for {}", chunk.chunk_id))?;
+        .context("failed to start reuse insert transaction")?;
+    {
+        let mut stmt = tx
+            .prepare(
+                "INSERT INTO chunk_embeddings(book_id, chunk_id, provider, base_url, model, dimension, embedding_json, chunk_text_hash)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            )
+            .context("failed to prepare reuse insert")?;
+        for (index, row) in reused_rows {
+            stmt.execute(params![
+                book_id,
+                chunks[*index].chunk_id,
+                row.provider,
+                row.base_url,
+                row.model,
+                row.dimension,
+                row.embedding_json,
+                hashes[*index],
+            ])
+            .with_context(|| {
+                format!("failed to reuse embedding for {}", chunks[*index].chunk_id)
+            })?;
+        }
     }
-    drop(stmt);
     tx.commit()
-        .context("failed to commit embedding insert transaction")?;
-
+        .context("failed to commit reuse insert transaction")?;
     Ok(())
 }
 
@@ -3585,7 +3887,8 @@ fn get_interpretation(conn: &Connection, interpretation_id: &str) -> Result<Save
                 kind,
                 interpret_mode,
                 evidence_chunk_snapshots_json,
-                created_at
+                created_at,
+                trace_json
          FROM interpretations
          WHERE id = ?1",
         params![interpretation_id],
@@ -3617,6 +3920,17 @@ pub(crate) fn row_to_interpretation(
     .map_err(|err| {
         rusqlite::Error::FromSqlConversionFailure(17, rusqlite::types::Type::Text, Box::new(err))
     })?;
+    let trace = row
+        .get::<_, Option<String>>(19)?
+        .map(|raw| serde_json::from_str::<serde_json::Value>(&raw))
+        .transpose()
+        .map_err(|err| {
+            rusqlite::Error::FromSqlConversionFailure(
+                19,
+                rusqlite::types::Type::Text,
+                Box::new(err),
+            )
+        })?;
 
     Ok(SavedInterpretation {
         id: row.get(0)?,
@@ -3637,6 +3951,7 @@ pub(crate) fn row_to_interpretation(
         kind: InterpretationKind::from_db(&row.get::<_, String>(15)?),
         mode: row.get(16)?,
         evidence_chunk_snapshots,
+        trace,
         created_at: row.get(18)?,
     })
 }

@@ -533,6 +533,8 @@ export type SaveInterpretationRequest = {
     chunkIdVersion: number
     contentHash?: string | null
   }[]
+  /** Agent 检索过程，随解读一并落库，历史回看时恢复"检索过程"面板。 */
+  trace?: AgentTraceStep[] | null
 }
 
 export type InterpretationKind = "interpretation" | "spark" | "note"

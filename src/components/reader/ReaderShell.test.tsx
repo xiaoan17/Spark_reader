@@ -2592,9 +2592,17 @@ describe("ReaderShell runtime affordances", () => {
       />,
     )
 
-    await clickAsync(buttonByText(container, "对照翻译"))
-    await vi.waitFor(() => expect(startTranslation).toHaveBeenCalledWith("book-translated", false))
+    // The mount effect loads the (already-complete) translation status first.
     await vi.waitFor(() => expect(translationStatus).toHaveBeenCalledWith("book-translated"))
+    await clickAsync(buttonByText(container, "对照翻译"))
+    // Reuse-first: an already fully-translated book must NOT re-invoke the
+    // start_translation job loop when re-entering the translation view.
+    await vi.waitFor(() =>
+      expect(textContent(container.querySelector("[data-translation-scroller]"))).toContain(
+        "中文译文。",
+      ),
+    )
+    expect(startTranslation).not.toHaveBeenCalled()
 
     const scroller = container.querySelector("[data-translation-scroller]")
     expect(container.querySelector("[data-translation-toolbar]")).toBeNull()

@@ -2002,7 +2002,8 @@ fn backfill_cards_for_book(conn: &Connection, book_id: &str) -> Result<()> {
                     kind,
                     interpret_mode,
                     evidence_chunk_snapshots_json,
-                    created_at
+                    created_at,
+                    trace_json
              FROM interpretations
              WHERE book_id = ?1",
         )

@@ -199,7 +199,9 @@ export function useReaderHighlights({ stopActiveRequest, focus, refreshKnowledge
     )
     setActiveChunk(restored.activeChunkId)
     setEvidence(restored.evidence)
-    setAgentTrace([])
+    // Restore the saved retrieval trace so reopening history shows the same
+    // 检索过程 panel; legacy/local-fallback rows have none.
+    setAgentTrace(item.trace ?? [])
     setInterpretation(restored.interpretation)
     setAnswerSource(item.answerSource ?? "llm")
     setFollowUps(restored.followUps)
@@ -228,7 +230,7 @@ export function useReaderHighlights({ stopActiveRequest, focus, refreshKnowledge
       )
       setActiveChunk(restored.activeChunkId)
       setEvidence(restored.evidence)
-      setAgentTrace([])
+      setAgentTrace(item.trace ?? [])
       setInterpretation(restored.interpretation)
       setAnswerSource(item.answerSource ?? "llm")
       setFollowUps(restored.followUps)

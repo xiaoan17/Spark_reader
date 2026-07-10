@@ -1109,13 +1109,11 @@ pub async fn get_or_generate_document_tldr(
     let engine_tag = interpretation::tldr_engine_tag();
     if force_regenerate != Some(true) {
         if let Some(cached) = storage::get_book_tldr(&db_path, &book_id).map_err(command_error)? {
-            // Reuse only when both the format version and the producing engine
-            // still match — switching engine/model busts the cached overview.
-            if interpretation::tldr_cache_is_fresh(
-                cached.source_version,
-                cached.engine_tag.as_deref(),
-                &engine_tag,
-            ) {
+            // Reuse whenever the format version matches; the engine/model that
+            // produced it is only a badge, not part of freshness. Switching
+            // engine/model reuses the cached overview — "regenerate" (force)
+            // is the only way to spend the LLM again.
+            if interpretation::tldr_cache_is_fresh(cached.source_version) {
                 return Ok(cached);
             }
         }

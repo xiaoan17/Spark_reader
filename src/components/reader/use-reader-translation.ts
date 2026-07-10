@@ -89,6 +89,12 @@ export function useReaderTranslation({
       return
     }
     switchReaderView("translation", { restorePage: !force })
+    // Reuse-first: if the whole book is already translated Done (and idle), just
+    // show the cached rail. Re-invoking start_translation would spin up the job
+    // loop for zero benefit — the cache is already complete.
+    if (!force && translationIsComplete(translation)) {
+      return
+    }
     try {
       const status = await startTranslation(bookId, force)
       setTranslation(status)
@@ -103,4 +109,19 @@ export function useReaderTranslation({
     translation,
     handleStartTranslation,
   }
+}
+
+/**
+ * Whether a cached translation status represents a fully-translated, idle book:
+ * every page Done, nothing failed, not currently running. Used to short-circuit
+ * a redundant start_translation invoke when re-entering the translation view.
+ */
+function translationIsComplete(status: TranslationStatus | null): boolean {
+  return (
+    status !== null &&
+    !status.running &&
+    status.totalPages > 0 &&
+    status.failedPages === 0 &&
+    status.completedPages >= status.totalPages
+  )
 }

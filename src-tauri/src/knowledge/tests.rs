@@ -155,6 +155,7 @@ fn saving_interpretation_creates_exportable_knowledge_card() {
             kind: Some(InterpretationKind::Interpretation),
             mode: None,
             evidence_chunk_snapshots: Vec::new(),
+            trace: None,
         },
     )
     .expect("interpretation should save");
@@ -326,6 +327,7 @@ fn build_graph_creates_candidate_cards_and_evidence_edges() {
             kind: Some(InterpretationKind::Interpretation),
             mode: None,
             evidence_chunk_snapshots: Vec::new(),
+            trace: None,
         },
     )
     .expect("interpretation should save");

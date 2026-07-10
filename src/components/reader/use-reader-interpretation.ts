@@ -5,6 +5,7 @@ import {
   listenInterpretationStream,
   saveInterpretation,
   searchHitToChunk,
+  type AgentTraceStep,
   type AnswerSource,
   type InterpretEvidenceItem,
   type InterpretMode,
@@ -351,6 +352,7 @@ export function useReaderInterpretation({ lifecycle, focus, refreshKnowledge }: 
         answerSource: result.answerSource,
         kind: lightweight ? "spark" : "interpretation",
         mode,
+        trace: result.trace,
       })
       setPhase("streaming")
       schedule(() => {
@@ -472,6 +474,7 @@ export function useReaderInterpretation({ lifecycle, focus, refreshKnowledge }: 
         answerSource: result.answerSource,
         kind: lightweight ? "spark" : "interpretation",
         mode: lightweight ? "plain" : "deep",
+        trace: result.trace,
       })
       replaceStreamingFollowUp(followUpId, question, result.answer)
       setPhase("streaming")
@@ -556,6 +559,7 @@ export function useReaderInterpretation({ lifecycle, focus, refreshKnowledge }: 
       mode?: InterpretMode
       sessionId?: string
       turnIndex?: number
+      trace?: AgentTraceStep[]
     } = {},
   ) {
     const {
@@ -568,6 +572,7 @@ export function useReaderInterpretation({ lifecycle, focus, refreshKnowledge }: 
       mode,
       sessionId,
       turnIndex: explicitTurnIndex,
+      trace,
     } = options
     if (version !== undefined && !isCurrentRequest(version)) {
       return
@@ -619,6 +624,7 @@ export function useReaderInterpretation({ lifecycle, focus, refreshKnowledge }: 
         answerSource: savedAnswerSource,
         kind,
         mode,
+        trace: trace ?? null,
       }
       const saved = isTauriRuntime()
         ? await saveInterpretation(request)

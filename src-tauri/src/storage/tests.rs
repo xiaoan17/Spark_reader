@@ -1437,6 +1437,7 @@ fn saves_and_lists_interpretations() {
             kind: None,
             mode: None,
             evidence_chunk_snapshots: Vec::new(),
+            trace: None,
         },
     )
     .expect("interpretation should save");
@@ -1613,6 +1614,7 @@ fn resolves_missing_alias_by_chunk_locator_for_saved_interpretations() {
             kind: None,
             mode: None,
             evidence_chunk_snapshots: Vec::new(),
+            trace: None,
         },
     )
     .expect("interpretation should save");
@@ -1693,6 +1695,7 @@ fn rebinding_legacy_interpretation_ids_keeps_chunk_id_snapshots_auditable() {
             kind: None,
             mode: None,
             evidence_chunk_snapshots: Vec::new(),
+            trace: None,
         },
     )
     .expect("interpretation should save");
@@ -1858,6 +1861,7 @@ fn deletes_all_interpretation_turns_in_a_session() {
             kind: None,
             mode: None,
             evidence_chunk_snapshots: Vec::new(),
+            trace: None,
         },
     )
     .expect("first turn should save");
@@ -1882,6 +1886,7 @@ fn deletes_all_interpretation_turns_in_a_session() {
             kind: None,
             mode: None,
             evidence_chunk_snapshots: Vec::new(),
+            trace: None,
         },
     )
     .expect("follow-up should save");
@@ -1896,5 +1901,211 @@ fn deletes_all_interpretation_turns_in_a_session() {
     assert!(list_interpretations(&path, &saved_book.book_id)
         .expect("history should list")
         .is_empty());
+    let _ = fs::remove_file(&path);
+}
+
+/// Build a minimal single-chunk book for cache-reuse tests. Embeddings are
+/// disabled during the save so no provider is contacted.
+#[cfg(test)]
+fn save_single_chunk_book(path: &Path, title: &str) -> SaveBookResponse {
+    save_book(
+        path,
+        SaveBookRequest {
+            title: title.to_string(),
+            total_pages: 1,
+            parser_engine: "test".to_string(),
+            coordinate_mode: "text-only".to_string(),
+            quality: None,
+            source_pdf_path: None,
+            source_asset_dir: None,
+            source_asset_dirs: Vec::new(),
+            pages: vec![ParsedPageInput {
+                page_index: 0,
+                text: "复利来自时间。".to_string(),
+                markdown: "## Page 1\n\n复利来自时间。".to_string(),
+            }],
+            chunks: vec![ParsedChunkInput {
+                chunk_id: "p1-c1".to_string(),
+                page_index: 0,
+                text: "复利来自时间。".to_string(),
+                markdown: "### [p1-c1] Page 1\n\n复利来自时间。".to_string(),
+                rects: Vec::new(),
+                coordinate_version: COORDINATE_VERSION,
+            }],
+        },
+    )
+    .expect("book should save")
+}
+
+#[test]
+fn interpretation_trace_round_trips_and_is_optional() {
+    let _guard = crate::TEST_ENV_LOCK.lock().expect("env lock");
+    let path = temp_db("interp-trace");
+    let _ = fs::remove_file(&path);
+    let saved_book = save_single_chunk_book(&path, "trace 测试");
+    let saved_chunk_id = get_chunk(&path, &saved_book.book_id, "p1-c1")
+        .expect("legacy chunk alias should resolve")
+        .expect("saved chunk should exist")
+        .chunk_id;
+
+    let trace = serde_json::json!([
+        {"phase": "plan", "query": null, "chunkIds": [], "note": "规划检索"},
+        {"phase": "retrieve", "query": "复利", "chunkIds": [saved_chunk_id], "note": "命中一个块"},
+    ]);
+    let with_trace = save_interpretation(
+        &path,
+        SaveInterpretationRequest {
+            book_id: saved_book.book_id.clone(),
+            selection_text: "复利来自时间".to_string(),
+            session_id: Some("trace-session".to_string()),
+            turn_index: Some(0),
+            prefix: String::new(),
+            suffix: "。".to_string(),
+            page_index: Some(0),
+            position_start: Some(0),
+            position_end: Some(6),
+            page_indexes: vec![0],
+            evidence_chunk_ids: vec!["p1-c1".to_string()],
+            question: None,
+            answer: "答案。[p1-c1]".to_string(),
+            answer_source: AnswerSource::Llm,
+            kind: None,
+            mode: None,
+            evidence_chunk_snapshots: Vec::new(),
+            trace: Some(trace.clone()),
+        },
+    )
+    .expect("interpretation with trace should save");
+    // The saved struct and the listed row both carry the trace verbatim.
+    assert_eq!(with_trace.trace.as_ref(), Some(&trace));
+
+    let rows = list_interpretations(&path, &saved_book.book_id).expect("history should list");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].trace.as_ref(), Some(&trace));
+
+    // A second interpretation without a trace stores NULL and reads back as None
+    // (the legacy/local-fallback shape) rather than erroring.
+    let no_trace = save_interpretation(
+        &path,
+        SaveInterpretationRequest {
+            book_id: saved_book.book_id.clone(),
+            selection_text: "复利来自时间".to_string(),
+            session_id: Some("plain-session".to_string()),
+            turn_index: Some(0),
+            prefix: String::new(),
+            suffix: "。".to_string(),
+            page_index: Some(0),
+            position_start: Some(0),
+            position_end: Some(6),
+            page_indexes: vec![0],
+            evidence_chunk_ids: vec!["p1-c1".to_string()],
+            question: None,
+            answer: "本地兜底答案。".to_string(),
+            answer_source: AnswerSource::LocalFallback,
+            kind: None,
+            mode: None,
+            evidence_chunk_snapshots: Vec::new(),
+            trace: None,
+        },
+    )
+    .expect("interpretation without trace should save");
+    assert_eq!(no_trace.trace, None);
+    let _ = fs::remove_file(&path);
+}
+
+#[test]
+fn backfill_populates_chunk_embedding_hashes_matching_the_hasher() {
+    let _guard = crate::TEST_ENV_LOCK.lock().expect("env lock");
+    let path = temp_db("embed-backfill");
+    let _ = fs::remove_file(&path);
+    let saved_book = save_single_chunk_book(&path, "backfill 测试");
+
+    let conn = open_database(&path).expect("open db");
+    let chunks = fetch_chunks(&conn, &saved_book.book_id).expect("fetch chunks");
+    assert_eq!(chunks.len(), 1);
+    let chunk = &chunks[0];
+    // Simulate a legacy vector row that predates the chunk_text_hash column.
+    conn.execute(
+        "INSERT INTO chunk_embeddings(book_id, chunk_id, provider, base_url, model, dimension, embedding_json, chunk_text_hash)
+         VALUES (?1, ?2, 'siliconflow', 'http://embed.test', 'm', 4, '[0.1,0.2,0.3,0.4]', NULL)",
+        params![saved_book.book_id, chunk.chunk_id],
+    )
+    .expect("insert legacy embedding row");
+
+    backfill_chunk_embedding_hashes(&conn).expect("backfill should run");
+    // Idempotent: a second run does not change an already-populated hash.
+    backfill_chunk_embedding_hashes(&conn).expect("backfill is idempotent");
+
+    let stored: Option<String> = conn
+        .query_row(
+            "SELECT chunk_text_hash FROM chunk_embeddings WHERE book_id = ?1 AND chunk_id = ?2",
+            params![saved_book.book_id, chunk.chunk_id],
+            |row| row.get(0),
+        )
+        .expect("read back hash");
+    assert_eq!(
+        stored.as_deref(),
+        Some(embedding_input_hash(&chunk.text, &chunk.markdown).as_str()),
+        "backfilled hash must equal the Rust hasher's output"
+    );
+    drop(conn);
+    let _ = fs::remove_file(&path);
+}
+
+#[test]
+fn rebuild_reuses_unchanged_vectors_without_calling_provider() {
+    let _guard = crate::TEST_ENV_LOCK.lock().expect("env lock");
+    // temp_db() disables embeddings so the initial save contacts no provider.
+    let path = temp_db("embed-reuse");
+    let _ = fs::remove_file(&path);
+    let saved_book = save_single_chunk_book(&path, "reuse 测试");
+
+    // Seed a cached vector that exactly matches the (soon-to-be) active config.
+    let mut conn = open_database(&path).expect("open db");
+    let chunks = fetch_chunks(&conn, &saved_book.book_id).expect("fetch chunks");
+    let chunk = chunks[0].clone();
+    let hash = embedding_input_hash(&chunk.text, &chunk.markdown);
+    conn.execute(
+        "INSERT INTO chunk_embeddings(book_id, chunk_id, provider, base_url, model, dimension, embedding_json, chunk_text_hash)
+         VALUES (?1, ?2, 'siliconflow', 'http://embed.test', 'test-embed-model', 4, '[0.11,0.22,0.33,0.44]', ?3)",
+        params![saved_book.book_id, chunk.chunk_id, hash],
+    )
+    .expect("seed reusable vector");
+
+    // Point the active embedding config at that exact provider/model/dim so every
+    // chunk is reusable and the provider is never contacted (a bogus base_url that
+    // would fail if it were).
+    std::env::set_var("EMBEDDING_PROVIDER", "siliconflow");
+    std::env::set_var("EMBEDDING_API_KEY", "test-key");
+    std::env::set_var("EMBEDDING_BASE_URL", "http://embed.test");
+    std::env::set_var("EMBEDDING_MODEL", "test-embed-model");
+    std::env::set_var("EMBEDDING_DIM", "4");
+
+    let stats = rebuild_embeddings(&mut conn, &saved_book.book_id).expect("rebuild should reuse");
+    assert_eq!(stats.reused, 1, "the unchanged chunk vector should be reused");
+    assert_eq!(stats.embedded, 0, "no chunk should be re-embedded via the API");
+
+    // The vector survived the rebuild verbatim and the index metadata is present.
+    let (json, dim): (String, u32) = conn
+        .query_row(
+            "SELECT embedding_json, dimension FROM chunk_embeddings WHERE book_id = ?1 AND chunk_id = ?2",
+            params![saved_book.book_id, chunk.chunk_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("vector should still exist");
+    assert_eq!(json, "[0.11,0.22,0.33,0.44]");
+    assert_eq!(dim, 4);
+    let index_dim: u32 = conn
+        .query_row(
+            "SELECT dimension FROM embedding_indexes WHERE book_id = ?1",
+            params![saved_book.book_id],
+            |row| row.get(0),
+        )
+        .expect("index metadata should exist");
+    assert_eq!(index_dim, 4);
+
+    drop(conn);
+    clear_embedding_env();
+    disable_embedding_provider();
     let _ = fs::remove_file(&path);
 }

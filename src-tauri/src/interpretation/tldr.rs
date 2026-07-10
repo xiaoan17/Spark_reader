@@ -254,16 +254,13 @@ pub(super) fn build_tldr_codex_prompt(book_id: &str) -> String {
     )
 }
 
-/// Whether a cached TLDR may be reused: both the format version and the
-/// producing engine tag must still match the current run. Pure so the cache
-/// decision is unit-tested without an `AppHandle`.
-pub fn tldr_cache_is_fresh(
-    cached_version: u32,
-    cached_engine_tag: Option<&str>,
-    current_engine_tag: &str,
-) -> bool {
+/// Whether a cached TLDR may be reused. Reuse whenever the format version still
+/// matches — the producing engine/model is deliberately NOT part of the freshness
+/// check (it is only a display badge). Switching engine or model reuses the cached
+/// overview; the user must hit "regenerate" (force) to spend the LLM again. Pure so
+/// the cache decision is unit-tested without an `AppHandle`.
+pub fn tldr_cache_is_fresh(cached_version: u32) -> bool {
     cached_version == crate::storage::TLDR_SOURCE_VERSION
-        && cached_engine_tag == Some(current_engine_tag)
 }
 
 /// Progress classification for a Codex event during agentic TLDR generation.

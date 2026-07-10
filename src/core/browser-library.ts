@@ -174,6 +174,7 @@ export async function saveBrowserInterpretation(
     kind,
     mode: request.mode ?? null,
     evidenceChunkSnapshots: request.evidenceChunkSnapshots ?? [],
+    trace: request.trace ?? null,
     createdAt: now,
   }
   const db = await openBrowserLibrary()

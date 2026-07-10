@@ -229,16 +229,13 @@
     }
 
     #[test]
-    fn tldr_cache_is_fresh_requires_version_and_engine_tag_match() {
+    fn tldr_cache_is_fresh_depends_only_on_format_version() {
         let version = crate::storage::TLDR_SOURCE_VERSION;
-        // Same version + same engine tag → reuse.
-        assert!(tldr_cache_is_fresh(version, Some("codex-app-1-deepseek"), "codex-app-1-deepseek"));
-        // Different engine tag (e.g. switched to codex-local) → regenerate.
-        assert!(!tldr_cache_is_fresh(version, Some("codex-app-1-deepseek"), "codex-local-1"));
-        // Stale format version → regenerate even if tag matches.
-        assert!(!tldr_cache_is_fresh(version - 1, Some("codex-local-1"), "codex-local-1"));
-        // Legacy cache with no engine tag → regenerate.
-        assert!(!tldr_cache_is_fresh(version, None, "codex-local-1"));
+        // Matching format version → reuse, regardless of which engine/model
+        // produced it (the engine tag is only a display badge now).
+        assert!(tldr_cache_is_fresh(version));
+        // Stale format version → regenerate.
+        assert!(!tldr_cache_is_fresh(version - 1));
     }
 
     #[test]
@@ -1544,6 +1541,7 @@
                 kind: None,
                 mode: None,
                 evidence_chunk_snapshots: Vec::new(),
+                trace: None,
             },
         )
         .expect("interpretation history should persist");

@@ -323,6 +323,11 @@ pub struct SaveInterpretationRequest {
     pub mode: Option<String>,
     #[serde(default)]
     pub evidence_chunk_snapshots: Vec<EvidenceChunkSnapshot>,
+    /// Opaque agent retrieval trace (`AgentTraceStep[]` shaped) captured at
+    /// generation time so reopening a saved interpretation can restore the
+    /// "检索过程" panel. Stored verbatim; storage does not interpret its shape.
+    #[serde(default)]
+    pub trace: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -346,6 +351,10 @@ pub struct SavedInterpretation {
     pub kind: InterpretationKind,
     pub mode: Option<String>,
     pub evidence_chunk_snapshots: Vec<EvidenceChunkSnapshot>,
+    /// Opaque agent retrieval trace saved with this interpretation (`null` for
+    /// legacy rows and local-fallback answers). Restored into the trace panel
+    /// when reopening history.
+    pub trace: Option<serde_json::Value>,
     pub created_at: String,
 }
 
