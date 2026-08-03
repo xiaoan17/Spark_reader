@@ -28,10 +28,18 @@
 │  mineru / mineru_parser   云端 PDF 解析 + middle.json 坐标回投(唯一坐标真相)        │
 │  coordinates              唯一规范坐标空间 = 归一化 PDF 页坐标,进出必经显式转换      │
 │  storage                  SQLite:书/chunk/高亮/锚点/解读历史 + FTS5 + 向量表        │
+│                           + reuse-first 缓存(翻译/TLDR/embeddings/trace)           │
 │  embeddings               外部 OpenAI-compatible provider 向量化(密钥仅后端)        │
 │  llm                      多 provider 抽象(DeepSeek 默认 / OpenAI / Anthropic)      │
-│  interpretation           agentic RAG 循环:框选钉死焦点 + search_book 等工具迭代检索 │
-│  zotero / translation     从本地 Zotero 导入 PDF · 译文辅助                          │
+│  codex_exec               Codex 引擎:per-request `codex exec --json` 子进程         │
+│  responses_bridge         用 app 配置的 LLM 驱动 codex 子进程                        │
+│  book_tool_server         本地 /mcp 端点(Bearer 鉴权,仅 127.0.0.1),引擎读书唯一通道 │
+│  interpretation           agentic RAG 循环:框选钉死焦点 + 工具迭代检索;            │
+│                           codex_session 优先走 Codex 引擎,失败回退进程内管线         │
+│  knowledge                知识层:kb_cards / kb_evidence,只沉淀不污染原文            │
+│  zotero / translation     从本地 Zotero 导入 PDF · 对照翻译(走 Codex 引擎)         │
+│  obsidian                 Obsidian vault 导出:原子写 + 路径逃逸防护                 │
+│  config/secret_store      密钥存储:本地文件(0600)默认,keychain opt-in             │
 │  commands.rs              ~40 个 Tauri command,前端唯一入口                          │
 └──────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -50,7 +58,8 @@
  → [Rust] 过滤 header/page_number 噪音 → 切块入库:FTS5 全文索引
            + 若配置 embedding provider,限时调外部 /embeddings 写入向量表
  → [前端 pdf.js] 渲染原版 PDF,用户框选 → 记录几何 ScaledPosition + 文本引用锚点
- → [前端→Rust→LLM] 框选段落为焦点 → agentic 循环(2–4 轮 search_book/get_chunk/get_neighbors)
+ → [前端→Rust→Codex 引擎] 框选段落为焦点 → `codex exec` 子进程跑 agentic 循环
+                    (book 工具走本地 /mcp 端点;失败回退 Rust 进程内 2–4 轮 search_book 循环)
                     → 返回带 [chunk_id] 标注的解读
  → [前端] 解读卡片渲染 + 把 [chunk_id] 后处理成可点击引用 → 点击跳回书页高亮
            高亮 / 解读历史持久化到 SQLite
@@ -68,7 +77,7 @@
 
 **决策**(三层冗余):
 - **几何 `ScaledPosition`(真相)**——归一化页坐标里的矩形,这是定位的最终依据。
-- **`TextQuoteSelector`(桥)**——存框选文本及其前后文,用 diff-match-patch 做模糊重定位,几何对不上时靠它救回。
+- **`TextQuoteSelector`(桥)**——存框选文本及其前后文,用自研 `src/core/text-quote-selector.ts` 做模糊重定位,几何对不上时靠它救回(`apache-annotator`/`diff-match-patch` 依赖已移除)。
 - **`TextPositionSelector`(仅提示)**——字符偏移只当加速提示,绝不当唯一真相。
 
 详见 `docs/[finish]20260531_coordinate-spec.md`。
@@ -109,7 +118,14 @@
 - embedding **只走外部 OpenAI-compatible provider,不在客户端本地部署模型**。
 - provider 超时/失败时**降级为纯 FTS 文本检索,不阻断**主流程。
 
-详见 `docs/[todo]20260531_llm-provider.md`。Agent 引擎现状见 `docs/[todo]20260707_稳健化-Obsidian-Agent引擎计划.md` C 节(Codex 引擎);旧 OpenCode 方案已废弃,仅存 `docs/archive/20260602_opencode-agent.md` 作历史参考。
+**Agent 引擎 = Codex(2026-07 起,OpenCode 方案已废弃)**:Spark 解读、对照翻译、全书 TLDR 统一经 per-request `codex exec --json` 子进程执行:
+
+- `codex_exec.rs` 负责 spawn,显式传 `--sandbox read-only` + `approval_policy="never"` + `mcp_servers` 整表替换,**不继承**用户全局 codex 配置。
+- codex 读本书数据走 `book_tool_server.rs` 的本地 `/mcp` 端点(Bearer 鉴权、仅绑 127.0.0.1)——这是外部引擎触达书本数据的唯一通道。
+- `responses_bridge.rs` 把 app 配置的 LLM(默认 DeepSeek `deepseek-v4-flash`)桥接给 codex 作推理后端,因此切换 provider 不需要改引擎接线。
+- `interpretation/codex_session.rs` 做会话编排;引擎失败自动回退 Rust 进程内 agentic 管线,`FOCUSED_READING_CODEX_DISABLED=1` 可强制回退。
+
+详见 `docs/[todo]20260531_llm-provider.md` 与 `docs/[todo]20260707_稳健化-Obsidian-Agent引擎计划.md` C 节;旧 OpenCode 方案仅存 `docs/archive/20260602_opencode-agent.md` 作历史参考。
 
 ## 6. 解析:统一走 MinerU
 
@@ -122,6 +138,21 @@
 ## 7. 存储
 
 单个本地 SQLite(`rusqlite`,bundled)承载全部:书 / chunk / 高亮 / 锚点 / 解读历史 + FTS5 全文索引 + 向量表。所有用户数据本地化,不上云。
+
+另有两类已在生产的存储/导出子系统:
+
+### 7.1 reuse-first 缓存与密钥
+
+- `storage/mod.rs` 里的 reuse-first 缓存层:翻译、TLDR、embeddings、agent trace 的结果复用优先,不重复消耗 LLM/embedding/MinerU 配额。
+- `config/secret_store.rs` 统一管密钥:默认本地文件(Unix 0600),`FOCUSED_READING_SECRET_BACKEND=keychain` 可切换系统 keychain;密钥只在 Rust 侧读写。
+
+### 7.2 知识层:只沉淀,不污染原文
+
+`knowledge` 模块 + `kb_cards` / `kb_evidence` 表承载单书知识体系:卡片只从高亮、解读、笔记和抽取候选沉淀,自动流程只能新建/补空,不得覆盖 `user_locked` 或用户正文;前端入口是 KnowledgePanel 与 `search_knowledge` 等命令。**铁律:最终回答的引用仍必须落回原文 `[chunk_id]`,知识卡 ID 不作最终 citation。**
+
+### 7.3 Obsidian 导出
+
+`obsidian.rs` 把高亮 / Spark 卡片 / 知识面板内容追加写入用户指定的本地 Obsidian vault:原子写(临时文件 + rename)、路径逃逸防护(vault 外的相对路径一律拒绝)。前端入口是设置页 `ObsidianSettingsPanel` 与选区浮条/卡片上的导出按钮。
 
 ## 8. 给同伴的上手建议
 
@@ -145,3 +176,5 @@
 | 检索 | SQLite FTS5 + 外部 provider 向量混合 |
 | Embedding | 外部 OpenAI-compatible provider(默认 SiliconFlow Qwen3) |
 | LLM | 多 provider:DeepSeek(默认)/ OpenAI / Anthropic |
+| Agent 引擎 | Codex(`codex exec` 子进程 + 本地 /mcp book 工具,由 app 配置的 LLM 驱动) |
+| 导出 | Obsidian vault(原子写、路径逃逸防护) |

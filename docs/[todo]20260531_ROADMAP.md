@@ -1,32 +1,37 @@
 # 框选精读 · 可执行路线图(ROADMAP)
 
-> ⚠️ 2026-08 注:下面"当前实现状态"快照停在 2026-06-01,Phase checklist 勾选不可信(多数已完成)。事实上的当前总控是 `docs/[todo]20260708_功能补齐与体验提升技术方案.md`;本文只有"缺口"和 V2 段仍有参考价值。
-
 > 配套文档:`_internal/[finish]20260531_PLANNING.md`(产品+技术架构)、`[finish]20260531_UI-UX.md`(设计语言+前端工程约定)、`AGENTS.md`(多 agent 协作规则)。
 > 方法论吸收自 Lody 作者的 AI 前端重构经验(见 `[finish]20260531_UI-UX.md` §0)。
+> 当前总控是 `docs/[todo]20260708_功能补齐与体验提升技术方案.md`;本文"当前实现状态"已刷新至 0.1.8(2026-08)。
 
 ---
 
-## 当前实现状态(2026-06-01)
+## 当前实现状态(0.1.8,2026-08)
 
-代码已经从规划阶段进入可运行产品原型:
+代码已是可日常使用的本地优先桌面产品:
 
-- ✅ Tauri v2 + React/TS/Vite + Tailwind/shadcn + Storybook 已建成。
-- ✅ PDF 导入后会转换为 TXT/Markdown/chunks；浏览器预览走 IndexedDB，桌面端走 MinerU + SQLite + 本地资产文件。
-- ✅ MinerU 客户端、批量 `page_ranges`、zip 安全解压、`layout.json/middle.json` 切块、结构化进度事件已有后端实现和测试；长 PDF 分批会向前端回传第几批/总批数/页码范围；`angle` 非 0 的块会标记为近似坐标，真实云端 E2E 仍需用当前 token 再验收。
-- ✅ SQLite FTS5 文本索引已可用；embedding 只走外部 OpenAI-compatible provider，已预置 SiliconFlow `Qwen/Qwen3-Embedding-4B`/2560 维，已用本地假 provider 验证写入向量、向量召回、provider/model/dim 不匹配时禁止混用；provider 请求有超时，失败后保留 FTS 并跳过向量增强。
-- ✅ LLM 多 provider 后端抽象已落地，DeepSeek/OpenAI 走 OpenAI-compatible，Anthropic 独立翻译 tool_use/tool_result；默认模型为 `deepseek-v4-flash`。
-- ✅ agentic RAG 后端循环已有:选中段落钉死焦点、`search_book/get_chunk/get_neighbors/list_structure` 工具、2–4 轮检索、统一 `[chunk_id]` 引用后处理。
-- ✅ 阅读器 UI 已有导入、转换稿视图、PDF 校对视图、搜索、chunk 点击解读、追问、引用跳转、高亮保存/删除/文本优先打开、解读历史、模型/embedding 设置页；右侧解读卡片会明确提示浏览器预览/桌面端后端能力差异。
-- ✅ 产品自检入口已接入设置页和打包后端 CLI:`focused-reading --product-self-check` 会用临时转换稿/临时 SQLite 验收 TXT/MD/chunks、FTS 搜索、离线解读引用、追问继承锚点、高亮和历史持久化；自检不消耗 MinerU/LLM/embedding provider 配额，入口有前端交互测试和稳定 `data-testid` 便于窗口级 E2E。
-- ✅ 当前验证:新增 `pnpm health` / `pnpm health:bundle` 一键健康检查；Rust lib、前端测试、`pnpm build`、`pnpm secret-scan` 均通过；`pnpm health:bundle` 可生成 debug `.app` 包，并直接调用包内 `Contents/MacOS/focused-reading --product-self-check` 验证打包资源和核心读书链路。
+- ✅ Tauri v2 + React 19/TS/Vite + Tailwind/shadcn + Storybook 8.6 + vitest 4 + zustand 5 已建成;微动效用 calligraph。
+- ✅ PDF / TXT / EPUB 导入;桌面端统一走 MinerU 解析 + SQLite + 本地资产文件。
+- ✅ MinerU 客户端、批量 `page_ranges`、zip 安全解压、`middle.json` 切块、结构化进度事件与长书分批回传;`angle` 非 0 的块标记为近似坐标。
+- ✅ SQLite FTS5 + 外部 OpenAI-compatible provider 向量混合检索;向量表存 provider/model/dim 防混用;provider 超时/失败降级为纯 FTS。
+- ✅ LLM 多 provider 抽象:DeepSeek(默认 `deepseek-v4-flash`)/ OpenAI / Anthropic;统一 `[chunk_id]` 引用 + 后处理,不依赖厂商原生 Citations。
+- ✅ **Agent 引擎 = Codex**(2026-07 起,OpenCode 方案已废弃):Spark 解读、对照翻译、agentic 全书 TLDR 统一经 per-request `codex exec --json` 子进程;book 工具走 `book_tool_server.rs` 的本地 `/mcp` 端点(Bearer 鉴权、仅 127.0.0.1);`responses_bridge.rs` 用 app 配置的 LLM 驱动 codex;失败自动回退 Rust 进程内管线(`FOCUSED_READING_CODEX_DISABLED=1` 强制回退)。
+- ✅ reuse-first 缓存层(翻译 / TLDR / embeddings / trace,`storage/mod.rs`);密钥统一走 `config/secret_store.rs`(本地文件 0600 默认,`FOCUSED_READING_SECRET_BACKEND=keychain` opt-in)。
+- ✅ 知识体系:`kb_cards` / `kb_evidence` 表 + KnowledgePanel + `search_knowledge` 等命令;只沉淀不污染原文,最终引用仍落 `[chunk_id]`。
+- ✅ Obsidian 导出:`obsidian.rs`(原子写、路径逃逸防护)+ 设置页 `ObsidianSettingsPanel`;高亮 / Spark 卡片 / 知识面板三入口。
+- ✅ 阅读器 UI:转换稿 / PDF 校对 / 对照翻译 / TLDR / 知识体系多视图、书内搜索、高亮管理、引用跳转、暗色模式、onboarding 向导、模型/embedding 设置页。
+- ✅ 产品自检与健康检查:`focused-reading --product-self-check`、`pnpm health` / `pnpm health:bundle`。
+- ✅ 发布:`scripts/release_dmg.sh` 可用,已发到 0.1.8(14 个本地 dmg);签名/公证仍未做。
+- ✅ 测试基线(2026-08 实测):`pnpm check:reader` = 3 files / 63 tests;`pnpm check:quick` = 69 files / 394 tests;`cargo test --lib` = 216 passed。
 
-还不能宣称“全部完成”的缺口:
+还不能宣称"全部完成"的缺口:
 
-- ❗真实 Tauri 窗口手工/自动 E2E 还要跑:导入真实 PDF → 转 TXT/MD → 搜索/索引 → 框选/点击 chunk → 深度解读/追问 → 引用跳转 → 保存/重开恢复。后端级闭环和设置页产品自检已有，仍需窗口级真实 PDF 验收。
-- ❗MinerU 云端当前 token 的真实 E2E、旋转页/CropBox 的 MinerU 坐标回投仍未重新验收。
-- ❗500+ 页大 PDF 真实样本性能/内存压测、签名/公证/DMG 分发和设备矩阵未完成；长书分批进度 UI 已有，但仍需真实长 PDF 验收。当前 `.app` 可打包，DMG 在本机卡在 create-dmg 的 Finder/AppleScript 布局阶段，需要发布阶段单独处理。
-- ❗Storybook/空态/错误态还要按组件补齐到发布质量。
+- ❗窗口级真实 PDF E2E:导入真实 PDF → 解析 → 搜索 → 框选 → 解读/追问 → 引用跳转 → 保存/重开恢复,需在真实 Tauri 窗口验收。
+- ❗MinerU 云端当前 token 的真实 E2E 未重新验收。
+- ❗旋转页 / CropBox 的 MinerU 坐标回投回归仍缺真实样本。
+- ❗500+ 页大 PDF 真实样本性能/内存压测未完成。
+- ❗签名 / 公证未做(本地 dmg 可发,正式分发还差这一步)。
+- ❗prompt cache 命中率可观测未做(静态前缀缓存已实现,命中率不可见)。
 
 ---
 
@@ -46,14 +51,14 @@
 
 **目标:能跑起来一个空壳,所有技术选型在真机上验证可行。**
 
-- [ ] 初始化 Tauri v2 项目(`pnpm create tauri-app`,React + TS + Vite)
-- [ ] 接入 shadcn/ui(`shadcn init`)+ Tailwind + Storybook
-- [ ] **坐标系统 spike(关键)**:写一个最小 demo——pdf.js 渲染一页 → 框选 → `getClientRects` → 转归一化页坐标 → 画回高亮。验证缩放/旋转下不漂移。
-- [ ] **sqlite-vec spike**:Rust 侧 `rusqlite` + sqlite-vec 锁版本,插入 1 万随机向量,验证暴力 KNN 亚毫秒、能正常加载扩展。
+- [x] 初始化 Tauri v2 项目(`pnpm create tauri-app`,React + TS + Vite)
+- [x] 接入 shadcn/ui(`shadcn init`)+ Tailwind + Storybook
+- [x] **坐标系统 spike(关键)**:写一个最小 demo——pdf.js 渲染一页 → 框选 → `getClientRects` → 转归一化页坐标 → 画回高亮。验证缩放/旋转下不漂移。
+- [ ] ~~**sqlite-vec spike**~~ **已废弃**:向量检索走外部 provider,不引入本地向量库(见 `AGENTS.md` 铁律 7 注)。
 - [x] **MinerU 端到端 spike(主解析路径)** ✅ 已通过(2026-05-31,`财富公式.pdf` 163页/124秒)。脚本 `scripts/mineru_e2e.py`。
 - [x] **坐标回投 spike(头号风险)** ✅ 实测原点为左上角、y 不翻转,与 pdf.js 天然对齐(见 `docs/[todo]20260531_mineru-integration.md` §4)。待补:旋转页/CropBox 边缘情况。
-- [ ] **Claude API spike**:跑通一次带 tool use + Citations + prompt caching 的最小请求,确认 `cached`/`tool_use` 流程。
-- [ ] 写下 `docs/[finish]20260531_coordinate-spec.md`:钉死唯一规范坐标空间 + 各引擎转换公式(头号 bug 来源,必须先固化)。
+- [ ] ~~**Claude API spike**~~ **已废弃**:被多 provider 抽象取代(DeepSeek/OpenAI 共用 OpenAI-compatible 适配器 + Anthropic 独立,tool_use/prompt caching 已在适配器层落地,见 `docs/[todo]20260531_llm-provider.md`)。
+- [x] 写下 `docs/[finish]20260531_coordinate-spec.md`:钉死唯一规范坐标空间 + 各引擎转换公式(头号 bug 来源,必须先固化)。
 
 **出口标准**:5 个 spike 全绿,坐标 spec 落地。任何一个 spike 红灯都要在这里解决,不带病进 Phase 1。
 
@@ -63,16 +68,16 @@
 
 **目标:能导入 PDF、像微信读书一样读、框选段落并持久化高亮。还没有 AI。**
 
-- [ ] PDF 导入 + 渲染(`react-pdf-highlighter-extended`)
-- [ ] 阅读 UI:分页/连续滚动、目录侧栏、阅读进度(见 `[finish]20260531_UI-UX.md` 阅读器布局)
-- [ ] 框选 → 浮出操作条(shadcn `Popover` / 自定义 floating toolbar)
-- [ ] **耐久锚点**(`_internal/[finish]20260531_PLANNING.md` §7):
-  - [ ] 捕获 `ScaledPosition`(几何,真相)
-  - [ ] 生成 `TextQuoteSelector`(exact + 前后 32 字,`apache-annotator`)
-  - [ ] 存 `TextPositionSelector`(仅提示)
-  - [ ] 重锚:位置提示 → 引用断言 → `diff-match-patch` 模糊匹配 → 几何回退
-- [ ] 高亮持久化(SQLite 表:book / highlight / anchor),重开仍在原位
-- [ ] 高亮管理:列表、删除、跳转
+- [x] PDF 导入 + 渲染(pdf.js)
+- [x] 阅读 UI:分页/连续滚动、目录侧栏、阅读进度(见 `[finish]20260531_UI-UX.md` 阅读器布局)
+- [x] 框选 → 浮出操作条(shadcn `Popover` / 自定义 floating toolbar)
+- [x] **耐久锚点**(`_internal/[finish]20260531_PLANNING.md` §7):
+  - [x] 捕获 `ScaledPosition`(几何,真相)
+  - [x] 生成 `TextQuoteSelector`(exact + 前后文,自研 `src/core/text-quote-selector.ts`)
+  - [x] 存 `TextPositionSelector`(仅提示)
+  - [x] 重锚:位置提示 → 引用断言 → 模糊匹配 → 几何回退(`diff-match-patch` 依赖已移除,模糊匹配为自研实现)
+- [x] 高亮持久化(SQLite 表:book / highlight / anchor),重开仍在原位
+- [x] 高亮管理:列表、删除、跳转
 
 **出口标准**:导入名著 PDF,框选十处,关闭重开后全部精确还原。
 
@@ -82,13 +87,13 @@
 
 **目标:把书解析、切块、建好本地全文索引;配置外部 embedding provider 后补建向量索引,为 RAG 备料。Codex 主导。**
 
-- [ ] **MinerU 解析客户端**(Rust 后端):`file-urls/batch` → PUT 上传 → 轮询 → 下载解压 zip。token 经 `.env` 读取(`docs/[todo]20260531_mineru-integration.md`)。
-- [ ] 解析路由:桌面端统一走 MinerU。文本层探测器(字符数+U+FFFD 率)只用于决定 `is_ocr`。
-- [ ] 解析结果一次性缓存到本地 SQLite(重开不重解析);长书 `page_ranges` 分批 + 进度回传前端。
-- [ ] 从 MinerU `middle.json` 切块:按 Level2 块/Line 粒度,**每块带 `page_idx` + 换算后的归一化 bbox**;章节归属。
-- [ ] Embedding 只走外部 provider:`EMBEDDING_PROVIDER/API_KEY/BASE_URL/MODEL`,DB 存 provider/model+维度,切换即重嵌
-- [ ] 索引:FTS5(BM25)+ provider 向量混合检索函数;未配置 embedding 时必须可退化为纯文本检索
-- [ ] 索引版本号(每版书),解析引擎/参数随锚点存
+- [x] **MinerU 解析客户端**(Rust 后端):`file-urls/batch` → PUT 上传 → 轮询 → 下载解压 zip。token 经 `.env` 读取(`docs/[todo]20260531_mineru-integration.md`)。
+- [x] 解析路由:桌面端统一走 MinerU。文本层探测器(字符数+U+FFFD 率)只用于决定 `is_ocr`。
+- [x] 解析结果一次性缓存到本地 SQLite(重开不重解析);长书 `page_ranges` 分批 + 进度回传前端。
+- [x] 从 MinerU `middle.json` 切块:按 Level2 块/Line 粒度,**每块带 `page_idx` + 换算后的归一化 bbox**;章节归属。
+- [x] Embedding 只走外部 provider:`EMBEDDING_PROVIDER/API_KEY/BASE_URL/MODEL`,DB 存 provider/model+维度,切换即重嵌
+- [x] 索引:FTS5(BM25)+ provider 向量混合检索函数;未配置 embedding 时必须可退化为纯文本检索
+- [x] 索引版本号(每版书),解析引擎/参数随锚点存
 
 **出口标准**:对一本书一键解析+建索引(MinerU 论文 / 本地名著两条路都通),`search_book("某概念")` 返回带坐标的相关块,框选能映射到块。
 
@@ -98,15 +103,15 @@
 
 **目标:框选 → AI 规划 → 全书检索 → 带引用的深度解读。Codex 写循环逻辑,Opus 写卡片 UI。**
 
-- [ ] **多 provider LLM 抽象层**(见 `docs/[todo]20260531_llm-provider.md`):`LlmProvider` trait + `OpenAiCompatProvider`(DeepSeek 默认 + OpenAI 共用)+ `AnthropicProvider`;按 `LLM_PROVIDER` 实例化
-- [ ] 工具定义:`search_book` / `get_chunk` / `get_neighbors` / `list_structure`
-- [ ] agentic 循环(`_internal/[finish]20260531_PLANNING.md` §5):Plan → Retrieve → Iterate(封顶 2–4 轮)→ Synthesize
-- [ ] 系统提示钉死逐字选中段落 + 位置
-- [ ] **统一 chunk_id 引用**:证据带 `[chunk_id]` → 模型标注 → 后处理成可点击引用 → 跳回高亮
-- [ ] Prompt caching:静态前缀(DeepSeek/OpenAI 自动,Anthropic 显式三断点)
-- [ ] 设置 UI:provider 选择 + key 输入 + 连通测试
-- [ ] 解读卡片 UI:停靠选区旁、流式输出、引用点击跳转高亮(见 `[finish]20260531_UI-UX.md`)
-- [ ] 解读持久化 + 历史
+- [x] **多 provider LLM 抽象层**(见 `docs/[todo]20260531_llm-provider.md`):`LlmProvider` trait + `OpenAiCompatProvider`(DeepSeek 默认 + OpenAI 共用)+ `AnthropicProvider`;按 `LLM_PROVIDER` 实例化
+- [x] 工具定义:`search_book` / `get_chunk` / `get_neighbors` / `list_structure`
+- [x] agentic 循环(`_internal/[finish]20260531_PLANNING.md` §5):Plan → Retrieve → Iterate(封顶 2–4 轮)→ Synthesize。2026-07 起循环主体跑在 Codex 引擎(`codex exec` 子进程 + 本地 /mcp book 工具),失败回退 Rust 进程内管线
+- [x] 系统提示钉死逐字选中段落 + 位置
+- [x] **统一 chunk_id 引用**:证据带 `[chunk_id]` → 模型标注 → 后处理成可点击引用 → 跳回高亮
+- [x] Prompt caching:静态前缀(DeepSeek/OpenAI 自动,Anthropic 显式三断点);命中率可观测仍缺(见缺口)
+- [x] 设置 UI:provider 选择 + key 输入 + 连通测试
+- [x] 解读卡片 UI:停靠选区旁、流式输出、引用点击跳转高亮(见 `[finish]20260531_UI-UX.md`)
+- [x] 解读持久化 + 历史
 
 **出口标准**:框选名著一段,得到带 3+ 条可点击引用的解读,引用能跳回书中确切位置;成本可观测(cache 命中率)。
 
@@ -114,12 +119,12 @@
 
 ## Phase 4 · 打磨与发布(1–2 周)
 
-- [ ] 错误态/空态/加载态全覆盖(Storybook 走查)
+- [x] 错误态/空态/加载态全覆盖(Storybook 走查,见 `docs/ui/[todo]20260608_UI改造清单.md` 核销记录)
 - [ ] 性能:大 PDF(>500 页)流畅度、索引耗时、内存
-- [ ] 可访问性 + 字体/字号偏好
+- [x] 可访问性 + 字体/字号偏好(reduced-motion 全局兜底 + 阅读外观「Aa」控制)
 - [ ] 设备矩阵测试(多 macOS 版本)
-- [ ] 打包签名分发(macOS 优先,Windows 次之):debug `.app` 已可由 `pnpm health:bundle` 生成；DMG/签名/公证待发布阶段处理
-- [ ] 渐进发布:先给自己和朋友用(你和最初提出痛点的那位)
+- [ ] 打包签名分发(macOS 优先,Windows 次之):debug `.app` 由 `pnpm health:bundle` 生成;~~DMG 卡在 create-dmg~~ **已解决**——`scripts/release_dmg.sh` 可用,已发到 0.1.8;剩签名/公证
+- [x] 渐进发布:先给自己和朋友用(0.1.8 已出 14 个本地 dmg)
 
 **出口标准**:你自己能用它重读一本名著,且"如果有 AI 帮我解读会很不一样"的体验真实成立。
 
