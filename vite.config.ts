@@ -23,6 +23,7 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
+    exclude: ["**/node_modules/**", "**/.worktrees/**"],
     setupFiles: ["src/test/setup.ts"],
     environmentOptions: {
       jsdom: {

@@ -55,6 +55,13 @@ _internal/
 /logo-spark-*.png
 !docs/assets/logo.png
 
+# 本地工作区/工具产物(不进仓库)
+.worktrees/
+.aiteam/
+.claude/
+.playwright-mcp/
+designs/
+
 # 测试/覆盖率/日志
 coverage/
 *.log
