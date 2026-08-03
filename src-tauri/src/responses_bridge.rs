@@ -1,7 +1,7 @@
 //! Local Responses API bridge: lets the app-configured LLM (default DeepSeek)
 //! drive `codex exec`, instead of codex inheriting the machine's `~/.codex`
 //! login. This is the C8 bridge (see
-//! `docs/[todo]20260709_C9-spike-opencode验证记录.md` for why we stayed on Codex
+//! `docs/[finish]20260709_C9-spike-opencode验证记录.md` for why we stayed on Codex
 //! and bridge the provider rather than switching engines).
 //!
 //! codex is configured with a custom `wire_api="responses"` provider whose

@@ -16,7 +16,7 @@
 - 原文 chunk 是证据源。译文只用于帮助阅读和选择，不升级为引用证据。
 - Spark 的最终引用统一使用 `[chunk_id]`，不依赖任何厂商原生 citations。
 - 翻译、LLM、embedding key 都只在 Rust 后端读取，不能进前端 bundle。
-- 当前对照翻译不走 OpenCode。`docs/[todo]20260602_opencode-agent.md` 已明确：生产路径归 Rust 翻译管线所有。
+- ~~当前对照翻译不走 OpenCode~~（2026-07 起已变更）：翻译现经 Codex 引擎执行（`translation.rs` 内 codex 路径，per-request `codex exec` 子进程），失败自动回退 Rust 进程内管线。OpenCode 方案已废弃（`docs/archive/20260602_opencode-agent.md`）。
 
 ## 1. 共享前提：书必须先被转换和索引
 
@@ -164,12 +164,12 @@ book_id + page_index + source_fingerprint + provider + model
 
 因此，在对照翻译视图里选中文句，Spark 实际上仍围绕对应英文原文块运行。
 
-### 2.7 翻译当前不走 OpenCode
+### 2.7 翻译引擎：Codex 优先，Rust 管线兜底
 
-`docs/[todo]20260602_opencode-agent.md` 已写清楚边界：
+2026-07 起（OpenCode 方案废弃、Codex 成为 Agent 引擎之后）：
 
-- 当前产品路径：前端调用 `start_translation`，Rust 翻译转换稿页，结果写入 SQLite。
-- `OpencodeAgentTaskRunner` 还是实验/骨架，不拥有翻译缓存，也不能产出阅读器需要的页级对齐译文。
+- 当前产品路径：前端调用 `start_translation`，`translation.rs` 优先走 codex 路径（per-request `codex exec` 子进程，复用本书 MCP 工具），失败自动回退 Rust 进程内管线，结果写入 SQLite `page_translations`。
+- 旧 `OpencodeAgentTaskRunner` 已随 OpenCode 方案一起废弃，不再是任何路径的候选。
 - 如果未来接 `baoyu-translate` skill，也必须把输出解析回页/块单位，再写入 `page_translations`，不能让前端按钮直接连到 mock runner。
 
 ## 3. Spark / 解读 / 追问的实现原理
@@ -416,8 +416,8 @@ SQLite `interpretations` 表保存：
 2. **误区：中文译文可以作为 Spark 引用证据。**
    - 不能。译文可能改写、合并语义或丢格式；最终证据必须回到原文 chunk。
 
-3. **误区：OpenCode agent 已经负责翻译。**
-   - 没有。OpenCode host 仍是实验边界，生产翻译路径在 Rust `translation.rs`。
+3. **误区：翻译由独立 agent 框架负责。**
+   - 不是。OpenCode 方案已废弃；生产翻译在 `translation.rs`，2026-07 起优先走 Codex 引擎（`codex exec` 子进程），失败回退 Rust 进程内管线。
 
 4. **误区：模型输出的 citation 天然可信。**
    - 不可信。后端必须用 `enforce_grounded_citations()` 校验，只允许本轮 evidence 里的 chunk_id。

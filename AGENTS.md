@@ -48,8 +48,8 @@
 2. **逐阶段**:按 `[todo]20260531_ROADMAP.md` 阶段推进,前一阶段跑通自测再开下一阶段。
 3. **改坏兜底**:Storybook 是防止 AI 改坏已有组件的安全网,每次改组件后过一遍相关 story。
 4. **用户指定快速验证路径**:用户说"测试/验证/帮我跑一下"且没有额外指定时,默认按以下顺序执行并汇报结果:
-   - `pnpm check:reader` — 阅读器/对照翻译快速回归。当前基线:3 files,60 tests passed。
-   - `pnpm check:quick` — `tsc --noEmit` + 全量前端测试。当前基线:57 files,307 tests passed。
+   - `pnpm check:reader` — 阅读器/对照翻译快速回归。当前基线(2026-08 实测):3 files,63 tests passed。
+   - `pnpm check:quick` — `tsc --noEmit` + 全量前端测试。当前基线(2026-08 实测):69 files,394 tests passed。
    - `pnpm build` — 生产前端构建。
    - `pnpm dev:desktop` — 日常使用/桌面功能验证入口;确认 Vite ready、Tauri dev 编译并启动成功后即可,不要为了日常 UI 调试反复构建 `.app`。
 
@@ -57,16 +57,29 @@
 
 ## 5. 文档地图
 
-> **新 agent 上手先读 `[todo]20260531_ROADMAP.md`**。文件名前缀 `[finish]` / `[todo]` 表示文档是否已完成或仍需刷新。
+> **新 agent 上手先读 `[todo]20260708_功能补齐与体验提升技术方案.md`(事实上的当前总控)**,再按任务查下面的专项规范。文件名前缀 `[finish]` / `[todo]` 表示文档是否已完成或仍需刷新。已废弃/被取代的文档在 `docs/archive/`,交接与评审历史在 `_internal/`(不进 git)。
 
-- [todo] `docs/[todo]20260707_稳健化-Obsidian-Agent引擎计划.md` — **当前阶段总控**:Obsidian 打通 + Agent 引擎(OpenCode→Codex 整体替换)+ 稳健化清单
-- [todo] `[todo]20260531_ROADMAP.md` — 路线图和剩余缺口;顶部状态可用,阶段 checklist 仍有旧勾选
-- [finish] `[finish]20260531_UI-UX.md` — 设计语言 + 前端工程约定
+**当前总控 / 进行中**
+- [todo] `docs/[todo]20260708_功能补齐与体验提升技术方案.md` — 事实上的当前总控:P0/P1 已完成,P2/P3 是 backlog
+- [todo] `docs/[todo]20260708_真机走查清单.md` — 待真机执行的走查项(B5/C5 遗留,当前最关键的未闭环项)
+- [todo] `docs/[todo]20260707_稳健化-Obsidian-Agent引擎计划.md` — Obsidian 打通 + Agent 引擎(OpenCode→Codex 替换);代码已闭环,仅剩真机遗留
+- [todo] `[todo]20260531_ROADMAP.md` — 长期路线图与缺口;"当前实现状态"快照停在 2026-06 已过时,Phase checklist 勾选不可信,参考"缺口"/V2 段即可
+
+**常青规范**
 - [finish] `AGENTS.md` — 本文件,协作守则
+- [finish] `[finish]20260531_UI-UX.md` — 设计语言 + 前端工程约定
 - [finish] `docs/[finish]20260531_coordinate-spec.md` — 坐标系统真相,头号 bug 来源
-- [todo] `docs/[todo]20260531_tech-stack.md` — 完整技术栈;需补当前版本新增能力
+- [todo] `docs/[todo]20260531_tech-stack.md` — 完整技术栈;需补 Codex 引擎/Obsidian 等新选型
 - [todo] `docs/[todo]20260531_mineru-integration.md` — MinerU 开放 API 集成规范;旋转页/CropBox 真实回归仍待补
 - [todo] `docs/[todo]20260531_llm-provider.md` — LLM 多 provider 设计;在线回归和缓存观测仍待补
+- [todo] `docs/[todo]20260603_architecture.md` — 分层架构与数据流
 - [todo] `docs/[todo]20260607_knowledge-system-implementation-plan.md` — 单书知识库任务清单、阶段 check 和验收总控
-- [todo] `docs/ui/*.md` — 按界面 UI spec;逐份状态见文档状态索引
-- [finish] `_internal/[finish]20260531_HANDOFF.md` / `_internal/[finish]20260531_PLANNING.md` — 历史背景参考,不作为当前入口
+- [todo] `docs/[todo]20260609_translation-and-spark-implementation.md` — 翻译与 Spark 实现原理(2026-07 起翻译走 Codex 引擎)
+- [todo] `docs/[todo]20260601_validation-checklist.md` — 验证操作清单
+- `docs/ui/*.md` — 按界面 UI spec,逐份以 `[finish]`/`[todo]` 前缀标注状态
+- [finish] `docs/[finish]*.md` 其余交付文档 — zotero 集成 / BRAND / INSTALL-macos / text-ebook-import / 宣传文案
+
+**历史 / 归档**
+- [finish] `docs/[finish]20260709_C9-spike-opencode验证记录.md` — OpenCode NO-GO、维持 Codex 的决策证据
+- `docs/archive/` — 已废弃方案(OpenCode 两份设计、20260607_开发note_v1 蓝图)
+- `_internal/` — 交接/评审/规划历史(HANDOFF/PLANNING/REVIEW),不作为当前入口,不进 git

@@ -109,7 +109,7 @@
 - embedding **只走外部 OpenAI-compatible provider,不在客户端本地部署模型**。
 - provider 超时/失败时**降级为纯 FTS 文本检索,不阻断**主流程。
 
-详见 `docs/[todo]20260531_llm-provider.md`、`docs/[todo]20260602_opencode-agent.md`。
+详见 `docs/[todo]20260531_llm-provider.md`。Agent 引擎现状见 `docs/[todo]20260707_稳健化-Obsidian-Agent引擎计划.md` C 节(Codex 引擎);旧 OpenCode 方案已废弃,仅存 `docs/archive/20260602_opencode-agent.md` 作历史参考。
 
 ## 6. 解析:统一走 MinerU
 
